@@ -21,7 +21,7 @@ export function configurePassport(): void {
         callbackURL,
         passReqToCallback: true,
       },
-      async (_req, _accessToken, _refreshToken, profile, done) => {
+      async (_req: any, _accessToken: any, _refreshToken: any, profile: any, done: any) => {
         try {
           const email = profile.emails?.[0]?.value;
           if (!email) {
@@ -59,11 +59,11 @@ export function configurePassport(): void {
     )
   );
 
-  passport.serializeUser((user: any, done) => {
+  passport.serializeUser((user: any, done: any) => {
     done(null, user._id);
   });
 
-  passport.deserializeUser(async (id: string, done) => {
+  passport.deserializeUser(async (id: string, done: any) => {
     try {
       const user = await User.findById(id);
       done(null, user);
