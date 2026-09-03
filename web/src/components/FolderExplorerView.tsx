@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { FileItem, FolderItem, BreadcrumbItem } from '../types.js';
 import {
   Folder,
@@ -14,6 +14,8 @@ import {
   FolderPlus,
   ChevronLeft,
   Clock,
+  X,
+  Loader2,
 } from 'lucide-react';
 import { api } from '../services/api.js';
 import { VaultCryptoService } from '../services/vault-crypto.js';
@@ -47,6 +49,11 @@ export const FolderExplorerView: React.FC<Props> = ({
   const [showFolderModal, setShowFolderModal] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // File Preview state
+  const [previewFile, setPreviewFile] = useState<FileItem | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+
   const formatBytes = (bytes: number) => {
     if (bytes < 1024) return bytes + ' B';
     if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
@@ -60,6 +67,72 @@ export const FolderExplorerView: React.FC<Props> = ({
       return <FileText className="w-4 h-4 text-blue-400" />;
     return <File className="w-4 h-4 text-zinc-400" />;
   };
+
+  const isPreviewable = (mimeType: string) => {
+    return mimeType.startsWith('image/') || mimeType.startsWith('video/');
+  };
+
+  const getStreamUrl = (fileId: string) => {
+    const token = localStorage.getItem('drive_token') || '';
+    return `/api/v1/files/${fileId}/stream?token=${encodeURIComponent(token)}`;
+  };
+
+  // Open file preview - fetch, decrypt if needed, and display
+  const handleFileClick = useCallback(async (file: FileItem) => {
+    if (!isPreviewable(file.mimeType)) {
+      // For non-media files, just download
+      window.open(getStreamUrl(file._id), '_blank');
+      return;
+    }
+
+    setPreviewFile(file);
+    setPreviewLoading(true);
+    setPreviewUrl(null);
+
+    const isEncrypted = file.versions && file.versions.length > 0 && file.versions[0].isEncrypted;
+
+    if (isEncrypted && vaultKey) {
+      try {
+        const response = await fetch(getStreamUrl(file._id));
+        if (!response.ok) throw new Error('Failed to fetch file');
+        const encryptedBuffer = await response.arrayBuffer();
+        const ivHex = file.versions![0].iv || '';
+        const decryptedBuffer = await VaultCryptoService.decryptBuffer(encryptedBuffer, ivHex, vaultKey);
+        const blob = new Blob([decryptedBuffer], { type: file.mimeType });
+        const url = URL.createObjectURL(blob);
+        setPreviewUrl(url);
+      } catch (err) {
+        console.error('Decryption failed:', err);
+        // Fallback to direct stream
+        setPreviewUrl(getStreamUrl(file._id));
+      }
+    } else {
+      // Not encrypted - use direct stream URL
+      setPreviewUrl(getStreamUrl(file._id));
+    }
+
+    setPreviewLoading(false);
+  }, [vaultKey]);
+
+  // Cleanup object URL on close
+  const closePreview = useCallback(() => {
+    if (previewUrl && previewUrl.startsWith('blob:')) {
+      URL.revokeObjectURL(previewUrl);
+    }
+    setPreviewFile(null);
+    setPreviewUrl(null);
+  }, [previewUrl]);
+
+  // Close preview on Escape key
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && previewFile) {
+        closePreview();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [previewFile, closePreview]);
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFiles = e.target.files;
@@ -188,6 +261,64 @@ export const FolderExplorerView: React.FC<Props> = ({
     if (!currentFolderId) return;
     onSelectFolder(currentFolder?.parentFolderId || null);
   };
+
+  // Reusable file row renderer
+  const renderFileRow = (file: FileItem, showSources: boolean = true) => (
+    <tr key={file._id} className="hover:bg-[#15151a] transition group">
+      <td
+        className="py-3 px-4 flex items-center space-x-3 cursor-pointer"
+        onClick={() => handleFileClick(file)}
+      >
+        {getFileIcon(file.mimeType)}
+        <span className={`font-semibold text-zinc-200 group-hover:text-purple-300 transition truncate max-w-[280px] ${isPreviewable(file.mimeType) ? 'hover:underline' : ''}`}>
+          {file.filename}
+        </span>
+        {isPreviewable(file.mimeType) && (
+          <span className="text-[10px] text-zinc-600 group-hover:text-purple-500 transition">
+            {file.mimeType.startsWith('image/') ? '🖼' : '▶'}
+          </span>
+        )}
+      </td>
+      <td className="py-3 px-4 text-zinc-400">{formatBytes(file.sizeBytes)}</td>
+      {showSources && (
+        <td className="py-3 px-4">
+          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-[#1a1a22] text-zinc-400 border border-[#272733]">
+            {file.sourceDeviceIds.length > 0
+              ? `${file.sourceDeviceIds.length} device(s)`
+              : 'Cloud only'}
+          </span>
+        </td>
+      )}
+      <td className="py-3 px-4 text-zinc-500">
+        {showSources
+          ? new Date(file.createdAt).toLocaleDateString()
+          : new Date(file.createdAt).toLocaleString()}
+      </td>
+      <td className="py-3 px-4 text-right space-x-2">
+        <a
+          href={getStreamUrl(file._id)}
+          target="_blank"
+          rel="noreferrer"
+          download={file.filename}
+          className="inline-p-1 text-zinc-400 hover:text-purple-400 transition"
+          title="Download"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <Download className="w-4 h-4 inline" />
+        </a>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            handleTrashFile(file._id, file.filename);
+          }}
+          className="inline-p-1 text-zinc-500 hover:text-red-400 transition"
+          title="Move to Trash"
+        >
+          <Trash2 className="w-4 h-4 inline" />
+        </button>
+      </td>
+    </tr>
+  );
 
   return (
     <div className="space-y-5">
@@ -344,48 +475,7 @@ export const FolderExplorerView: React.FC<Props> = ({
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#18181f]">
-                {files.map((file) => (
-                  <tr key={file._id} className="hover:bg-[#15151a] transition group">
-                    <td className="py-3 px-4 flex items-center space-x-3">
-                      {getFileIcon(file.mimeType)}
-                      <span className="font-semibold text-zinc-200 group-hover:text-purple-300 transition truncate max-w-[280px]">
-                        {file.filename}
-                      </span>
-                    </td>
-                    <td className="py-3 px-4 text-zinc-400">{formatBytes(file.sizeBytes)}</td>
-                    <td className="py-3 px-4">
-                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-[#1a1a22] text-zinc-400 border border-[#272733]">
-                        {file.sourceDeviceIds.length > 0
-                          ? `${file.sourceDeviceIds.length} device(s)`
-                          : 'Cloud only'}
-                      </span>
-                    </td>
-                    <td className="py-3 px-4 text-zinc-500">
-                      {new Date(file.createdAt).toLocaleDateString()}
-                    </td>
-                    <td className="py-3 px-4 text-right space-x-2">
-                      <a
-                        href={`/api/v1/files/${file._id}/stream?token=${encodeURIComponent(
-                          localStorage.getItem('drive_token') || ''
-                        )}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        download={file.filename}
-                        className="inline-p-1 text-zinc-400 hover:text-purple-400 transition"
-                        title="Download"
-                      >
-                        <Download className="w-4 h-4 inline" />
-                      </a>
-                      <button
-                        onClick={() => handleTrashFile(file._id, file.filename)}
-                        className="inline-p-1 text-zinc-500 hover:text-red-400 transition"
-                        title="Move to Trash"
-                      >
-                        <Trash2 className="w-4 h-4 inline" />
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                {files.map((file) => renderFileRow(file, true))}
               </tbody>
             </table>
           </div>
@@ -414,43 +504,83 @@ export const FolderExplorerView: React.FC<Props> = ({
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#18181f]">
-                {recentFiles.map((file) => (
-                  <tr key={file._id} className="hover:bg-[#15151a] transition group">
-                    <td className="py-3 px-4 flex items-center space-x-3">
-                      {getFileIcon(file.mimeType)}
-                      <span className="font-semibold text-zinc-200 group-hover:text-purple-300 transition truncate max-w-[280px]">
-                        {file.filename}
-                      </span>
-                    </td>
-                    <td className="py-3 px-4 text-zinc-400">{formatBytes(file.sizeBytes)}</td>
-                    <td className="py-3 px-4 text-zinc-500">
-                      {new Date(file.createdAt).toLocaleString()}
-                    </td>
-                    <td className="py-3 px-4 text-right space-x-2">
-                      <a
-                        href={`/api/v1/files/${file._id}/stream?token=${encodeURIComponent(
-                          localStorage.getItem('drive_token') || ''
-                        )}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        download={file.filename}
-                        className="inline-p-1 text-zinc-400 hover:text-purple-400 transition"
-                        title="Download"
-                      >
-                        <Download className="w-4 h-4 inline" />
-                      </a>
-                      <button
-                        onClick={() => handleTrashFile(file._id, file.filename)}
-                        className="inline-p-1 text-zinc-500 hover:text-red-400 transition"
-                        title="Move to Trash"
-                      >
-                        <Trash2 className="w-4 h-4 inline" />
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                {recentFiles.map((file) => renderFileRow(file, false))}
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+
+      {/* ======== FILE PREVIEW LIGHTBOX ======== */}
+      {previewFile && (
+        <div
+          className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4 backdrop-blur-sm"
+          onClick={closePreview}
+        >
+          {/* Close Button */}
+          <button
+            onClick={closePreview}
+            className="absolute top-4 right-4 z-50 w-10 h-10 rounded-full bg-zinc-800/80 hover:bg-zinc-700 flex items-center justify-center text-white transition"
+          >
+            <X className="w-5 h-5" />
+          </button>
+
+          {/* File Info Header */}
+          <div className="absolute top-4 left-4 z-50 flex items-center space-x-3 max-w-[60%]">
+            <span className="text-sm font-semibold text-white truncate">{previewFile.filename}</span>
+            <span className="text-xs text-zinc-400">{formatBytes(previewFile.sizeBytes)}</span>
+          </div>
+
+          {/* Download Button */}
+          <a
+            href={getStreamUrl(previewFile._id)}
+            download={previewFile.filename}
+            target="_blank"
+            rel="noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            className="absolute top-4 right-16 z-50 w-10 h-10 rounded-full bg-zinc-800/80 hover:bg-purple-700 flex items-center justify-center text-white transition"
+            title="Download"
+          >
+            <Download className="w-5 h-5" />
+          </a>
+
+          {/* Content Area */}
+          <div
+            className="max-w-[90vw] max-h-[85vh] flex items-center justify-center"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {previewLoading ? (
+              <div className="flex flex-col items-center space-y-3">
+                <Loader2 className="w-10 h-10 text-purple-400 animate-spin" />
+                <span className="text-sm text-zinc-400">Decrypting file...</span>
+              </div>
+            ) : previewUrl ? (
+              previewFile.mimeType.startsWith('image/') ? (
+                <img
+                  src={previewUrl}
+                  alt={previewFile.filename}
+                  className="max-w-[90vw] max-h-[85vh] object-contain rounded-lg shadow-2xl"
+                  onError={() => {
+                    // If image fails, try direct stream
+                    setPreviewUrl(getStreamUrl(previewFile._id));
+                  }}
+                />
+              ) : previewFile.mimeType.startsWith('video/') ? (
+                <video
+                  src={previewUrl}
+                  controls
+                  autoPlay
+                  className="max-w-[90vw] max-h-[85vh] rounded-lg shadow-2xl"
+                  onError={() => {
+                    setPreviewUrl(getStreamUrl(previewFile._id));
+                  }}
+                >
+                  Your browser does not support the video tag.
+                </video>
+              ) : null
+            ) : (
+              <div className="text-zinc-400 text-sm">Unable to load preview</div>
+            )}
           </div>
         </div>
       )}
