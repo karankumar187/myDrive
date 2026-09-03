@@ -51,10 +51,16 @@ export const App: React.FC = () => {
   // Initial authentication check & OAuth callback handling
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
+    const authError = urlParams.get('error');
+    if (authError) {
+      alert(`Login failed: ${authError}`);
+      window.history.replaceState({}, document.title, window.location.origin + '/');
+    }
+
     const tokenFromUrl = urlParams.get('token');
     if (tokenFromUrl) {
       localStorage.setItem('drive_token', tokenFromUrl);
-      window.history.replaceState({}, document.title, window.location.pathname);
+      window.history.replaceState({}, document.title, window.location.origin + '/');
     }
 
     const token = localStorage.getItem('drive_token');
@@ -62,7 +68,8 @@ export const App: React.FC = () => {
       api
         .getCurrentUser()
         .then((res) => setCurrentUser(res.user))
-        .catch(() => {
+        .catch((err) => {
+          console.error('Failed to get current user:', err);
           localStorage.removeItem('drive_token');
         });
     }
@@ -139,7 +146,8 @@ export const App: React.FC = () => {
   };
 
   const handleGoogleLogin = () => {
-    window.location.href = '/api/v1/auth/google';
+    const apiBase = import.meta.env.VITE_API_URL || '';
+    window.location.href = `${apiBase}/api/v1/auth/google`;
   };
 
   const handleConnectDrive = async () => {

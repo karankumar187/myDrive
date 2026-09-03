@@ -18,16 +18,15 @@ export class AuthController {
    */
   static googleCallback(req: Request, res: Response): void {
     passport.authenticate('google', { session: false }, (err: any, user: any) => {
+      const clientUrl = (process.env.CLIENT_URL || 'http://localhost:5173').split(',')[0].trim();
       if (err || !user) {
-        const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173';
-        return res.redirect(`${clientUrl}/login?error=auth_failed`);
+        return res.redirect(`${clientUrl}/?error=auth_failed`);
       }
 
       const token = generateUserJwt(user);
-      const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173';
 
       // Redirect to web app with JWT token in URL query
-      res.redirect(`${clientUrl}/auth/callback?token=${token}`);
+      res.redirect(`${clientUrl}/?token=${token}`);
     })(req, res);
   }
 

@@ -52,10 +52,10 @@ export class StorageController {
     try {
       const code = req.query.code as string;
       const state = req.query.state as string;
-      const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173';
+      const clientUrl = (process.env.CLIENT_URL || 'http://localhost:5173').split(',')[0].trim();
 
       if (!code || !state) {
-        return res.redirect(`${clientUrl}/storage?error=missing_code_or_state`);
+        return res.redirect(`${clientUrl}/?error=missing_code_or_state`);
       }
 
       // Decrypt state to verify user identity
@@ -107,8 +107,8 @@ export class StorageController {
       res.redirect(`${clientUrl}/storage?success=account_connected&email=${encodeURIComponent(tokens.email)}`);
     } catch (error: any) {
       console.error('Error linking storage account:', error);
-      const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173';
-      res.redirect(`${clientUrl}/storage?error=${encodeURIComponent(error.message)}`);
+      const clientUrl = (process.env.CLIENT_URL || 'http://localhost:5173').split(',')[0].trim();
+      res.redirect(`${clientUrl}/?error=${encodeURIComponent(error.message)}`);
     }
   }
 
