@@ -41,7 +41,8 @@ export class GoogleDriveService {
       access_type: 'offline', // Demands a refresh token
       prompt: 'consent', // Forces Google to reissue refresh token so it is never null
       scope: [
-        'https://www.googleapis.com/auth/drive.file', // Scoped strictly to files created by this app
+        'https://www.googleapis.com/auth/drive',
+        'https://www.googleapis.com/auth/drive.file',
         'https://www.googleapis.com/auth/userinfo.email',
         'https://www.googleapis.com/auth/userinfo.profile',
       ],
