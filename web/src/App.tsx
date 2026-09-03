@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   HardDrive,
   Folder,
@@ -109,29 +109,78 @@ export const App: React.FC = () => {
     };
   }, [currentUser]);
 
-  // Load data for active views
+  // Local memory cache for instant (0ms) folder navigation
+  const folderCache = useRef<Map<string, {
+    files: FileItem[];
+    recentFiles: FileItem[];
+    folders: FolderItem[];
+    breadcrumbs: BreadcrumbItem[];
+    currentFolder: FolderItem | null;
+  }>>(new Map());
+
+  // Fast folder loader with instant cache hit
+  const loadFolderData = useCallback(async (folderId: string | null) => {
+    if (!currentUser) return;
+    const cacheKey = folderId || 'root';
+
+    // 1. Instant cache hit: render immediately (0ms delay)
+    if (folderCache.current.has(cacheKey)) {
+      const cached = folderCache.current.get(cacheKey)!;
+      setFiles(cached.files);
+      setRecentFiles(cached.recentFiles);
+      setFolders(cached.folders);
+      setBreadcrumbs(cached.breadcrumbs);
+      setCurrentFolder(cached.currentFolder);
+    }
+
+    // 2. Fast background revalidation: only query files and folders for this folder
+    try {
+      const [filesRes, foldersRes] = await Promise.all([
+        api.listFiles(folderId).catch(() => ({ files: [], recentFiles: [] })),
+        api.listFolders(folderId).catch(() => ({ folders: [], currentFolder: null, breadcrumbs: [] })),
+      ]);
+
+      setFiles(filesRes.files);
+      setRecentFiles(filesRes.recentFiles || []);
+      setFolders(foldersRes.folders);
+      if (foldersRes.breadcrumbs) setBreadcrumbs(foldersRes.breadcrumbs);
+      setCurrentFolder(foldersRes.currentFolder || null);
+
+      // Update cache
+      folderCache.current.set(cacheKey, {
+        files: filesRes.files,
+        recentFiles: filesRes.recentFiles || [],
+        folders: foldersRes.folders,
+        breadcrumbs: foldersRes.breadcrumbs || [{ id: null, name: 'My Drive' }],
+        currentFolder: foldersRes.currentFolder || null,
+      });
+    } catch (err) {
+      console.error('Error loading folder:', err);
+    }
+  }, [currentUser]);
+
+  // Load full dashboard data (storage summary, devices, gallery, trash)
   const loadDashboardData = async () => {
     if (!currentUser) return;
     try {
       setIsRefreshing(true);
-      const [storageRes, filesRes, foldersRes, galleryRes, devicesRes, trashRes] = await Promise.all([
+      // Invalidate folder cache on explicit refresh so changes show
+      folderCache.current.clear();
+
+      const [storageRes, galleryRes, devicesRes, trashRes] = await Promise.all([
         api.getStorageSummary().catch(() => null),
-        api.listFiles(currentFolderId).catch(() => ({ files: [], recentFiles: [] })),
-        api.listFolders(currentFolderId).catch(() => ({ folders: [], currentFolder: null, breadcrumbs: [] })),
         api.getGallery().catch(() => ({ media: [] })),
         api.listDevices().catch(() => ({ devices: [] })),
         api.listFiles(null, undefined, true).catch(() => ({ files: [], recentFiles: [] })),
       ]);
 
       if (storageRes) setSummary(storageRes);
-      setFiles(filesRes.files);
-      setRecentFiles(filesRes.recentFiles || []);
-      setFolders(foldersRes.folders);
-      if (foldersRes.breadcrumbs) setBreadcrumbs(foldersRes.breadcrumbs);
-      setCurrentFolder(foldersRes.currentFolder || null);
       setMedia(galleryRes.media);
       setDevices(devicesRes.devices);
       setTrashedFiles(trashRes.files);
+
+      // Load folder contents
+      await loadFolderData(currentFolderId);
     } catch (err) {
       console.error('Error loading dashboard data:', err);
     } finally {
@@ -139,11 +188,19 @@ export const App: React.FC = () => {
     }
   };
 
+  // Full reload on initial login
   useEffect(() => {
     if (currentUser) {
       loadDashboardData();
     }
-  }, [currentUser, currentFolderId]);
+  }, [currentUser]);
+
+  // Fast navigation when currentFolderId changes (0ms cache + fast revalidation)
+  useEffect(() => {
+    if (currentUser) {
+      loadFolderData(currentFolderId);
+    }
+  }, [currentUser, currentFolderId, loadFolderData]);
 
   const handleDevLogin = async () => {
     try {

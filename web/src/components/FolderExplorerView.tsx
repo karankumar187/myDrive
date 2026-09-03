@@ -53,6 +53,7 @@ export const FolderExplorerView: React.FC<Props> = ({
   const [previewFile, setPreviewFile] = useState<FileItem | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
 
   const formatBytes = (bytes: number) => {
     if (bytes < 1024) return bytes + ' B';
@@ -74,8 +75,8 @@ export const FolderExplorerView: React.FC<Props> = ({
 
   const getStreamUrl = (fileId: string) => {
     const token = localStorage.getItem('drive_token') || '';
-    const base = import.meta.env.VITE_API_URL || '';
-    return `${base}/api/v1/files/${fileId}/stream?token=${encodeURIComponent(token)}`;
+    const rawApiUrl = (import.meta.env.VITE_API_URL || '').replace(/\/+$/, '');
+    return `${rawApiUrl}/api/v1/files/${fileId}/stream?token=${encodeURIComponent(token)}`;
   };
 
   // Open file preview - fetch, decrypt if needed, and display
@@ -89,30 +90,41 @@ export const FolderExplorerView: React.FC<Props> = ({
     setPreviewFile(file);
     setPreviewLoading(true);
     setPreviewUrl(null);
+    setPreviewError(null);
 
     const isEncrypted = file.versions && file.versions.length > 0 && file.versions[0].isEncrypted;
 
-    if (isEncrypted && vaultKey) {
-      try {
-        const response = await fetch(getStreamUrl(file._id));
-        if (!response.ok) throw new Error('Failed to fetch file');
+    if (isEncrypted && !vaultKey) {
+      setPreviewLoading(false);
+      setPreviewError('🔒 This file was saved with Zero-Knowledge Encryption. Unlock your Vault (in the top bar) using your master passphrase to decrypt and view it.');
+      return;
+    }
+
+    try {
+      const response = await fetch(getStreamUrl(file._id));
+      if (!response.ok) {
+        const errJson = await response.json().catch(() => null);
+        throw new Error(errJson?.error || `Server returned ${response.status}`);
+      }
+
+      if (isEncrypted && vaultKey) {
         const encryptedBuffer = await response.arrayBuffer();
         const ivHex = file.versions![0].iv || '';
         const decryptedBuffer = await VaultCryptoService.decryptBuffer(encryptedBuffer, ivHex, vaultKey);
         const blob = new Blob([decryptedBuffer], { type: file.mimeType });
         const url = URL.createObjectURL(blob);
         setPreviewUrl(url);
-      } catch (err) {
-        console.error('Decryption failed:', err);
-        // Fallback to direct stream
-        setPreviewUrl(getStreamUrl(file._id));
+      } else {
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        setPreviewUrl(url);
       }
-    } else {
-      // Not encrypted - use direct stream URL
-      setPreviewUrl(getStreamUrl(file._id));
+    } catch (err: any) {
+      console.error('File load failed:', err);
+      setPreviewError(err.message || 'Failed to load file preview');
+    } finally {
+      setPreviewLoading(false);
     }
-
-    setPreviewLoading(false);
   }, [vaultKey]);
 
   // Cleanup object URL on close
@@ -122,6 +134,7 @@ export const FolderExplorerView: React.FC<Props> = ({
     }
     setPreviewFile(null);
     setPreviewUrl(null);
+    setPreviewError(null);
   }, [previewUrl]);
 
   // Close preview on Escape key
@@ -199,6 +212,17 @@ export const FolderExplorerView: React.FC<Props> = ({
           throw new Error(`Upload stream failed: ${putRes.statusText}`);
         }
 
+        // Parse real Google Drive file ID if returned by Google
+        let realProviderFileId = initResult.driveOpaqueName || `file_${Date.now()}`;
+        try {
+          const putJson = await putRes.json();
+          if (putJson && putJson.id) {
+            realProviderFileId = putJson.id;
+          }
+        } catch {
+          // If response body is empty or non-JSON (e.g. dev mock), keep opaque name
+        }
+
         // 5. Finalize upload
         await api.completeUpload({
           filename: file.name,
@@ -206,7 +230,7 @@ export const FolderExplorerView: React.FC<Props> = ({
           sizeBytes: file.size,
           contentHash,
           storageAccountId: initResult.storageAccountId,
-          providerFileId: initResult.driveOpaqueName || `file_${Date.now()}`,
+          providerFileId: realProviderFileId,
           folderId: currentFolderId,
           isEncrypted,
           iv: ivHex,
@@ -549,7 +573,6 @@ export const FolderExplorerView: React.FC<Props> = ({
             <Download className="w-5 h-5" />
           </a>
 
-          {/* Content Area */}
           <div
             className="max-w-[90vw] max-h-[85vh] flex items-center justify-center"
             onClick={(e) => e.stopPropagation()}
@@ -559,6 +582,24 @@ export const FolderExplorerView: React.FC<Props> = ({
                 <Loader2 className="w-10 h-10 text-purple-400 animate-spin" />
                 <span className="text-sm text-zinc-400">Decrypting file...</span>
               </div>
+            ) : previewError ? (
+              <div className="max-w-md p-6 bg-[#16161d] border border-purple-500/30 rounded-2xl text-center space-y-3 shadow-glow-purple">
+                <div className="w-12 h-12 rounded-full bg-purple-950/60 border border-purple-800/50 flex items-center justify-center mx-auto text-purple-400">
+                  <ShieldCheck className="w-6 h-6" />
+                </div>
+                <h4 className="text-sm font-bold text-white">Preview Unavailable</h4>
+                <p className="text-xs text-zinc-300 leading-relaxed">{previewError}</p>
+                <div className="pt-2">
+                  <a
+                    href={getStreamUrl(previewFile._id)}
+                    download={previewFile.filename}
+                    className="inline-flex items-center space-x-1.5 px-4 py-2 text-xs font-semibold text-white bg-purple-600 hover:bg-purple-500 rounded-full transition"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Download File Directly</span>
+                  </a>
+                </div>
+              </div>
             ) : previewUrl ? (
               previewFile.mimeType.startsWith('image/') ? (
                 <img
@@ -566,8 +607,7 @@ export const FolderExplorerView: React.FC<Props> = ({
                   alt={previewFile.filename}
                   className="max-w-[90vw] max-h-[85vh] object-contain rounded-lg shadow-2xl"
                   onError={() => {
-                    // If image fails, try direct stream
-                    setPreviewUrl(getStreamUrl(previewFile._id));
+                    setPreviewError('Unable to display image. The file may be corrupt or encrypted without a valid key.');
                   }}
                 />
               ) : previewFile.mimeType.startsWith('video/') ? (
@@ -577,7 +617,7 @@ export const FolderExplorerView: React.FC<Props> = ({
                   autoPlay
                   className="max-w-[90vw] max-h-[85vh] rounded-lg shadow-2xl"
                   onError={() => {
-                    setPreviewUrl(getStreamUrl(previewFile._id));
+                    setPreviewError('Unable to play video format in this browser.');
                   }}
                 >
                   Your browser does not support the video tag.

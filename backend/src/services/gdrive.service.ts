@@ -180,9 +180,27 @@ export class GoogleDriveService {
     const oauth2Client = this.getOAuth2Client(account);
     const drive = google.drive({ version: 'v3', auth: oauth2Client });
 
+    let actualFileId = providerFileId;
+
+    // If providerFileId is an opaque filename rather than a Google Drive file ID, look it up by name
+    if (providerFileId.startsWith('blob_') || providerFileId.startsWith('file_') || providerFileId.includes('.enc')) {
+      try {
+        const listRes = await drive.files.list({
+          q: `name = '${providerFileId}' and trashed = false`,
+          fields: 'files(id, name)',
+          pageSize: 1,
+        });
+        if (listRes.data.files && listRes.data.files.length > 0 && listRes.data.files[0].id) {
+          actualFileId = listRes.data.files[0].id;
+        }
+      } catch (err) {
+        console.warn('Could not resolve file by name in Google Drive:', err);
+      }
+    }
+
     return await drive.files.get(
       {
-        fileId: providerFileId,
+        fileId: actualFileId,
         alt: 'media',
       },
       { responseType: 'stream' }

@@ -45,5 +45,6 @@ const FolderSchema = new Schema<IFolderDocument>(
 );
 
 FolderSchema.index({ userId: 1, parentFolderId: 1, name: 1 }, { unique: true });
+FolderSchema.index({ userId: 1, isTrash: 1, parentFolderId: 1 });
 
 export const Folder = mongoose.model<IFolderDocument>('Folder', FolderSchema);
