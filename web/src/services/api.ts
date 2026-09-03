@@ -1,6 +1,6 @@
 import { StorageSummary, FileItem, FolderItem, DeviceItem, User, BreadcrumbItem } from '../types.js';
 
-const API_BASE = '/api/v1';
+const API_BASE = (import.meta.env.VITE_API_URL || '') + '/api/v1';
 
 function getHeaders(): HeadersInit {
   const token = localStorage.getItem('drive_token');

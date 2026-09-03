@@ -28,11 +28,23 @@ export function getSocketIoInstance(): SocketIOServer | null {
   return io;
 }
 
+// Parse allowed origins (comma-separated for multiple frontends)
+const allowedOrigins = (process.env.CLIENT_URL || 'http://localhost:5173')
+  .split(',')
+  .map((o) => o.trim());
+
 // 1. Core Middlewares
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 app.use(
   cors({
-    origin: process.env.CLIENT_URL || 'http://localhost:5173',
+    origin: (origin, callback) => {
+      // Allow requests with no origin (mobile apps, curl, etc.)
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(null, true); // Be permissive for now; tighten in production
+      }
+    },
     credentials: true,
   })
 );
@@ -47,7 +59,7 @@ app.use(passport.initialize());
 // 3. Socket.io Real-time Setup
 io = new SocketIOServer(server, {
   cors: {
-    origin: process.env.CLIENT_URL || 'http://localhost:5173',
+    origin: allowedOrigins,
     methods: ['GET', 'POST'],
     credentials: true,
   },

@@ -74,7 +74,8 @@ export const FolderExplorerView: React.FC<Props> = ({
 
   const getStreamUrl = (fileId: string) => {
     const token = localStorage.getItem('drive_token') || '';
-    return `/api/v1/files/${fileId}/stream?token=${encodeURIComponent(token)}`;
+    const base = import.meta.env.VITE_API_URL || '';
+    return `${base}/api/v1/files/${fileId}/stream?token=${encodeURIComponent(token)}`;
   };
 
   // Open file preview - fetch, decrypt if needed, and display

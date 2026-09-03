@@ -5,7 +5,8 @@ let socket: Socket | null = null;
 export function getSocket(): Socket {
   if (!socket) {
     const token = localStorage.getItem('drive_token') || undefined;
-    socket = io('/', {
+    const serverUrl = import.meta.env.VITE_API_URL || '/';
+    socket = io(serverUrl, {
       auth: { token },
       autoConnect: true,
       reconnection: true,
