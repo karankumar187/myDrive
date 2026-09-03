@@ -183,7 +183,11 @@ export const FolderExplorerView: React.FC<Props> = ({
 
         // 4. Stream bytes to Google Drive resumable session
         setUploadMessage(`Uploading to ${initResult.targetAccountEmail}...`);
-        const putRes = await fetch(initResult.uploadSessionUrl, {
+        const uploadUrl = initResult.uploadSessionUrl.startsWith('http')
+          ? initResult.uploadSessionUrl
+          : `${import.meta.env.VITE_API_URL || ''}${initResult.uploadSessionUrl}`;
+
+        const putRes = await fetch(uploadUrl, {
           method: 'PUT',
           headers: {
             'Content-Type': isEncrypted ? 'application/octet-stream' : file.type || 'application/octet-stream',

@@ -65,10 +65,12 @@ export class FileController {
       if (isMockAccount) {
         resumableSessionUri = `/api/v1/files/mock-upload/${encodeURIComponent(driveOpaqueName)}`;
       } else {
+        const clientOrigin = (req.headers.origin as string) || (process.env.CLIENT_URL || 'http://localhost:5173').split(',')[0].trim();
         resumableSessionUri = await GoogleDriveService.createResumableUploadSession(targetAccount, {
           name: driveOpaqueName,
           mimeType: isEncrypted ? 'application/octet-stream' : mimeType,
           sizeBytes,
+          origin: clientOrigin,
         });
       }
 

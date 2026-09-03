@@ -127,6 +127,7 @@ export class GoogleDriveService {
       name: string;
       mimeType: string;
       sizeBytes: number;
+      origin?: string;
     }
   ): Promise<string> {
     const oauth2Client = this.getOAuth2Client(account);
@@ -137,15 +138,21 @@ export class GoogleDriveService {
       throw new Error('Failed to acquire valid access token for storage account');
     }
 
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json; charset=UTF-8',
+      'X-Upload-Content-Type': metadata.mimeType,
+      'X-Upload-Content-Length': metadata.sizeBytes.toString(),
+    };
+
+    if (metadata.origin) {
+      headers['Origin'] = metadata.origin;
+    }
+
     // Call Google Drive initiate resumable upload endpoint
     const response = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable', {
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        'Content-Type': 'application/json; charset=UTF-8',
-        'X-Upload-Content-Type': metadata.mimeType,
-        'X-Upload-Content-Length': metadata.sizeBytes.toString(),
-      },
+      headers,
       body: JSON.stringify({
         name: metadata.name,
         mimeType: metadata.mimeType,
