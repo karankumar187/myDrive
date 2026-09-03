@@ -1,6 +1,7 @@
 import { StorageSummary, FileItem, FolderItem, DeviceItem, User, BreadcrumbItem } from '../types.js';
 
-const API_BASE = (import.meta.env.VITE_API_URL || '') + '/api/v1';
+const rawApiUrl = (import.meta.env.VITE_API_URL || '').replace(/\/+$/, '');
+const API_BASE = rawApiUrl ? `${rawApiUrl}/api/v1` : '/api/v1';
 
 function getHeaders(): HeadersInit {
   const token = localStorage.getItem('drive_token');
@@ -14,7 +15,10 @@ export const api = {
   // Auth
   async getCurrentUser(): Promise<{ user: User }> {
     const res = await fetch(`${API_BASE}/auth/me`, { headers: getHeaders() });
-    if (!res.ok) throw new Error('Not authenticated');
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '');
+      throw new Error(`Auth failed (${res.status}): ${errText || res.statusText}`);
+    }
     return res.json();
   },
 

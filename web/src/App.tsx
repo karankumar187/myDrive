@@ -47,13 +47,14 @@ export const App: React.FC = () => {
   const [isIPhoneModalOpen, setIsIPhoneModalOpen] = useState(false);
   const [isSocketConnected, setIsSocketConnected] = useState(false);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
+  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
 
   // Initial authentication check & OAuth callback handling
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
     const authError = urlParams.get('error');
     if (authError) {
-      alert(`Login failed: ${authError}`);
+      alert(`Authentication notification: ${authError}`);
       window.history.replaceState({}, document.title, window.location.origin + '/');
     }
 
@@ -67,11 +68,21 @@ export const App: React.FC = () => {
     if (token) {
       api
         .getCurrentUser()
-        .then((res) => setCurrentUser(res.user))
+        .then((res) => {
+          setCurrentUser(res.user);
+        })
         .catch((err) => {
           console.error('Failed to get current user:', err);
-          localStorage.removeItem('drive_token');
+          // Only clear token if server explicitly says 401 Unauthorized
+          if (err.message && err.message.includes('401')) {
+            localStorage.removeItem('drive_token');
+          }
+        })
+        .finally(() => {
+          setIsCheckingAuth(false);
         });
+    } else {
+      setIsCheckingAuth(false);
     }
   }, []);
 
@@ -158,6 +169,21 @@ export const App: React.FC = () => {
       alert(err.message || 'Failed to start Google Drive authorization');
     }
   };
+
+  if (isCheckingAuth) {
+    return (
+      <div className="min-h-screen bg-[#08080a] text-white flex flex-col items-center justify-center p-4 relative overflow-hidden">
+        <div className="absolute -top-40 left-1/2 -translate-x-1/2 w-[600px] h-[600px] bg-purple-600/15 rounded-full blur-[140px] pointer-events-none" />
+        <div className="relative z-10 flex flex-col items-center space-y-4">
+          <img src="/logo.png" alt="myDrive" className="w-16 h-16 rounded-2xl object-cover shadow-glow-purple border border-purple-500/30 animate-pulse" />
+          <div className="flex items-center space-x-2 text-zinc-400 text-sm font-medium">
+            <span className="w-2 h-2 rounded-full bg-purple-400 animate-ping" />
+            <span>Connecting to myDrive...</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (!currentUser) {
     return (

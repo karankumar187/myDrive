@@ -104,7 +104,7 @@ export class StorageController {
 
       await storageAccount.save();
 
-      res.redirect(`${clientUrl}/storage?success=account_connected&email=${encodeURIComponent(tokens.email)}`);
+      res.redirect(`${clientUrl}/?success=account_connected&email=${encodeURIComponent(tokens.email)}`);
     } catch (error: any) {
       console.error('Error linking storage account:', error);
       const clientUrl = (process.env.CLIENT_URL || 'http://localhost:5173').split(',')[0].trim();
