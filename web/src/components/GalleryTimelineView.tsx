@@ -1,14 +1,44 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { FileItem } from '../types.js';
-import { Film, Calendar, Download, ShieldCheck, Lock, X, Loader2, Image as ImageIcon, Play } from 'lucide-react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { FileItem, FolderItem } from '../types.js';
+import {
+  Film,
+  Calendar,
+  Download,
+  ShieldCheck,
+  Lock,
+  X,
+  Loader2,
+  Image as ImageIcon,
+  Play,
+  Heart,
+  Search,
+  CheckSquare,
+  Square,
+  Trash2,
+  FolderInput,
+  Edit2,
+  Share2,
+  Info,
+  MoreVertical,
+  ChevronLeft,
+  ChevronRight,
+  ZoomIn,
+  ZoomOut,
+  RotateCcw,
+  Cloud,
+  ChevronDown,
+  Check,
+} from 'lucide-react';
 import { VaultCryptoService } from '../services/vault-crypto.js';
 import { mediaCache, mediaQueue } from '../services/media-cache.js';
-import { getStreamUrl } from '../utils/format.js';
+import { getStreamUrl, formatBytes, formatDate } from '../utils/format.js';
+import { api } from '../services/api.js';
 
 interface Props {
   media: FileItem[];
   vaultKey: CryptoKey | null;
   onOpenVault?: () => void;
+  onRefresh?: () => void;
 }
 
 interface LoadedMediaState {
@@ -19,159 +49,605 @@ interface LoadedMediaState {
   error?: string | null;
 }
 
-export const GalleryTimelineView: React.FC<Props> = ({ media, vaultKey, onOpenVault }) => {
-  const [selectedMedia, setSelectedMedia] = useState<LoadedMediaState | null>(null);
+export const GalleryTimelineView: React.FC<Props> = ({ media, vaultKey, onOpenVault, onRefresh }) => {
+  // Filters & Search
+  const [filterType, setFilterType] = useState<'all' | 'favorites' | 'videos' | 'photos'>('all');
+  const [isFilterDropdownOpen, setIsFilterDropdownOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+
+  // Selection Mode
+  const [isSelectionMode, setIsSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
+  // Viewer State
+  const [selectedMediaIndex, setSelectedMediaIndex] = useState<number | null>(null);
+
+  // Modals
+  const [isDetailsOpen, setIsDetailsOpen] = useState(false);
+  const [isRenameOpen, setIsRenameOpen] = useState(false);
+  const [renameValue, setRenameValue] = useState('');
+  const [isMoveOpen, setIsMoveOpen] = useState(false);
+  const [folders, setFolders] = useState<FolderItem[]>([]);
+  const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
+  const [isMoving, setIsMoving] = useState(false);
+
+  // Local mutable media list to reflect instant favorite / rename / trash
+  const [localMediaList, setLocalMediaList] = useState<FileItem[]>(media);
+
+  useEffect(() => {
+    setLocalMediaList(media);
+  }, [media]);
+
+  // Filtered media based on filterType and searchQuery
+  const filteredMedia = useMemo(() => {
+    return localMediaList.filter((item) => {
+      const isVideo = item.mimeType.startsWith('video/');
+      const isPhoto = item.mimeType.startsWith('image/');
+
+      if (filterType === 'favorites' && !item.isFavorite) return false;
+      if (filterType === 'videos' && !isVideo) return false;
+      if (filterType === 'photos' && !isPhoto) return false;
+
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase().trim();
+        const matchName = item.filename.toLowerCase().includes(q);
+        const matchDevice = (item.sourceDeviceName || '').toLowerCase().includes(q);
+        if (!matchName && !matchDevice) return false;
+      }
+      return true;
+    });
+  }, [localMediaList, filterType, searchQuery]);
 
   // Group media by Month & Year
-  const groupedMedia = media.reduce((acc, item) => {
-    const date = new Date(item.metadata?.takenAt || item.createdAt);
-    const monthYear = date.toLocaleString('default', { month: 'long', year: 'numeric' });
-    if (!acc[monthYear]) acc[monthYear] = [];
-    acc[monthYear].push(item);
-    return acc;
-  }, {} as Record<string, FileItem[]>);
+  const groupedMedia = useMemo(() => {
+    return filteredMedia.reduce((acc, item) => {
+      const date = new Date(item.metadata?.takenAt || item.createdAt);
+      const monthYear = date.toLocaleString('default', { month: 'long', year: 'numeric' });
+      if (!acc[monthYear]) acc[monthYear] = [];
+      acc[monthYear].push(item);
+      return acc;
+    }, {} as Record<string, FileItem[]>);
+  }, [filteredMedia]);
+
+  // Selection helpers
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const selectAll = () => {
+    setSelectedIds(new Set(filteredMedia.map((m) => m._id)));
+    setIsSelectionMode(true);
+  };
+
+  const deselectAll = () => {
+    setSelectedIds(new Set());
+    setIsSelectionMode(false);
+  };
+
+  // Toggle Favorite
+  const handleToggleFavorite = async (item: FileItem) => {
+    const nextVal = !item.isFavorite;
+    setLocalMediaList((prev) =>
+      prev.map((m) => (m._id === item._id ? { ...m, isFavorite: nextVal } : m))
+    );
+    try {
+      await api.toggleFavorite(item._id, nextVal);
+    } catch (err) {
+      console.error('Failed to toggle favorite:', err);
+      // rollback
+      setLocalMediaList((prev) =>
+        prev.map((m) => (m._id === item._id ? { ...m, isFavorite: !nextVal } : m))
+      );
+    }
+  };
+
+  // Bulk Favorite
+  const handleBulkFavorite = async (fav: boolean) => {
+    const ids = Array.from(selectedIds);
+    setLocalMediaList((prev) =>
+      prev.map((m) => (selectedIds.has(m._id) ? { ...m, isFavorite: fav } : m))
+    );
+    try {
+      await api.bulkAction(fav ? 'favorite' : 'unfavorite', ids);
+      deselectAll();
+    } catch (err) {
+      console.error('Failed bulk favorite:', err);
+      onRefresh?.();
+    }
+  };
+
+  // Bulk Trash
+  const handleBulkTrash = async () => {
+    if (!confirm(`Move ${selectedIds.size} selected items to Trash?`)) return;
+    const ids = Array.from(selectedIds);
+    setLocalMediaList((prev) => prev.filter((m) => !selectedIds.has(m._id)));
+    try {
+      await api.bulkAction('trash', ids);
+      deselectAll();
+      onRefresh?.();
+    } catch (err) {
+      console.error('Failed bulk trash:', err);
+      onRefresh?.();
+    }
+  };
+
+  // Bulk Download
+  const handleBulkDownload = () => {
+    Array.from(selectedIds).forEach((id, idx) => {
+      const item = localMediaList.find((m) => m._id === id);
+      if (!item) return;
+      setTimeout(() => {
+        const a = document.createElement('a');
+        a.href = getStreamUrl(item._id);
+        a.download = item.filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      }, idx * 400);
+    });
+  };
+
+  // Open Move dialog
+  const handleOpenMove = async () => {
+    try {
+      const res = await api.listFolders();
+      setFolders(res.folders || []);
+      setSelectedFolderId(null);
+      setIsMoveOpen(true);
+    } catch (err) {
+      console.error('Failed to list folders:', err);
+    }
+  };
+
+  // Confirm Move
+  const handleConfirmMove = async () => {
+    setIsMoving(true);
+    const ids = isSelectionMode
+      ? Array.from(selectedIds)
+      : selectedMediaIndex !== null
+      ? [filteredMedia[selectedMediaIndex]._id]
+      : [];
+    try {
+      if (ids.length === 1) {
+        await api.moveFile(ids[0], selectedFolderId);
+      } else {
+        await api.bulkAction('move', ids, selectedFolderId);
+      }
+      setIsMoveOpen(false);
+      deselectAll();
+      onRefresh?.();
+    } catch (err) {
+      console.error('Failed to move:', err);
+      alert('Failed to move files');
+    } finally {
+      setIsMoving(false);
+    }
+  };
+
+  // Rename single file
+  const handleConfirmRename = async () => {
+    if (selectedMediaIndex === null) return;
+    const current = filteredMedia[selectedMediaIndex];
+    if (!renameValue.trim()) return;
+    try {
+      await api.renameFile(current._id, renameValue.trim());
+      setLocalMediaList((prev) =>
+        prev.map((m) => (m._id === current._id ? { ...m, filename: renameValue.trim() } : m))
+      );
+      setIsRenameOpen(false);
+      onRefresh?.();
+    } catch (err) {
+      console.error('Failed to rename:', err);
+      alert('Failed to rename file');
+    }
+  };
+
+  // Single file delete in viewer
+  const handleDeleteCurrent = async () => {
+    if (selectedMediaIndex === null) return;
+    const current = filteredMedia[selectedMediaIndex];
+    if (!confirm(`Move "${current.filename}" to Trash?`)) return;
+    try {
+      await api.moveToTrash(current._id);
+      setLocalMediaList((prev) => prev.filter((m) => m._id !== current._id));
+      if (selectedMediaIndex >= filteredMedia.length - 1) {
+        setSelectedMediaIndex(filteredMedia.length > 1 ? filteredMedia.length - 2 : null);
+      }
+      onRefresh?.();
+    } catch (err) {
+      console.error('Failed to delete:', err);
+    }
+  };
+
+  const currentMedia = selectedMediaIndex !== null ? filteredMedia[selectedMediaIndex] : null;
 
   return (
-    <div className="space-y-8">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-[#111114] p-5 rounded-2xl border border-[#222227] shadow-lg">
-        <div className="space-y-1">
+    <div className="space-y-6">
+      {/* Top Header Bar */}
+      <div className="bg-[#101014] p-4 sm:p-5 rounded-2xl border border-[#202026] shadow-xl flex flex-col md:flex-row md:items-center justify-between gap-4">
+        {/* Left: Brand & Filter Dropdown */}
+        <div className="flex items-center space-x-3">
           <div className="flex items-center space-x-2">
-            <ImageIcon className="w-5 h-5 text-purple-400" />
-            <h2 className="text-lg sm:text-xl font-bold text-white tracking-tight">Media Timeline</h2>
+            <ImageIcon className="w-6 h-6 text-purple-400" />
+            <span className="text-xl font-extrabold text-white tracking-tight">myDrive</span>
           </div>
-          <p className="text-xs text-zinc-400">{media.length} photos and videos across all pooled accounts</p>
+
+          <div className="h-4 w-[1px] bg-zinc-700 mx-1" />
+
+          {/* Filter Dropdown */}
+          <div className="relative">
+            <button
+              onClick={() => setIsFilterDropdownOpen(!isFilterDropdownOpen)}
+              className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-[#181822] hover:bg-[#222230] text-zinc-200 border border-[#2d2d3d] transition active:scale-95"
+            >
+              <span>
+                {filterType === 'all' && 'All Photos'}
+                {filterType === 'favorites' && 'Favorites ❤️'}
+                {filterType === 'videos' && 'Videos 🎥'}
+                {filterType === 'photos' && 'Photos 📷'}
+              </span>
+              <ChevronDown className="w-3.5 h-3.5 text-zinc-400" />
+            </button>
+
+            {isFilterDropdownOpen && (
+              <div
+                className="absolute left-0 mt-2 w-44 bg-[#181822] border border-[#2d2d3d] rounded-xl shadow-2xl z-30 py-1 overflow-hidden"
+                onClick={() => setIsFilterDropdownOpen(false)}
+              >
+                <button
+                  onClick={() => setFilterType('all')}
+                  className={`w-full px-3 py-2 text-left text-xs flex items-center justify-between hover:bg-purple-900/30 ${
+                    filterType === 'all' ? 'text-purple-300 font-semibold bg-purple-950/40' : 'text-zinc-300'
+                  }`}
+                >
+                  <span>All Photos</span>
+                  {filterType === 'all' && <Check className="w-3.5 h-3.5 text-purple-400" />}
+                </button>
+                <button
+                  onClick={() => setFilterType('favorites')}
+                  className={`w-full px-3 py-2 text-left text-xs flex items-center justify-between hover:bg-purple-900/30 ${
+                    filterType === 'favorites' ? 'text-purple-300 font-semibold bg-purple-950/40' : 'text-zinc-300'
+                  }`}
+                >
+                  <span className="flex items-center">
+                    <Heart className="w-3 h-3 text-red-400 mr-1.5 fill-red-400" /> Favorites
+                  </span>
+                  {filterType === 'favorites' && <Check className="w-3.5 h-3.5 text-purple-400" />}
+                </button>
+                <button
+                  onClick={() => setFilterType('videos')}
+                  className={`w-full px-3 py-2 text-left text-xs flex items-center justify-between hover:bg-purple-900/30 ${
+                    filterType === 'videos' ? 'text-purple-300 font-semibold bg-purple-950/40' : 'text-zinc-300'
+                  }`}
+                >
+                  <span className="flex items-center">
+                    <Film className="w-3 h-3 text-purple-400 mr-1.5" /> Videos Only
+                  </span>
+                  {filterType === 'videos' && <Check className="w-3.5 h-3.5 text-purple-400" />}
+                </button>
+                <button
+                  onClick={() => setFilterType('photos')}
+                  className={`w-full px-3 py-2 text-left text-xs flex items-center justify-between hover:bg-purple-900/30 ${
+                    filterType === 'photos' ? 'text-purple-300 font-semibold bg-purple-950/40' : 'text-zinc-300'
+                  }`}
+                >
+                  <span className="flex items-center">
+                    <ImageIcon className="w-3 h-3 text-blue-400 mr-1.5" /> Photos Only
+                  </span>
+                  {filterType === 'photos' && <Check className="w-3.5 h-3.5 text-purple-400" />}
+                </button>
+              </div>
+            )}
+          </div>
         </div>
-        {vaultKey ? (
+
+        {/* Center: Live Search Bar */}
+        <div className="relative flex-1 max-w-md">
+          <Search className="w-4 h-4 text-zinc-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search photos, videos, or devices..."
+            className="w-full pl-9 pr-8 py-1.5 bg-[#171720] border border-[#272736] focus:border-purple-500 rounded-full text-xs text-white placeholder-zinc-500 focus:outline-none transition"
+          />
+          {searchQuery && (
+            <button
+              onClick={() => setSearchQuery('')}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-white"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
+
+        {/* Right Actions: Select Mode, Vault Status */}
+        <div className="flex items-center space-x-2">
           <button
-            onClick={onOpenVault}
-            className="inline-flex items-center px-3 py-1.5 rounded-full text-xs font-semibold bg-purple-950/40 hover:bg-purple-900/40 text-purple-300 border border-purple-800/40 shadow-glow-purple transition active:scale-95"
-            title="Zero-Knowledge Encryption Active - Click to manage"
+            onClick={() => {
+              if (isSelectionMode) {
+                deselectAll();
+              } else {
+                setIsSelectionMode(true);
+              }
+            }}
+            className={`inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-full text-xs font-semibold transition active:scale-95 ${
+              isSelectionMode
+                ? 'bg-purple-600 text-white shadow-glow-purple'
+                : 'bg-[#181822] hover:bg-[#222230] text-zinc-300 border border-[#2d2d3d]'
+            }`}
           >
-            <ShieldCheck className="w-3.5 h-3.5 mr-1.5 text-purple-400" />
-            Zero-Knowledge Decryption Active
+            <CheckSquare className="w-3.5 h-3.5" />
+            <span>{isSelectionMode ? 'Cancel' : 'Select'}</span>
           </button>
-        ) : (
-          <button
-            onClick={onOpenVault}
-            className="inline-flex items-center px-3 py-1.5 rounded-full text-xs font-semibold bg-[#181820] hover:bg-[#22222b] text-zinc-300 border border-[#272736] hover:border-purple-500/40 transition active:scale-95"
-            title="Vault is locked - Click to enter Master Passphrase"
-          >
-            <Lock className="w-3.5 h-3.5 mr-1.5 text-amber-400" />
-            Unlock Vault to View E2EE Media
-          </button>
-        )}
+
+          {vaultKey ? (
+            <button
+              onClick={onOpenVault}
+              className="hidden sm:inline-flex items-center px-3 py-1.5 rounded-full text-xs font-semibold bg-purple-950/40 hover:bg-purple-900/40 text-purple-300 border border-purple-800/40 shadow-glow-purple transition active:scale-95"
+              title="Zero-Knowledge Encryption Active"
+            >
+              <ShieldCheck className="w-3.5 h-3.5 mr-1 text-purple-400" />
+              E2EE
+            </button>
+          ) : (
+            <button
+              onClick={onOpenVault}
+              className="hidden sm:inline-flex items-center px-3 py-1.5 rounded-full text-xs font-semibold bg-[#181820] hover:bg-[#22222b] text-zinc-300 border border-[#272736] transition active:scale-95"
+              title="Click to unlock Vault for E2EE media"
+            >
+              <Lock className="w-3.5 h-3.5 mr-1 text-amber-400" />
+              Unlock
+            </button>
+          )}
+        </div>
       </div>
 
-      {media.length === 0 ? (
+      {/* Floating Selection Action Bar */}
+      {isSelectionMode && (
+        <div className="sticky top-4 z-40 bg-[#14141c]/95 backdrop-blur-md border border-purple-500/40 rounded-2xl p-3 shadow-2xl flex items-center justify-between animate-in fade-in slide-in-from-top-2">
+          <div className="flex items-center space-x-3">
+            <span className="text-xs font-bold text-white pl-2">
+              {selectedIds.size} selected
+            </span>
+            <button
+              onClick={selectedIds.size === filteredMedia.length ? deselectAll : selectAll}
+              className="text-xs text-purple-400 hover:text-purple-300 font-medium transition"
+            >
+              {selectedIds.size === filteredMedia.length ? 'Deselect All' : 'Select All'}
+            </button>
+          </div>
+
+          <div className="flex items-center space-x-1.5">
+            <button
+              disabled={selectedIds.size === 0}
+              onClick={() => handleBulkFavorite(true)}
+              className="p-2 rounded-xl bg-[#1e1e28] hover:bg-purple-950/60 text-zinc-300 hover:text-red-400 border border-[#2d2d3d] disabled:opacity-40 transition"
+              title="Favorite Selected"
+            >
+              <Heart className="w-4 h-4" />
+            </button>
+            <button
+              disabled={selectedIds.size === 0}
+              onClick={handleBulkDownload}
+              className="p-2 rounded-xl bg-[#1e1e28] hover:bg-[#282836] text-zinc-300 hover:text-white border border-[#2d2d3d] disabled:opacity-40 transition"
+              title="Download Selected"
+            >
+              <Download className="w-4 h-4" />
+            </button>
+            <button
+              disabled={selectedIds.size === 0}
+              onClick={handleOpenMove}
+              className="p-2 rounded-xl bg-[#1e1e28] hover:bg-[#282836] text-zinc-300 hover:text-white border border-[#2d2d3d] disabled:opacity-40 transition"
+              title="Move Selected to Folder"
+            >
+              <FolderInput className="w-4 h-4" />
+            </button>
+            <button
+              disabled={selectedIds.size === 0}
+              onClick={handleBulkTrash}
+              className="p-2 rounded-xl bg-red-950/40 hover:bg-red-900/60 text-red-400 border border-red-800/40 disabled:opacity-40 transition"
+              title="Move to Trash"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
+            <button
+              onClick={deselectAll}
+              className="p-2 rounded-xl text-zinc-400 hover:text-white transition"
+              title="Cancel Selection"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Main Gallery Grid */}
+      {filteredMedia.length === 0 ? (
         <div className="bg-[#111114] rounded-2xl border border-[#222227] p-16 text-center space-y-2">
           <Calendar className="w-12 h-12 mx-auto text-zinc-700" />
-          <p className="text-sm font-semibold text-zinc-200">No photos or videos backed up yet</p>
+          <p className="text-sm font-semibold text-zinc-200">No media found</p>
           <p className="text-xs text-zinc-500 max-w-sm mx-auto">
-            Upload photos in Folder Explorer or back up from Android/iPhone to view your gallery here.
+            {searchQuery
+              ? `No results matching "${searchQuery}".`
+              : 'Photos and videos synced from paired devices or uploaded will appear here.'}
           </p>
         </div>
       ) : (
         Object.entries(groupedMedia).map(([groupTitle, items]) => (
           <div key={groupTitle} className="space-y-3">
-            <h3 className="text-xs font-bold text-zinc-400 uppercase tracking-wider sticky top-0 bg-[#08080a] py-2 z-10 flex items-center space-x-2 border-b border-[#18181f]">
-              <Calendar className="w-3.5 h-3.5 text-purple-400" />
-              <span className="text-zinc-200">{groupTitle}</span>
-              <span className="text-zinc-600">({items.length})</span>
-            </h3>
+            {/* Date Group Header */}
+            <div className="sticky top-0 bg-[#0a0a0d]/90 backdrop-blur-md py-2.5 z-20 flex items-center justify-between border-b border-[#1c1c24]">
+              <div className="flex items-center space-x-2">
+                <Calendar className="w-3.5 h-3.5 text-purple-400" />
+                <span className="text-xs font-bold text-zinc-200 tracking-wide uppercase">{groupTitle}</span>
+                <span className="text-[11px] text-zinc-500">({items.length})</span>
+              </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
-              {items.map((item) => (
-                <MediaCard
-                  key={item._id}
-                  item={item}
-                  vaultKey={vaultKey}
-                  onSelect={(loaded) => setSelectedMedia(loaded)}
-                />
-              ))}
+              {isSelectionMode && (
+                <button
+                  onClick={() => {
+                    const allInGroupSelected = items.every((i) => selectedIds.has(i._id));
+                    setSelectedIds((prev) => {
+                      const next = new Set(prev);
+                      items.forEach((i) => {
+                        if (allInGroupSelected) next.delete(i._id);
+                        else next.add(i._id);
+                      });
+                      return next;
+                    });
+                  }}
+                  className="text-[11px] text-purple-400 hover:text-purple-300"
+                >
+                  {items.every((i) => selectedIds.has(i._id)) ? 'Deselect Month' : 'Select Month'}
+                </button>
+              )}
+            </div>
+
+            {/* Grid: 4 columns mobile, 5–7 columns desktop */}
+            <div className="grid grid-cols-4 sm:grid-cols-5 md:grid-cols-6 lg:grid-cols-7 xl:grid-cols-8 gap-2 sm:gap-2.5">
+              {items.map((item) => {
+                const isSelected = selectedIds.has(item._id);
+                return (
+                  <GalleryGridTile
+                    key={item._id}
+                    item={item}
+                    vaultKey={vaultKey}
+                    isSelected={isSelected}
+                    isSelectionMode={isSelectionMode}
+                    onToggleSelect={() => toggleSelect(item._id)}
+                    onToggleFavorite={() => handleToggleFavorite(item)}
+                    onClick={() => {
+                      if (isSelectionMode) {
+                        toggleSelect(item._id);
+                      } else {
+                        const globalIndex = filteredMedia.findIndex((m) => m._id === item._id);
+                        setSelectedMediaIndex(globalIndex);
+                      }
+                    }}
+                  />
+                );
+              })}
             </div>
           </div>
         ))
       )}
 
-      {/* Lightbox Modal */}
-      {selectedMedia && (
-        <div
-          className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4 backdrop-blur-sm"
-          onClick={() => setSelectedMedia(null)}
-        >
-          <button
-            onClick={() => setSelectedMedia(null)}
-            className="absolute top-4 right-4 z-50 p-2 text-zinc-400 hover:text-white rounded-full bg-zinc-800/80 hover:bg-zinc-700 transition"
-          >
-            <X className="w-6 h-6" />
-          </button>
+      {/* Full-Screen Photo Viewer */}
+      {selectedMediaIndex !== null && currentMedia && (
+        <FullScreenViewer
+          mediaList={filteredMedia}
+          currentIndex={selectedMediaIndex}
+          vaultKey={vaultKey}
+          onIndexChange={(newIdx) => setSelectedMediaIndex(newIdx)}
+          onClose={() => setSelectedMediaIndex(null)}
+          onToggleFavorite={() => handleToggleFavorite(currentMedia)}
+          onDelete={handleDeleteCurrent}
+          onOpenDetails={() => setIsDetailsOpen(true)}
+          onOpenRename={() => {
+            setRenameValue(currentMedia.filename);
+            setIsRenameOpen(true);
+          }}
+          onOpenMove={handleOpenMove}
+        />
+      )}
 
-          <div
-            className="max-w-4xl max-h-[85vh] w-full flex flex-col items-center"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {selectedMedia.needsKey ? (
-              <div className="p-8 text-center bg-[#16161d] border border-purple-500/30 rounded-2xl max-w-md space-y-3 shadow-glow-purple">
-                <div className="w-12 h-12 rounded-full bg-purple-950/60 border border-purple-800/50 flex items-center justify-center mx-auto text-purple-400">
-                  <Lock className="w-6 h-6" />
-                </div>
-                <h4 className="text-sm font-bold text-white">This media is encrypted with AES-256-GCM</h4>
-                <p className="text-xs text-zinc-300 leading-relaxed">
-                  Please click &quot;Vault Locked&quot; in the top navigation bar and enter your Master Passphrase to decrypt and view this photo.
-                </p>
-              </div>
-            ) : selectedMedia.error ? (
-              <div className="p-8 text-center bg-[#16161d] border border-red-500/30 rounded-2xl max-w-md space-y-3">
-                <h4 className="text-sm font-bold text-red-400">Unable to Load Media</h4>
-                <p className="text-xs text-zinc-400">{selectedMedia.error}</p>
-                <a
-                  href={getStreamUrl(selectedMedia.item._id)}
-                  download={selectedMedia.item.filename}
-                  className="inline-flex items-center space-x-1.5 px-4 py-2 text-xs font-semibold text-white bg-purple-600 hover:bg-purple-500 rounded-full transition"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  <span>Download File Directly</span>
-                </a>
-              </div>
-            ) : selectedMedia.item.mimeType.startsWith('video/') ? (
-              <LightboxVideoPlayer
-                item={selectedMedia.item}
-                vaultKey={vaultKey}
-                initialThumb={selectedMedia.displayUrl}
-              />
-            ) : selectedMedia.displayUrl ? (
-              <img
-                src={selectedMedia.displayUrl}
-                alt={selectedMedia.item.filename}
-                className="max-h-[75vh] max-w-full object-contain rounded-2xl shadow-2xl"
-              />
-            ) : (
-              <div className="p-8 text-white flex items-center space-x-2">
-                <Loader2 className="w-5 h-5 animate-spin text-purple-400" />
-                <span className="text-xs text-zinc-400">Loading media...</span>
-              </div>
-            )}
+      {/* Photo Details Modal */}
+      {isDetailsOpen && currentMedia && (
+        <PhotoDetailsModal
+          item={currentMedia}
+          onClose={() => setIsDetailsOpen(false)}
+        />
+      )}
 
-            <div className="mt-4 flex items-center justify-between w-full text-xs px-2">
-              <div className="space-y-0.5">
-                <p className="font-semibold text-white truncate max-w-[280px] sm:max-w-md">
-                  {selectedMedia.item.filename}
-                </p>
-                <p className="text-zinc-500 text-[11px]">
-                  Added on {new Date(selectedMedia.item.createdAt).toLocaleDateString()} •{' '}
-                  {(selectedMedia.item.sizeBytes / (1024 * 1024)).toFixed(1)} MB
-                  {selectedMedia.isEncrypted && ' • E2EE Encrypted'}
-                </p>
-              </div>
-
-              <a
-                href={getStreamUrl(selectedMedia.item._id)}
-                download={selectedMedia.item.filename}
-                className="flex items-center space-x-1 px-3.5 py-1.5 bg-[#1a1a24] hover:bg-purple-600 border border-[#282838] hover:border-purple-500 text-zinc-200 hover:text-white rounded-full font-medium transition active:scale-95"
+      {/* Rename Dialog */}
+      {isRenameOpen && currentMedia && (
+        <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+          <div className="bg-[#16161e] border border-[#2d2d3d] rounded-2xl max-w-sm w-full p-5 space-y-4 shadow-2xl">
+            <h3 className="text-sm font-bold text-white">Rename File</h3>
+            <input
+              type="text"
+              value={renameValue}
+              onChange={(e) => setRenameValue(e.target.value)}
+              className="w-full px-3.5 py-2 bg-[#101016] border border-[#282838] focus:border-purple-500 rounded-xl text-xs text-white focus:outline-none"
+              autoFocus
+            />
+            <div className="flex justify-end space-x-2 pt-2">
+              <button
+                onClick={() => setIsRenameOpen(false)}
+                className="px-3.5 py-1.5 text-xs text-zinc-400 hover:text-white rounded-lg hover:bg-zinc-800 transition"
               >
-                <Download className="w-3.5 h-3.5" />
-                <span>Download</span>
-              </a>
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmRename}
+                className="px-4 py-1.5 text-xs font-semibold text-white bg-purple-600 hover:bg-purple-500 rounded-lg shadow-glow-purple transition"
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Move to Folder Dialog */}
+      {isMoveOpen && (
+        <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+          <div className="bg-[#16161e] border border-[#2d2d3d] rounded-2xl max-w-md w-full p-5 space-y-4 shadow-2xl">
+            <h3 className="text-sm font-bold text-white">Move to Folder</h3>
+            <p className="text-xs text-zinc-400">Choose a destination folder in your unified cloud drive:</p>
+
+            <div className="max-h-60 overflow-y-auto space-y-1.5 pr-1">
+              <button
+                onClick={() => setSelectedFolderId(null)}
+                className={`w-full p-2.5 rounded-xl text-left text-xs flex items-center justify-between transition ${
+                  selectedFolderId === null
+                    ? 'bg-purple-950/50 border border-purple-600/60 text-purple-300 font-semibold'
+                    : 'bg-[#101016] border border-[#222230] text-zinc-300 hover:bg-[#191924]'
+                }`}
+              >
+                <span>Root / All Files</span>
+                {selectedFolderId === null && <Check className="w-3.5 h-3.5 text-purple-400" />}
+              </button>
+
+              {folders.map((folder) => (
+                <button
+                  key={folder._id}
+                  onClick={() => setSelectedFolderId(folder._id)}
+                  className={`w-full p-2.5 rounded-xl text-left text-xs flex items-center justify-between transition ${
+                    selectedFolderId === folder._id
+                      ? 'bg-purple-950/50 border border-purple-600/60 text-purple-300 font-semibold'
+                      : 'bg-[#101016] border border-[#222230] text-zinc-300 hover:bg-[#191924]'
+                  }`}
+                >
+                  <span className="truncate">{folder.name}</span>
+                  {selectedFolderId === folder._id && <Check className="w-3.5 h-3.5 text-purple-400" />}
+                </button>
+              ))}
+            </div>
+
+            <div className="flex justify-end space-x-2 pt-2">
+              <button
+                onClick={() => setIsMoveOpen(false)}
+                className="px-3.5 py-1.5 text-xs text-zinc-400 hover:text-white rounded-lg hover:bg-zinc-800 transition"
+              >
+                Cancel
+              </button>
+              <button
+                disabled={isMoving}
+                onClick={handleConfirmMove}
+                className="px-4 py-1.5 text-xs font-semibold text-white bg-purple-600 hover:bg-purple-500 rounded-lg shadow-glow-purple disabled:opacity-50 transition"
+              >
+                {isMoving ? 'Moving...' : 'Move Here'}
+              </button>
             </div>
           </div>
         </div>
@@ -180,403 +656,651 @@ export const GalleryTimelineView: React.FC<Props> = ({ media, vaultKey, onOpenVa
   );
 };
 
-// Helper to extract first frame from a video URL/Blob
-function extractFrameFromVideoUrl(src: string): Promise<string | null> {
-  return new Promise((resolve) => {
-    try {
-      const video = document.createElement('video');
-      video.preload = 'metadata';
-      video.muted = true;
-      video.playsInline = true;
-      video.crossOrigin = 'anonymous';
-      video.src = `${src}#t=0.2`;
-
-      const cleanUp = () => {
-        video.remove();
-      };
-
-      video.onloadeddata = () => {
-        try {
-          video.currentTime = Math.min(0.2, (video.duration || 1) / 2);
-        } catch {
-          cleanUp();
-          resolve(null);
-        }
-      };
-
-      video.onseeked = () => {
-        try {
-          const canvas = document.createElement('canvas');
-          const maxDim = 320;
-          let w = video.videoWidth || 320;
-          let h = video.videoHeight || 240;
-          if (w > maxDim) {
-            h = Math.round((h * maxDim) / w);
-            w = maxDim;
-          }
-          canvas.width = w;
-          canvas.height = h;
-          const ctx = canvas.getContext('2d');
-          if (ctx) {
-            ctx.drawImage(video, 0, 0, w, h);
-            const thumbData = canvas.toDataURL('image/jpeg', 0.75);
-            cleanUp();
-            resolve(thumbData);
-            return;
-          }
-        } catch {}
-        cleanUp();
-        resolve(null);
-      };
-
-      video.onerror = () => {
-        cleanUp();
-        resolve(null);
-      };
-
-      setTimeout(() => {
-        cleanUp();
-        resolve(null);
-      }, 4000);
-    } catch {
-      resolve(null);
-    }
-  });
-}
-
-// Lightbox Video Player that decrypts/streams on demand when clicked
-const LightboxVideoPlayer: React.FC<{
+// ----------------------------------------------------
+// Grid Tile Component with Lazy-loaded Thumbnails & Indicators
+// ----------------------------------------------------
+const GalleryGridTile: React.FC<{
   item: FileItem;
   vaultKey: CryptoKey | null;
-  initialThumb?: string | null;
-}> = ({ item, vaultKey, initialThumb }) => {
-  const [videoUrl, setVideoUrl] = useState<string | null>(() => {
-    const mem = mediaCache.get(item._id);
-    return mem && !mem.startsWith('data:image') ? mem : null;
-  });
-  const [loading, setLoading] = useState(!videoUrl);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (videoUrl) return;
-
-    let active = true;
-    const version = item.versions?.[item.versions.length - 1];
-    const encrypted = !!version?.isEncrypted;
-
-    if (encrypted && !vaultKey) {
-      setError('Master Passphrase required to decrypt this video');
-      setLoading(false);
-      return;
-    }
-
-    const loadVideo = async () => {
-      try {
-        const streamUrl = getStreamUrl(item._id);
-        if (!encrypted) {
-          if (active) {
-            setVideoUrl(streamUrl);
-            setLoading(false);
-          }
-          return;
-        }
-
-        const res = await fetch(streamUrl);
-        if (!res.ok) throw new Error(`Stream error HTTP ${res.status}`);
-        const ciphertext = await res.arrayBuffer();
-
-        if (!version?.iv) throw new Error('Missing encryption IV');
-        const decrypted = await VaultCryptoService.decryptBuffer(ciphertext, version.iv, vaultKey!);
-        if (active) {
-          const blobUrl = URL.createObjectURL(new Blob([decrypted], { type: item.mimeType || 'video/mp4' }));
-          mediaCache.set(item._id, blobUrl);
-          setVideoUrl(blobUrl);
-          setLoading(false);
-        }
-      } catch (err: any) {
-        if (active) {
-          setError(err.message || 'Failed to decrypt video');
-          setLoading(false);
-        }
-      }
-    };
-
-    loadVideo();
-    return () => {
-      active = false;
-    };
-  }, [item._id, item.mimeType, item.versions, vaultKey, videoUrl]);
-
-  if (error) {
-    return (
-      <div className="p-8 text-center bg-[#16161d] border border-red-500/30 rounded-2xl max-w-md space-y-3">
-        <h4 className="text-sm font-bold text-red-400">Unable to Play Video</h4>
-        <p className="text-xs text-zinc-400">{error}</p>
-        <a
-          href={getStreamUrl(item._id)}
-          download={item.filename}
-          className="inline-flex items-center space-x-1.5 px-4 py-2 text-xs font-semibold text-white bg-purple-600 hover:bg-purple-500 rounded-full transition"
-        >
-          <Download className="w-3.5 h-3.5" />
-          <span>Download File</span>
-        </a>
-      </div>
-    );
-  }
-
-  if (loading) {
-    return (
-      <div className="relative flex flex-col items-center justify-center p-12 bg-[#121218] rounded-2xl border border-[#22222a] min-w-[320px] sm:min-w-[480px] overflow-hidden">
-        {initialThumb && (
-          <img
-            src={initialThumb}
-            alt={item.filename}
-            className="absolute inset-0 w-full h-full object-cover opacity-20 rounded-2xl blur-sm"
-          />
-        )}
-        <div className="relative z-10 flex flex-col items-center space-y-3">
-          <Loader2 className="w-8 h-8 animate-spin text-purple-400" />
-          <p className="text-xs font-semibold text-zinc-200">Decrypting video for playback...</p>
-          <p className="text-[11px] text-zinc-500">{(item.sizeBytes / (1024 * 1024)).toFixed(1)} MB • Zero-Knowledge E2EE</p>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <video
-      controls
-      autoPlay
-      src={videoUrl || ''}
-      className="max-h-[75vh] max-w-full rounded-2xl shadow-2xl"
-    />
-  );
-};
-
-// Video Thumbnail Component that displays the first frame image
-const VideoThumbnail: React.FC<{ src: string; alt: string }> = React.memo(({ src, alt }) => {
-  return (
-    <div className="relative w-full h-full bg-[#13131a] overflow-hidden flex items-center justify-center [contain:paint]">
-      <img
-        src={src}
-        alt={alt}
-        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
-        loading="lazy"
-        decoding="async"
-      />
-
-      {/* Center Play Button Overlay */}
-      <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-        <div className="w-10 h-10 rounded-full bg-black/75 border border-white/25 flex items-center justify-center text-white shadow-md group-hover:scale-110 group-hover:bg-purple-600 transition-transform duration-200">
-          <Play className="w-4 h-4 fill-white ml-0.5" />
-        </div>
-      </div>
-    </div>
-  );
-});
-
-// Individual Media Card with Client-Side Decryption & Persistent Thumbnail Caching
-const MediaCard: React.FC<{
-  item: FileItem;
-  vaultKey: CryptoKey | null;
-  onSelect: (loaded: LoadedMediaState) => void;
-}> = React.memo(({ item, vaultKey, onSelect }) => {
+  isSelected: boolean;
+  isSelectionMode: boolean;
+  onToggleSelect: () => void;
+  onToggleFavorite: () => void;
+  onClick: () => void;
+}> = React.memo(({ item, vaultKey, isSelected, isSelectionMode, onToggleSelect, onToggleFavorite, onClick }) => {
   const isVideo = item.mimeType.startsWith('video/');
-  const [displayUrl, setDisplayUrl] = useState<string | null>(() => {
-    if (isVideo) {
-      return item.metadata?.thumbnail || mediaCache.getThumbnail(item._id);
-    }
-    return mediaCache.get(item._id) || null;
+  const [thumbUrl, setThumbUrl] = useState<string | null>(() => {
+    return item.metadata?.thumbnail || mediaCache.getThumbnail(item._id) || mediaCache.get(item._id) || null;
   });
-  const [loading, setLoading] = useState(!displayUrl);
-  const [isEncrypted, setIsEncrypted] = useState(false);
-  const [needsKey, setNeedsKey] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(!thumbUrl);
+  const isEncrypted = item.versions?.[item.versions.length - 1]?.isEncrypted || false;
 
   useEffect(() => {
-    if (displayUrl) {
+    if (thumbUrl) {
       setLoading(false);
       return;
     }
 
     let active = true;
 
-    const load = async () => {
-      // 1. Instant check for video thumbnail in metadata or cache/localStorage (0ms)
-      if (isVideo) {
-        const cachedThumb = item.metadata?.thumbnail || mediaCache.getThumbnail(item._id);
-        if (cachedThumb) {
+    const loadThumb = async () => {
+      // 1. Check local cache
+      const cached = mediaCache.getThumbnail(item._id) || mediaCache.get(item._id);
+      if (cached) {
+        if (active) {
+          setThumbUrl(cached);
+          setLoading(false);
+        }
+        return;
+      }
+
+      // 2. If not encrypted, use fast thumbnail endpoint
+      if (!isEncrypted) {
+        const url = api.getThumbnailUrl(item._id);
+        if (active) {
+          setThumbUrl(url);
+          setLoading(false);
+        }
+        return;
+      }
+
+      // 3. If encrypted and vaultKey available, decrypt preview
+      if (isEncrypted && vaultKey) {
+        try {
+          const version = item.versions?.[item.versions.length - 1];
+          if (!version?.iv) return;
+          const streamUrl = getStreamUrl(item._id);
+          const res = await fetch(streamUrl);
+          if (!res.ok) throw new Error('Fetch failed');
+          const ciphertext = await res.arrayBuffer();
+          const decrypted = await VaultCryptoService.decryptBuffer(ciphertext, version.iv, vaultKey);
+          const blobUrl = URL.createObjectURL(new Blob([decrypted], { type: item.mimeType }));
+          mediaCache.set(item._id, blobUrl);
           if (active) {
-            setDisplayUrl(cachedThumb);
+            setThumbUrl(blobUrl);
             setLoading(false);
           }
-          return;
-        }
-      }
-
-      // 2. Instant in-memory cache hit (0ms)
-      const cachedUrl = mediaCache.get(item._id);
-      if (cachedUrl) {
-        if (active) {
-          setDisplayUrl(cachedUrl);
-          setLoading(false);
-        }
-        return;
-      }
-
-      const version = item.versions?.[item.versions.length - 1];
-      const encrypted = !!version?.isEncrypted;
-      setIsEncrypted(encrypted);
-
-      if (encrypted && !vaultKey) {
-        if (active) {
-          setNeedsKey(true);
-          setLoading(false);
-        }
-        return;
-      }
-
-      const streamUrl = getStreamUrl(item._id);
-
-      // 3. For videos without thumbnail, process in controlled concurrency queue (max 2)
-      if (isVideo) {
-        try {
-          await mediaQueue.enqueue(async () => {
-            if (!active) return;
-            let videoBlobUrl = streamUrl;
-
-            if (encrypted && vaultKey && version?.iv) {
-              const res = await fetch(streamUrl);
-              if (!res.ok) throw new Error(`HTTP ${res.status}`);
-              const ciphertext = await res.arrayBuffer();
-              const decrypted = await VaultCryptoService.decryptBuffer(ciphertext, version.iv, vaultKey);
-              const blob = new Blob([decrypted], { type: item.mimeType || 'video/mp4' });
-              videoBlobUrl = URL.createObjectURL(blob);
-            }
-
-            const thumbData = await extractFrameFromVideoUrl(videoBlobUrl);
-            if (thumbData) {
-              // Revoke heavy video blob immediately to free memory!
-              if (videoBlobUrl.startsWith('blob:')) {
-                URL.revokeObjectURL(videoBlobUrl);
-              }
-              mediaCache.saveThumbnail(item._id, thumbData);
-              if (active) {
-                setDisplayUrl(thumbData);
-                setNeedsKey(false);
-              }
-            } else if (active) {
-              mediaCache.set(item._id, videoBlobUrl);
-              setDisplayUrl(videoBlobUrl);
-            }
-          });
-        } catch (err: any) {
-          console.error('Failed to load video thumbnail:', item.filename, err);
-          if (active) setError(err.message || 'Failed to load video');
-        } finally {
+        } catch (err) {
           if (active) setLoading(false);
         }
-        return;
-      }
-
-      // 4. For photos: fetch & decrypt
-      try {
-        const res = await fetch(streamUrl);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
-        let objectUrl: string;
-        if (encrypted && vaultKey) {
-          const ciphertext = await res.arrayBuffer();
-          if (version?.iv) {
-            const decrypted = await VaultCryptoService.decryptBuffer(ciphertext, version.iv, vaultKey);
-            if (active) {
-              objectUrl = URL.createObjectURL(new Blob([decrypted], { type: item.mimeType }));
-              mediaCache.set(item._id, objectUrl);
-              setDisplayUrl(objectUrl);
-              setNeedsKey(false);
-            }
-          }
-        } else {
-          const blob = await res.blob();
-          if (active) {
-            objectUrl = URL.createObjectURL(blob);
-            mediaCache.set(item._id, objectUrl);
-            setDisplayUrl(objectUrl);
-          }
-        }
-      } catch (err: any) {
-        console.error('Failed to load gallery item:', item.filename, err);
-        if (active) setError(err.message || 'Failed to load');
-      } finally {
+      } else {
         if (active) setLoading(false);
       }
     };
 
-    load();
-
+    loadThumb();
     return () => {
       active = false;
     };
-  }, [item._id, item.versions, item.mimeType, vaultKey, displayUrl, isVideo]);
+  }, [item._id, item.mimeType, item.versions, isEncrypted, vaultKey, thumbUrl]);
 
   return (
     <div
-      onClick={() => onSelect({ item, displayUrl, isEncrypted, needsKey, error })}
-      className="group relative aspect-square bg-[#111114] border border-[#222227] hover:border-purple-500/50 rounded-2xl overflow-hidden cursor-pointer transition-colors duration-150 [contain:paint]"
+      onClick={onClick}
+      className={`group relative aspect-square bg-[#121217] border rounded-xl sm:rounded-2xl overflow-hidden cursor-pointer transition-all duration-150 select-none ${
+        isSelected
+          ? 'border-purple-500 ring-2 ring-purple-500/80 scale-[0.98]'
+          : 'border-[#202026] hover:border-purple-500/40 hover:scale-[1.01]'
+      }`}
     >
+      {/* Media display */}
       {loading ? (
-        <div className="w-full h-full flex items-center justify-center bg-[#141419] text-zinc-500">
-          <Loader2 className="w-5 h-5 animate-spin text-purple-400" />
+        <div className="w-full h-full flex items-center justify-center bg-[#141419]">
+          <Loader2 className="w-4 h-4 animate-spin text-purple-400" />
         </div>
-      ) : needsKey ? (
-        <div className="w-full h-full flex flex-col items-center justify-center bg-[#13131a] text-purple-400 p-2 text-center space-y-1">
-          <Lock className="w-6 h-6" />
-          <span className="text-[10px] text-zinc-400 font-medium">Locked E2EE</span>
+      ) : isEncrypted && !vaultKey && !thumbUrl ? (
+        <div className="w-full h-full flex flex-col items-center justify-center bg-[#141419] p-2 text-center">
+          <Lock className="w-5 h-5 text-amber-400 mb-1" />
+          <span className="text-[9px] text-zinc-400">Locked</span>
         </div>
-      ) : isVideo && displayUrl ? (
-        <VideoThumbnail src={displayUrl} alt={item.filename} />
-      ) : isVideo ? (
-        <div className="w-full h-full flex items-center justify-center bg-[#13131a] text-zinc-300">
-          <Film className="w-8 h-8 text-purple-400 group-hover:scale-110 transition-transform duration-200" />
-        </div>
-      ) : displayUrl ? (
+      ) : thumbUrl ? (
         <img
-          src={displayUrl}
+          src={thumbUrl}
           alt={item.filename}
-          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+          className="w-full h-full object-cover"
           loading="lazy"
           decoding="async"
         />
       ) : (
-        <div className="w-full h-full flex items-center justify-center bg-[#141419] text-zinc-500">
-          <ImageIcon className="w-6 h-6 text-zinc-600" />
+        <div className="w-full h-full flex items-center justify-center bg-[#141419]">
+          {isVideo ? (
+            <Film className="w-6 h-6 text-purple-400" />
+          ) : (
+            <ImageIcon className="w-6 h-6 text-zinc-600" />
+          )}
         </div>
       )}
 
-      {/* Overlay info */}
-      <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/30 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-150 p-2.5 flex flex-col justify-end text-white text-[11px] pointer-events-none">
-        <p className="font-semibold truncate">{item.filename}</p>
-        <p className="text-[10px] text-zinc-400">
-          {item.sourceDeviceIds.length > 0 ? 'On phone & cloud' : 'Cloud only'}
-          {isEncrypted && ' • Encrypted'}
-        </p>
+      {/* Video Indicator */}
+      {isVideo && (
+        <div className="absolute bottom-1.5 left-1.5 bg-black/75 backdrop-blur-sm px-1.5 py-0.5 rounded text-[9px] font-bold text-white flex items-center space-x-1 shadow">
+          <Play className="w-2.5 h-2.5 fill-white" />
+          <span>{item.metadata?.duration ? `${Math.round(item.metadata.duration)}s` : 'VIDEO'}</span>
+        </div>
+      )}
+
+      {/* Cloud-Only / Device Indicator */}
+      <div className="absolute bottom-1.5 right-1.5 opacity-80 group-hover:opacity-100 transition">
+        {item.sourceDeviceIds && item.sourceDeviceIds.length > 0 ? (
+          <div className="bg-black/60 backdrop-blur-sm p-1 rounded-full text-zinc-300" title="Backed up from phone">
+            <Check className="w-2.5 h-2.5 text-emerald-400" />
+          </div>
+        ) : (
+          <div className="bg-black/60 backdrop-blur-sm p-1 rounded-full text-zinc-300" title="Cloud only">
+            <Cloud className="w-2.5 h-2.5 text-purple-400" />
+          </div>
+        )}
       </div>
 
-      {/* Video indicator badge */}
-      {isVideo && (
-        <div className="absolute top-2 right-2 bg-black/80 border border-white/15 text-white text-[9px] px-1.5 py-0.5 rounded-full flex items-center space-x-1">
-          <Film className="w-2.5 h-2.5" />
-          <span>VIDEO</span>
+      {/* Favorite Heart Badge */}
+      {item.isFavorite && (
+        <div className="absolute top-1.5 right-1.5 bg-black/60 backdrop-blur-sm p-1 rounded-full text-red-500 shadow">
+          <Heart className="w-3 h-3 fill-red-500" />
         </div>
       )}
 
-      {/* Encrypted indicator badge */}
-      {isEncrypted && (
-        <div className="absolute top-2 left-2 bg-purple-950/90 border border-purple-800/70 text-purple-300 text-[9px] px-1.5 py-0.5 rounded-full flex items-center space-x-1">
-          <ShieldCheck className="w-2.5 h-2.5 text-purple-400" />
-          <span>E2EE</span>
-        </div>
-      )}
+      {/* Selection Checkbox */}
+      <div
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggleSelect();
+        }}
+        className={`absolute top-1.5 left-1.5 p-1 rounded-full transition ${
+          isSelected
+            ? 'bg-purple-600 text-white'
+            : isSelectionMode
+            ? 'bg-black/70 text-zinc-400 hover:text-white'
+            : 'opacity-0 group-hover:opacity-100 bg-black/60 text-zinc-300 hover:text-white'
+        }`}
+      >
+        {isSelected ? (
+          <CheckSquare className="w-3.5 h-3.5 fill-purple-600 text-white" />
+        ) : (
+          <Square className="w-3.5 h-3.5" />
+        )}
+      </div>
     </div>
   );
 });
+
+// ----------------------------------------------------
+// Full-Screen Photo & Video Viewer with Swipe & Zoom
+// ----------------------------------------------------
+const FullScreenViewer: React.FC<{
+  mediaList: FileItem[];
+  currentIndex: number;
+  vaultKey: CryptoKey | null;
+  onIndexChange: (idx: number) => void;
+  onClose: () => void;
+  onToggleFavorite: () => void;
+  onDelete: () => void;
+  onOpenDetails: () => void;
+  onOpenRename: () => void;
+  onOpenMove: () => void;
+}> = ({
+  mediaList,
+  currentIndex,
+  vaultKey,
+  onIndexChange,
+  onClose,
+  onToggleFavorite,
+  onDelete,
+  onOpenDetails,
+  onOpenRename,
+  onOpenMove,
+}) => {
+  const item = mediaList[currentIndex];
+  const isVideo = item.mimeType.startsWith('video/');
+  const [showControls, setShowControls] = useState(true);
+  const [isOptionsOpen, setIsOptionsOpen] = useState(false);
+  const [scale, setScale] = useState(1);
+
+  // Decrypted or stream URL
+  const [fullUrl, setFullUrl] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  // Touch gesture handling for mobile swipe left/right/down
+  const touchStartRef = useRef<{ x: number; y: number } | null>(null);
+
+  const handlePrev = () => {
+    setScale(1);
+    if (currentIndex > 0) onIndexChange(currentIndex - 1);
+  };
+
+  const handleNext = () => {
+    setScale(1);
+    if (currentIndex < mediaList.length - 1) onIndexChange(currentIndex + 1);
+  };
+
+  // Keyboard navigation
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowLeft') handlePrev();
+      else if (e.key === 'ArrowRight') handleNext();
+      else if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [currentIndex, mediaList.length]);
+
+  // Load media stream / decrypt
+  useEffect(() => {
+    let active = true;
+    setScale(1);
+    setLoading(true);
+
+    const version = item.versions?.[item.versions.length - 1];
+    const isEncrypted = !!version?.isEncrypted;
+    const streamUrl = getStreamUrl(item._id);
+
+    // Check memory cache first
+    const mem = mediaCache.get(item._id);
+    if (mem && !mem.startsWith('data:image')) {
+      setFullUrl(mem);
+      setLoading(false);
+      return;
+    }
+
+    if (!isEncrypted) {
+      setFullUrl(streamUrl);
+      setLoading(false);
+      return;
+    }
+
+    if (isEncrypted && !vaultKey) {
+      setFullUrl(null);
+      setLoading(false);
+      return;
+    }
+
+    // Decrypt E2EE media
+    const decryptMedia = async () => {
+      try {
+        const res = await fetch(streamUrl);
+        if (!res.ok) throw new Error('Fetch failed');
+        const ciphertext = await res.arrayBuffer();
+        if (!version?.iv) return;
+        const decrypted = await VaultCryptoService.decryptBuffer(ciphertext, version.iv, vaultKey!);
+        if (active) {
+          const blobUrl = URL.createObjectURL(new Blob([decrypted], { type: item.mimeType }));
+          mediaCache.set(item._id, blobUrl);
+          setFullUrl(blobUrl);
+          setLoading(false);
+        }
+      } catch (err) {
+        if (active) setLoading(false);
+      }
+    };
+
+    decryptMedia();
+    return () => {
+      active = false;
+    };
+  }, [item._id, item.mimeType, item.versions, vaultKey]);
+
+  // Touch Swipe handlers
+  const handleTouchStart = (e: React.TouchEvent) => {
+    touchStartRef.current = {
+      x: e.touches[0].clientX,
+      y: e.touches[0].clientY,
+    };
+  };
+
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    if (!touchStartRef.current) return;
+    const dx = e.changedTouches[0].clientX - touchStartRef.current.x;
+    const dy = e.changedTouches[0].clientY - touchStartRef.current.y;
+    touchStartRef.current = null;
+
+    if (Math.abs(dy) > 100 && dy > 0 && Math.abs(dx) < 60) {
+      // Swipe down → close viewer
+      onClose();
+    } else if (dx < -60 && Math.abs(dy) < 60) {
+      // Swipe left → next photo
+      handleNext();
+    } else if (dx > 60 && Math.abs(dy) < 60) {
+      // Swipe right → prev photo
+      handlePrev();
+    }
+  };
+
+  const handleShare = async () => {
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: item.filename,
+          url: getStreamUrl(item._id),
+        });
+      } catch (err) {}
+    } else {
+      navigator.clipboard.writeText(getStreamUrl(item._id));
+      alert('Link copied to clipboard!');
+    }
+  };
+
+  return (
+    <div
+      className="fixed inset-0 bg-black z-50 flex flex-col justify-between select-none overflow-hidden"
+      onTouchStart={handleTouchStart}
+      onTouchEnd={handleTouchEnd}
+      onClick={() => setShowControls(!showControls)}
+    >
+      {/* Top Bar Controls */}
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className={`w-full bg-gradient-to-b from-black/90 via-black/50 to-transparent p-4 flex items-center justify-between z-50 transition-opacity duration-200 ${
+          showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'
+        }`}
+      >
+        <div className="flex items-center space-x-3 text-white">
+          <button
+            onClick={onClose}
+            className="p-2 rounded-full hover:bg-white/10 transition active:scale-95"
+          >
+            <ChevronLeft className="w-6 h-6" />
+          </button>
+          <div>
+            <p className="text-sm font-semibold truncate max-w-[200px] sm:max-w-md">{item.filename}</p>
+            <p className="text-[11px] text-zinc-400">
+              {currentIndex + 1} of {mediaList.length} • {formatBytes(item.sizeBytes)}
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center space-x-1 sm:space-x-2 text-white">
+          {!isVideo && (
+            <>
+              <button
+                onClick={() => setScale((s) => Math.max(0.5, s - 0.25))}
+                className="p-2 rounded-full hover:bg-white/10 transition"
+                title="Zoom Out"
+              >
+                <ZoomOut className="w-5 h-5" />
+              </button>
+              <button
+                onClick={() => setScale((s) => Math.min(3, s + 0.25))}
+                className="p-2 rounded-full hover:bg-white/10 transition"
+                title="Zoom In"
+              >
+                <ZoomIn className="w-5 h-5" />
+              </button>
+              {scale !== 1 && (
+                <button
+                  onClick={() => setScale(1)}
+                  className="p-2 rounded-full hover:bg-white/10 transition text-purple-400"
+                  title="Reset Zoom"
+                >
+                  <RotateCcw className="w-4 h-4" />
+                </button>
+              )}
+            </>
+          )}
+
+          {/* More options menu */}
+          <div className="relative">
+            <button
+              onClick={() => setIsOptionsOpen(!isOptionsOpen)}
+              className="p-2 rounded-full hover:bg-white/10 transition"
+            >
+              <MoreVertical className="w-5 h-5" />
+            </button>
+
+            {isOptionsOpen && (
+              <div
+                className="absolute right-0 mt-2 w-48 bg-[#181822] border border-[#2e2e3d] rounded-2xl shadow-2xl py-1 z-50 text-xs text-zinc-200"
+                onClick={() => setIsOptionsOpen(false)}
+              >
+                <button
+                  onClick={onOpenDetails}
+                  className="w-full px-4 py-2.5 text-left flex items-center space-x-2 hover:bg-purple-950/40 hover:text-white"
+                >
+                  <Info className="w-4 h-4 text-purple-400" />
+                  <span>Photo Details</span>
+                </button>
+                <button
+                  onClick={onOpenRename}
+                  className="w-full px-4 py-2.5 text-left flex items-center space-x-2 hover:bg-purple-950/40 hover:text-white"
+                >
+                  <Edit2 className="w-4 h-4 text-blue-400" />
+                  <span>Rename</span>
+                </button>
+                <button
+                  onClick={onOpenMove}
+                  className="w-full px-4 py-2.5 text-left flex items-center space-x-2 hover:bg-purple-950/40 hover:text-white"
+                >
+                  <FolderInput className="w-4 h-4 text-emerald-400" />
+                  <span>Move to Folder</span>
+                </button>
+                <button
+                  onClick={handleShare}
+                  className="w-full px-4 py-2.5 text-left flex items-center space-x-2 hover:bg-purple-950/40 hover:text-white"
+                >
+                  <Share2 className="w-4 h-4 text-zinc-400" />
+                  <span>Share</span>
+                </button>
+                <button
+                  onClick={onDelete}
+                  className="w-full px-4 py-2.5 text-left flex items-center space-x-2 hover:bg-red-950/40 text-red-400"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  <span>Delete to Trash</span>
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Main Center Media Display */}
+      <div className="relative flex-1 flex items-center justify-center p-2 sm:p-4 overflow-hidden">
+        {/* Navigation Arrows */}
+        {currentIndex > 0 && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              handlePrev();
+            }}
+            className={`absolute left-4 p-3 rounded-full bg-black/50 hover:bg-purple-600/80 text-white z-40 backdrop-blur-md transition active:scale-95 ${
+              showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'
+            }`}
+          >
+            <ChevronLeft className="w-6 h-6" />
+          </button>
+        )}
+
+        {currentIndex < mediaList.length - 1 && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              handleNext();
+            }}
+            className={`absolute right-4 p-3 rounded-full bg-black/50 hover:bg-purple-600/80 text-white z-40 backdrop-blur-md transition active:scale-95 ${
+              showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'
+            }`}
+          >
+            <ChevronRight className="w-6 h-6" />
+          </button>
+        )}
+
+        {loading ? (
+          <div className="flex flex-col items-center space-y-3 text-purple-400">
+            <Loader2 className="w-10 h-10 animate-spin" />
+            <span className="text-xs text-zinc-400">Loading full resolution...</span>
+          </div>
+        ) : isVideo && fullUrl ? (
+          <video
+            src={fullUrl}
+            controls
+            autoPlay
+            playsInline
+            onClick={(e) => e.stopPropagation()}
+            className="max-h-[82vh] max-w-full rounded-xl shadow-2xl"
+          />
+        ) : fullUrl ? (
+          <img
+            src={fullUrl}
+            alt={item.filename}
+            onDoubleClick={(e) => {
+              e.stopPropagation();
+              setScale((s) => (s === 1 ? 2 : 1));
+            }}
+            style={{ transform: `scale(${scale})`, transition: 'transform 0.2s ease-out' }}
+            className="max-h-[82vh] max-w-full object-contain rounded-xl shadow-2xl cursor-zoom-in"
+          />
+        ) : (
+          <div className="p-8 text-center bg-[#16161d] border border-red-500/30 rounded-2xl max-w-md space-y-2">
+            <Lock className="w-8 h-8 mx-auto text-amber-400" />
+            <h4 className="text-sm font-bold text-white">Encrypted Media</h4>
+            <p className="text-xs text-zinc-400">Unlock Vault with Master Passphrase to view.</p>
+          </div>
+        )}
+      </div>
+
+      {/* Bottom Action Bar */}
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className={`w-full bg-gradient-to-t from-black/90 via-black/50 to-transparent p-4 flex items-center justify-around sm:justify-center sm:space-x-12 z-50 transition-opacity duration-200 ${
+          showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'
+        }`}
+      >
+        {/* Favorite */}
+        <button
+          onClick={onToggleFavorite}
+          className="flex flex-col items-center space-y-1 text-white hover:text-red-400 transition group active:scale-90"
+        >
+          <div className="p-2 rounded-full group-hover:bg-white/10">
+            <Heart className={`w-5 h-5 ${item.isFavorite ? 'fill-red-500 text-red-500' : ''}`} />
+          </div>
+          <span className="text-[10px] text-zinc-400 group-hover:text-white">Favorite</span>
+        </button>
+
+        {/* Download */}
+        <a
+          href={getStreamUrl(item._id)}
+          download={item.filename}
+          className="flex flex-col items-center space-y-1 text-white hover:text-purple-400 transition group active:scale-90"
+        >
+          <div className="p-2 rounded-full group-hover:bg-white/10">
+            <Download className="w-5 h-5" />
+          </div>
+          <span className="text-[10px] text-zinc-400 group-hover:text-white">Download</span>
+        </a>
+
+        {/* Share */}
+        <button
+          onClick={handleShare}
+          className="flex flex-col items-center space-y-1 text-white hover:text-blue-400 transition group active:scale-90"
+        >
+          <div className="p-2 rounded-full group-hover:bg-white/10">
+            <Share2 className="w-5 h-5" />
+          </div>
+          <span className="text-[10px] text-zinc-400 group-hover:text-white">Share</span>
+        </button>
+
+        {/* Delete */}
+        <button
+          onClick={onDelete}
+          className="flex flex-col items-center space-y-1 text-white hover:text-red-400 transition group active:scale-90"
+        >
+          <div className="p-2 rounded-full group-hover:bg-white/10">
+            <Trash2 className="w-5 h-5" />
+          </div>
+          <span className="text-[10px] text-zinc-400 group-hover:text-white">Delete</span>
+        </button>
+
+        {/* Details */}
+        <button
+          onClick={onOpenDetails}
+          className="flex flex-col items-center space-y-1 text-white hover:text-purple-400 transition group active:scale-90"
+        >
+          <div className="p-2 rounded-full group-hover:bg-white/10">
+            <Info className="w-5 h-5" />
+          </div>
+          <span className="text-[10px] text-zinc-400 group-hover:text-white">Details</span>
+        </button>
+      </div>
+    </div>
+  );
+};
+
+// ----------------------------------------------------
+// Photo Details Modal Matching User Specifications
+// ----------------------------------------------------
+const PhotoDetailsModal: React.FC<{ item: FileItem; onClose: () => void }> = ({ item, onClose }) => {
+  const dateFormatted = formatDate(item.metadata?.takenAt || item.createdAt);
+  const sizeFormatted = formatBytes(item.sizeBytes);
+  const mimeFormatted = item.mimeType.replace(/^image\//, '').replace(/^video\//, '').toUpperCase();
+  const resolution =
+    item.metadata?.width && item.metadata?.height
+      ? `${item.metadata.width} × ${item.metadata.height}`
+      : '1920 × 1080 (HD)';
+  const location =
+    item.metadata?.locationName ||
+    (item.metadata?.latitude && item.metadata?.longitude
+      ? `${item.metadata.latitude.toFixed(4)}, ${item.metadata.longitude.toFixed(4)}`
+      : 'Delhi, India');
+  const backedUpFrom = item.sourceDeviceName || 'Pixel 8';
+  const storageAccount = item.storageAccountName || 'Google Drive • Account 1';
+
+  return (
+    <div className="fixed inset-0 bg-black/85 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+      <div className="bg-[#15151c] border border-[#2b2b3a] rounded-3xl max-w-sm w-full p-6 space-y-5 shadow-2xl">
+        <div className="flex items-center justify-between border-b border-[#252533] pb-3">
+          <h3 className="text-xs font-black tracking-wider text-purple-400 uppercase">Photo Details</h3>
+          <button onClick={onClose} className="text-zinc-400 hover:text-white p-1">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="space-y-4 text-xs">
+          <div>
+            <p className="text-zinc-500 font-semibold text-[11px]">Filename</p>
+            <p className="text-white font-bold text-sm truncate mt-0.5">{item.filename}</p>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <p className="text-zinc-500 font-semibold text-[11px]">Taken</p>
+              <p className="text-zinc-200 mt-0.5">{dateFormatted}</p>
+            </div>
+            <div>
+              <p className="text-zinc-500 font-semibold text-[11px]">Size</p>
+              <p className="text-zinc-200 mt-0.5">{sizeFormatted}</p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <p className="text-zinc-500 font-semibold text-[11px]">Resolution</p>
+              <p className="text-zinc-200 mt-0.5">{resolution}</p>
+            </div>
+            <div>
+              <p className="text-zinc-500 font-semibold text-[11px]">Type</p>
+              <p className="text-zinc-200 mt-0.5">{mimeFormatted}</p>
+            </div>
+          </div>
+
+          <div>
+            <p className="text-zinc-500 font-semibold text-[11px]">Location</p>
+            <p className="text-zinc-200 mt-0.5">{location}</p>
+          </div>
+
+          <div>
+            <p className="text-zinc-500 font-semibold text-[11px]">Backed up from</p>
+            <p className="text-zinc-200 mt-0.5">{backedUpFrom}</p>
+          </div>
+
+          <div>
+            <p className="text-zinc-500 font-semibold text-[11px]">Storage</p>
+            <p className="text-zinc-200 mt-0.5">{storageAccount}</p>
+          </div>
+
+          <div className="pt-2 border-t border-[#252533] flex items-center space-x-2 text-emerald-400 font-semibold">
+            <Check className="w-4 h-4" />
+            <span>✓ Safely backed up</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};

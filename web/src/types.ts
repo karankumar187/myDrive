@@ -40,6 +40,11 @@ export interface FileItem {
   isTrash: boolean;
   trashedAt?: string;
   sourceDeviceIds: string[];
+  isFavorite?: boolean;
+  sourceDeviceName?: string;
+  folderName?: string | null;
+  storageAccountName?: string;
+  status?: string;
   versions?: Array<{
     versionNumber: number;
     sizeBytes: number;
@@ -55,6 +60,9 @@ export interface FileItem {
     cameraMake?: string;
     cameraModel?: string;
     thumbnail?: string;
+    latitude?: number;
+    longitude?: number;
+    locationName?: string;
   };
   createdAt: string;
   updatedAt: string;

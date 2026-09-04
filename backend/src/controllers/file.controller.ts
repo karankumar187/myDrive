@@ -11,6 +11,7 @@ import { StorageEngineService } from '../services/storage-engine.service.js';
 import { GoogleDriveService } from '../services/gdrive.service.js';
 import { getSocketIoInstance } from '../server.js';
 import { CacheService } from '../services/cache.service.js';
+import { google } from 'googleapis';
 
 const UPLOAD_DIR = path.resolve(process.cwd(), 'uploads');
 if (!fs.existsSync(UPLOAD_DIR)) {
@@ -188,30 +189,78 @@ export class FileController {
 
   /**
    * Returns media files (photos & videos) grouped by date for the Gallery timeline.
+   * Supports filter (all, favorites, videos, photos), search, and pagination.
    */
   static async getGallery(req: Request, res: Response): Promise<void> {
     try {
       const userId = req.user!._id;
-      const cacheKey = `cache:user:${userId}:gallery`;
+      const { filter, search } = req.query;
+
+      const mediaFilter: any = {
+        userId,
+        isTrash: false,
+      };
+
+      if (filter === 'favorites') {
+        mediaFilter.isFavorite = true;
+        mediaFilter.$or = [{ mimeType: { $regex: '^image/' } }, { mimeType: { $regex: '^video/' } }];
+      } else if (filter === 'videos') {
+        mediaFilter.mimeType = { $regex: '^video/' };
+      } else if (filter === 'photos') {
+        mediaFilter.mimeType = { $regex: '^image/' };
+      } else {
+        mediaFilter.$or = [{ mimeType: { $regex: '^image/' } }, { mimeType: { $regex: '^video/' } }];
+      }
+
+      if (search && typeof search === 'string' && search.trim()) {
+        mediaFilter.filename = { $regex: search.trim(), $options: 'i' };
+      }
+
+      const cacheKey = `cache:user:${userId}:gallery:${filter || 'all'}:${search || ''}`;
       const cached = await CacheService.get(cacheKey);
       if (cached) {
         res.json(cached);
         return;
       }
 
-      const mediaFilter = {
-        userId,
-        isTrash: false,
-        $or: [{ mimeType: { $regex: '^image/' } }, { mimeType: { $regex: '^video/' } }],
-      };
+      const [mediaFiles, devices, folders, storageAccounts] = await Promise.all([
+        File.find(mediaFilter).sort({
+          'metadata.takenAt': -1,
+          createdAt: -1,
+        }).limit(500),
+        Device.find({ userId }).select('deviceId deviceName'),
+        Folder.find({ userId }).select('_id name'),
+        StorageAccount.find({ userId }).select('_id accountName accountEmail'),
+      ]);
 
-      const mediaFiles = await File.find(mediaFilter).sort({
-        'metadata.takenAt': -1,
-        createdAt: -1,
-      }).limit(500);
+      const deviceMap = new Map<string, string>();
+      devices.forEach((d) => deviceMap.set(d.deviceId, d.deviceName));
 
-      const payload = { media: mediaFiles };
-      await CacheService.set(cacheKey, payload, 120);
+      const folderMap = new Map<string, string>();
+      folders.forEach((f) => folderMap.set(f._id.toString(), f.name));
+
+      const accountMap = new Map<string, string>();
+      storageAccounts.forEach((a) => accountMap.set(a._id.toString(), `${a.accountName} (${a.accountEmail})`));
+
+      const enrichedMedia = mediaFiles.map((file) => {
+        const obj: any = file.toObject();
+        obj.isFavorite = file.isFavorite || false;
+        obj.sourceDeviceName = file.sourceDeviceIds?.length && deviceMap.has(file.sourceDeviceIds[0])
+          ? deviceMap.get(file.sourceDeviceIds[0])
+          : 'Unified Drive';
+        obj.folderName = file.folderId && folderMap.has(file.folderId.toString())
+          ? folderMap.get(file.folderId.toString())
+          : null;
+        const latestStorageId = file.versions?.[file.versions.length - 1]?.storageAccountId?.toString();
+        obj.storageAccountName = latestStorageId && accountMap.has(latestStorageId)
+          ? accountMap.get(latestStorageId)
+          : 'Google Drive Account';
+        obj.status = 'safely_backed_up';
+        return obj;
+      });
+
+      const payload = { media: enrichedMedia };
+      await CacheService.set(cacheKey, payload, 60);
 
       res.json(payload);
     } catch (error: any) {
@@ -254,6 +303,84 @@ export class FileController {
       res.setHeader('Content-Type', file.mimeType);
       res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(file.filename)}"`);
 
+      const driveStream = await GoogleDriveService.getFileStream(account, latestVersion.providerFileId);
+      driveStream.data.pipe(res);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+
+  /**
+   * Serves an optimized lightweight thumbnail for fast grid rendering.
+   */
+  static async streamThumbnail(req: Request, res: Response): Promise<void> {
+    try {
+      const userId = req.user!._id;
+      const file = await File.findOne({ _id: req.params.id, userId });
+      if (!file) {
+        res.status(404).json({ error: 'File not found or access denied' });
+        return;
+      }
+
+      // If file has a direct thumbnail link stored
+      if (file.metadata?.thumbnail && file.metadata.thumbnail.startsWith('http')) {
+        res.redirect(file.metadata.thumbnail);
+        return;
+      }
+
+      const latestVersion = file.versions[file.versions.length - 1];
+      if (!latestVersion) {
+        res.status(404).json({ error: 'No file versions available' });
+        return;
+      }
+
+      const account = await StorageAccount.findOne({ _id: latestVersion.storageAccountId, userId });
+      if (!account) {
+        res.status(404).json({ error: 'Associated storage account not found' });
+        return;
+      }
+
+      // Try fetching Google Drive's native thumbnail
+      try {
+        const oauth2Client = GoogleDriveService.getOAuth2Client(account);
+        const drive = google.drive({ version: 'v3', auth: oauth2Client });
+        let actualFileId = latestVersion.providerFileId;
+        if (actualFileId.startsWith('blob_') || actualFileId.startsWith('file_') || actualFileId.includes('.enc')) {
+          const listRes = await drive.files.list({
+            q: `name = '${actualFileId}' and trashed = false`,
+            fields: 'files(id, name)',
+            pageSize: 1,
+          });
+          if (listRes.data.files?.[0]?.id) {
+            actualFileId = listRes.data.files[0].id;
+          }
+        }
+
+        const meta = await drive.files.get({
+          fileId: actualFileId,
+          fields: 'thumbnailLink',
+        });
+
+        if (meta.data.thumbnailLink) {
+          const tokenRes = await oauth2Client.getAccessToken();
+          const thumbRes = await fetch(meta.data.thumbnailLink, {
+            headers: tokenRes.token ? { Authorization: `Bearer ${tokenRes.token}` } : {},
+          });
+          if (thumbRes.ok) {
+            res.setHeader('Content-Type', thumbRes.headers.get('content-type') || 'image/jpeg');
+            res.setHeader('Cache-Control', 'public, max-age=86400');
+            const buffer = Buffer.from(await thumbRes.arrayBuffer());
+            res.send(buffer);
+            return;
+          }
+        }
+      } catch (thumbErr) {
+        // Fallback to streaming main file with caching
+      }
+
+      // Fallback: stream file with client-side cache headers
+      res.setHeader('Content-Type', file.mimeType);
+      res.setHeader('Cache-Control', 'public, max-age=86400');
       const driveStream = await GoogleDriveService.getFileStream(account, latestVersion.providerFileId);
       driveStream.data.pipe(res);
     } catch (error: any) {
@@ -344,6 +471,122 @@ export class FileController {
       await CacheService.invalidateUser(userId.toString());
 
       res.json({ success: true, message: 'Permanently purged from cloud storage' });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+
+  /**
+   * Toggles or sets favorite status for a file.
+   */
+  static async toggleFavorite(req: Request, res: Response): Promise<void> {
+    try {
+      const userId = req.user!._id;
+      const { isFavorite } = req.body;
+      const file = await File.findOne({ _id: req.params.id, userId });
+      if (!file) {
+        res.status(404).json({ error: 'File not found or access denied' });
+        return;
+      }
+      file.isFavorite = typeof isFavorite === 'boolean' ? isFavorite : !file.isFavorite;
+      await file.save();
+      await CacheService.invalidateUser(userId.toString());
+      res.json({ success: true, isFavorite: file.isFavorite, fileId: file._id });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+
+  /**
+   * Renames a file.
+   */
+  static async renameFile(req: Request, res: Response): Promise<void> {
+    try {
+      const userId = req.user!._id;
+      const { filename } = req.body;
+      if (!filename || typeof filename !== 'string' || !filename.trim()) {
+        res.status(400).json({ error: 'Valid filename is required' });
+        return;
+      }
+      const file = await File.findOneAndUpdate(
+        { _id: req.params.id, userId },
+        { filename: filename.trim() },
+        { new: true }
+      );
+      if (!file) {
+        res.status(404).json({ error: 'File not found or access denied' });
+        return;
+      }
+      await CacheService.invalidateUser(userId.toString());
+      res.json({ success: true, file });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+
+  /**
+   * Moves a file to another folder or root.
+   */
+  static async moveFile(req: Request, res: Response): Promise<void> {
+    try {
+      const userId = req.user!._id;
+      const { folderId } = req.body;
+      const file = await File.findOneAndUpdate(
+        { _id: req.params.id, userId },
+        { folderId: folderId || null },
+        { new: true }
+      );
+      if (!file) {
+        res.status(404).json({ error: 'File not found or access denied' });
+        return;
+      }
+      await CacheService.invalidateUser(userId.toString());
+      res.json({ success: true, file });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+
+  /**
+   * Performs bulk actions (trash, favorite, unfavorite, move) across multiple files.
+   */
+  static async bulkAction(req: Request, res: Response): Promise<void> {
+    try {
+      const userId = req.user!._id;
+      const { action, fileIds, folderId } = req.body;
+
+      if (!Array.isArray(fileIds) || fileIds.length === 0) {
+        res.status(400).json({ error: 'fileIds must be a non-empty array' });
+        return;
+      }
+
+      if (action === 'trash') {
+        await File.updateMany(
+          { _id: { $in: fileIds }, userId },
+          { isTrash: true, trashedAt: new Date(), trashedByDeviceId: req.device?.deviceId || 'web' }
+        );
+      } else if (action === 'favorite') {
+        await File.updateMany(
+          { _id: { $in: fileIds }, userId },
+          { isFavorite: true }
+        );
+      } else if (action === 'unfavorite') {
+        await File.updateMany(
+          { _id: { $in: fileIds }, userId },
+          { isFavorite: false }
+        );
+      } else if (action === 'move') {
+        await File.updateMany(
+          { _id: { $in: fileIds }, userId },
+          { folderId: folderId || null }
+        );
+      } else {
+        res.status(400).json({ error: 'Invalid action. Supported: trash, favorite, unfavorite, move' });
+        return;
+      }
+
+      await CacheService.invalidateUser(userId.toString());
+      res.json({ success: true, count: fileIds.length });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }

@@ -12,6 +12,16 @@ router.post('/upload/complete', requireAnyAuth, FileController.completeUpload);
 router.get('/', requireAnyAuth, FileController.listFiles);
 router.get('/gallery', requireAnyAuth, FileController.getGallery);
 router.get('/:id/stream', requireAnyAuth, FileController.streamFile);
+router.get('/:id/thumbnail', requireAnyAuth, FileController.streamThumbnail);
+
+// File management & Gallery interactions
+router.patch('/:id/favorite', requireAnyAuth, FileController.toggleFavorite);
+router.post('/:id/favorite', requireAnyAuth, FileController.toggleFavorite);
+router.patch('/:id/rename', requireAnyAuth, FileController.renameFile);
+router.post('/:id/rename', requireAnyAuth, FileController.renameFile);
+router.patch('/:id/move', requireAnyAuth, FileController.moveFile);
+router.post('/:id/move', requireAnyAuth, FileController.moveFile);
+router.post('/bulk', requireAnyAuth, FileController.bulkAction);
 
 // Soft delete / Recycle bin
 router.post('/:id/trash', requireAnyAuth, FileController.moveToTrash);

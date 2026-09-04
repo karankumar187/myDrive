@@ -72,6 +72,7 @@ export interface IFile {
   currentVersion: number;
   versions: IFileVersion[];
   metadata?: IFileMetadata;
+  isFavorite?: boolean;
   isTrash: boolean;
   trashedAt?: Date | null;
   trashedByDeviceId?: string | null;

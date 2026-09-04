@@ -74,9 +74,58 @@ export const api = {
     return res.json();
   },
 
-  async getGallery(): Promise<{ media: FileItem[] }> {
-    const res = await fetch(`${API_BASE}/files/gallery`, { headers: getHeaders() });
+  async getGallery(params?: { filter?: string; search?: string }): Promise<{ media: FileItem[] }> {
+    const query = new URLSearchParams();
+    if (params?.filter) query.append('filter', params.filter);
+    if (params?.search) query.append('search', params.search);
+    const qs = query.toString() ? `?${query.toString()}` : '';
+    const res = await fetch(`${API_BASE}/files/gallery${qs}`, { headers: getHeaders() });
     if (!res.ok) throw new Error('Failed to fetch media gallery');
+    return res.json();
+  },
+
+  getThumbnailUrl(fileId: string): string {
+    const token = localStorage.getItem('drive_token');
+    return `${API_BASE}/files/${fileId}/thumbnail${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+  },
+
+  async toggleFavorite(fileId: string, isFavorite?: boolean): Promise<{ success: boolean; isFavorite: boolean }> {
+    const res = await fetch(`${API_BASE}/files/${fileId}/favorite`, {
+      method: 'PATCH',
+      headers: getHeaders(),
+      body: JSON.stringify({ isFavorite }),
+    });
+    if (!res.ok) throw new Error('Failed to toggle favorite');
+    return res.json();
+  },
+
+  async renameFile(fileId: string, filename: string): Promise<any> {
+    const res = await fetch(`${API_BASE}/files/${fileId}/rename`, {
+      method: 'PATCH',
+      headers: getHeaders(),
+      body: JSON.stringify({ filename }),
+    });
+    if (!res.ok) throw new Error('Failed to rename file');
+    return res.json();
+  },
+
+  async moveFile(fileId: string, folderId: string | null): Promise<any> {
+    const res = await fetch(`${API_BASE}/files/${fileId}/move`, {
+      method: 'PATCH',
+      headers: getHeaders(),
+      body: JSON.stringify({ folderId }),
+    });
+    if (!res.ok) throw new Error('Failed to move file');
+    return res.json();
+  },
+
+  async bulkAction(action: 'trash' | 'favorite' | 'unfavorite' | 'move', fileIds: string[], folderId?: string | null): Promise<any> {
+    const res = await fetch(`${API_BASE}/files/bulk`, {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify({ action, fileIds, folderId }),
+    });
+    if (!res.ok) throw new Error(`Failed to perform bulk ${action}`);
     return res.json();
   },
 

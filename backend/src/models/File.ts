@@ -102,6 +102,11 @@ const FileSchema = new Schema<IFileDocument>(
       type: FileMetadataSchema,
       default: () => ({}),
     },
+    isFavorite: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
     isTrash: {
       type: Boolean,
       default: false,
@@ -130,5 +135,6 @@ FileSchema.index({ userId: 1, contentHash: 1 }); // Deduplication check
 FileSchema.index({ userId: 1, isTrash: 1, folderId: 1 }); // Folder explorer
 FileSchema.index({ userId: 1, isTrash: 1, 'metadata.takenAt': -1 }); // Gallery timeline
 FileSchema.index({ userId: 1, isTrash: 1, createdAt: -1 }); // Recent files
+FileSchema.index({ userId: 1, isTrash: 1, isFavorite: 1 }); // Favorites filter
 
 export const File = mongoose.model<IFileDocument>('File', FileSchema);

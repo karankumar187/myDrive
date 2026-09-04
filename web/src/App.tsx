@@ -511,6 +511,7 @@ export const App: React.FC = () => {
             media={media}
             vaultKey={vaultKey}
             onOpenVault={() => setIsVaultModalOpen(true)}
+            onRefresh={loadDashboardData}
           />
         )}
 
