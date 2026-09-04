@@ -54,6 +54,7 @@ export interface FileItem {
     duration?: number;
     cameraMake?: string;
     cameraModel?: string;
+    thumbnail?: string;
   };
   createdAt: string;
   updatedAt: string;

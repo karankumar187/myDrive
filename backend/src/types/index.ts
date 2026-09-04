@@ -58,6 +58,7 @@ export interface IFileMetadata {
   orientation?: number;
   latitude?: number;
   longitude?: number;
+  thumbnail?: string;
   exif?: Record<string, any>;
 }
 

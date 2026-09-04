@@ -49,6 +49,7 @@ const FileMetadataSchema = new Schema(
     orientation: Number,
     latitude: Number,
     longitude: Number,
+    thumbnail: String,
     exif: {
       type: Map,
       of: Schema.Types.Mixed,

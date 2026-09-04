@@ -20,7 +20,7 @@ import {
 } from 'lucide-react';
 import { api } from '../services/api.js';
 import { VaultCryptoService } from '../services/vault-crypto.js';
-import { mediaCache } from '../services/media-cache.js';
+import { mediaCache, generateThumbnailFromVideoFile } from '../services/media-cache.js';
 
 interface Props {
   files: FileItem[];
@@ -206,6 +206,18 @@ export const FolderExplorerView: React.FC<Props> = ({
       const file = selectedFiles[i];
       try {
         setUploadMessage(`Processing ${file.name}...`);
+
+        // Generate fast video thumbnail before upload if video
+        let videoThumb: string | null = null;
+        if (file.type.startsWith('video/')) {
+          setUploadMessage(`Extracting preview frame for ${file.name}...`);
+          try {
+            videoThumb = await generateThumbnailFromVideoFile(file);
+          } catch {
+            // ignore thumbnail failure, proceed with upload
+          }
+        }
+
         const buffer = await file.arrayBuffer();
 
         // 1. Calculate raw SHA-256 hash for deduplication
@@ -271,7 +283,7 @@ export const FolderExplorerView: React.FC<Props> = ({
         }
 
         // 5. Finalize upload
-        await api.completeUpload({
+        const completeRes = await api.completeUpload({
           filename: file.name,
           mimeType: file.type || 'application/octet-stream',
           sizeBytes: file.size,
@@ -281,7 +293,12 @@ export const FolderExplorerView: React.FC<Props> = ({
           folderId: currentFolderId,
           isEncrypted,
           iv: ivHex,
+          metadata: videoThumb ? { thumbnail: videoThumb } : undefined,
         });
+
+        if (videoThumb && completeRes?.file?._id) {
+          mediaCache.saveThumbnail(completeRes.file._id, videoThumb);
+        }
 
         setUploadMessage(`✅ Successfully backed up ${file.name}`);
       } catch (err: any) {
