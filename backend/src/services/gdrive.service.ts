@@ -185,8 +185,11 @@ export class GoogleDriveService {
     // If providerFileId is an opaque filename rather than a Google Drive file ID, look it up by name
     if (providerFileId.startsWith('blob_') || providerFileId.startsWith('file_') || providerFileId.includes('.enc')) {
       try {
+        const query = (!providerFileId.includes('.') && providerFileId.startsWith('file_'))
+          ? `name contains '${providerFileId}' and trashed = false`
+          : `name = '${providerFileId}' and trashed = false`;
         const listRes = await drive.files.list({
-          q: `name = '${providerFileId}' and trashed = false`,
+          q: query,
           fields: 'files(id, name)',
           pageSize: 1,
         });

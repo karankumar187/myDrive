@@ -8,6 +8,10 @@ import android.os.Bundle
 import android.os.Environment
 import android.widget.Toast
 import android.provider.OpenableColumns
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.core.content.ContextCompat
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -279,6 +283,42 @@ fun MainAppScreen(
     httpClient: OkHttpClient
 ) {
     val context = LocalContext.current
+    val requiredPermissions = remember {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            arrayOf(
+                Manifest.permission.READ_MEDIA_IMAGES,
+                Manifest.permission.READ_MEDIA_VIDEO
+            )
+        } else {
+            arrayOf(
+                Manifest.permission.READ_EXTERNAL_STORAGE
+            )
+        }
+    }
+
+    var hasMediaPermissions by remember {
+        mutableStateOf(
+            requiredPermissions.all {
+                ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
+            }
+        )
+    }
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { results ->
+        hasMediaPermissions = results.values.all { it }
+        if (hasMediaPermissions) {
+            Toast.makeText(context, "Gallery permissions granted for background sync!", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        if (!hasMediaPermissions) {
+            permissionLauncher.launch(requiredPermissions)
+        }
+    }
+
     var selectedTab by remember { mutableIntStateOf(0) }
     var isFilesSelectionMode by remember { mutableStateOf(false) }
 
@@ -898,6 +938,7 @@ fun MainAppScreen(
                             if (!isDuplicate) {
                                 val uploadUrl = initResult.getString("uploadSessionUrl")
                                 val storageAccountId = initResult.getString("storageAccountId")
+                                val driveOpaqueName = initResult.optString("driveOpaqueName", "")
 
                                 val putReq = Request.Builder()
                                     .url(uploadUrl)
@@ -906,12 +947,26 @@ fun MainAppScreen(
 
                                 val putRes = httpClient.newCall(putReq).execute()
                                 if (putRes.isSuccessful || putRes.code == 200 || putRes.code == 201) {
+                                    val putBody = putRes.body?.string() ?: ""
+                                    var providerFileId = ""
+                                    try {
+                                        if (putBody.isNotBlank()) {
+                                            val putJson = JSONObject(putBody)
+                                            providerFileId = putJson.optString("id", "")
+                                        }
+                                    } catch (_: Exception) {}
+                                    if (providerFileId.isBlank()) {
+                                        providerFileId = driveOpaqueName
+                                    }
+
                                     val compJson = JSONObject().apply {
                                         put("filename", filename)
                                         put("mimeType", mimeType)
                                         put("sizeBytes", sizeBytes)
                                         put("contentHash", contentHash)
                                         put("storageAccountId", storageAccountId)
+                                        put("providerFileId", providerFileId)
+                                        put("driveOpaqueName", driveOpaqueName)
                                         if (targetFolderId.isNotBlank()) {
                                             put("folderId", targetFolderId)
                                         }
@@ -922,8 +977,10 @@ fun MainAppScreen(
                                         .addHeader("x-device-key", deviceKey)
                                         .post(compJson.toString().toRequestBody("application/json".toMediaType()))
                                         .build()
-                                    httpClient.newCall(compReq).execute()
+                                    httpClient.newCall(compReq).execute().close()
                                     successCount++
+                                } else {
+                                    putRes.close()
                                 }
                             } else {
                                 successCount++
@@ -1125,98 +1182,147 @@ fun MainAppScreen(
             }
         }
     ) { padding ->
-        Box(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            when (selectedTab) {
-                0 -> FilesScreen(
-                    storageSummary = storageSummary,
-                    files = filesList,
-                    folders = foldersList,
-                    selectedFolderId = selectedFilterFolderId,
-                    onSelectFilterFolder = { selectedFilterFolderId = it },
-                    serverUrl = serverUrl,
-                    deviceId = deviceId,
-                    deviceKey = deviceKey,
-                    isRefreshing = isRefreshing,
-                    isSelectionMode = isFilesSelectionMode,
-                    onSelectionModeChange = { isFilesSelectionMode = it },
-                    onOpenFile = { file -> previewItem = file },
-                    onRefresh = refreshData
-                )
-                1 -> FullGalleryScreen(
-                    mediaList = galleryList,
-                    foldersList = foldersList,
-                    pairedDevices = pairedDevicesList,
-                    serverUrl = serverUrl,
-                    deviceId = deviceId,
-                    deviceKey = deviceKey,
-                    isRefreshing = isRefreshing,
-                    onRefresh = refreshData
-                )
-                2 -> TransfersScreen(
-                    uploadedFiles = uploadedFilesList,
-                    inboundFiles = inboundSyncList,
-                    serverUrl = serverUrl,
-                    deviceId = deviceId,
-                    deviceKey = deviceKey,
-                    isRefreshing = isRefreshing,
-                    onOpenFile = { file -> previewItem = file },
-                    onDownloadToGallery = { item -> downloadInboundItem(item) },
-                    onSyncAllToGallery = syncAllToGallery,
-                    onRefresh = refreshData,
-                    onTriggerUploadGallery = {
-                        galleryPickerLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))
-                    },
-                    onTriggerUploadFiles = {
-                        documentPickerLauncher.launch(arrayOf("*/*"))
-                    }
-                )
-                3 -> DeviceAndPolicyScreen(
-                    serverUrl = serverUrl,
-                    deviceId = deviceId,
-                    deviceKey = deviceKey,
-                    targetFolderId = targetFolderId,
-                    targetFolderName = targetFolderName,
-                    wifiOnly = wifiOnly,
-                    chargingOnly = chargingOnly,
-                    syncPhotos = syncPhotos,
-                    syncVideos = syncVideos,
-                    syncDocuments = syncDocuments,
-                    lastSyncTimestamp = lastSyncTimestamp,
-                    totalSyncedCount = totalSyncedCount,
-                    lastSyncStatus = lastSyncStatus,
-                    pairedDevices = pairedDevicesList,
-                    pairedRules = pairedRulesMap.values.toList(),
-                    isSavingPolicy = isSavingPolicy,
-                    onServerUrlChange = { serverUrl = it; saveCredentials() },
-                    onDeviceIdChange = { deviceId = it; saveCredentials() },
-                    onDeviceKeyChange = { deviceKey = it; saveCredentials() },
-                    onWifiOnlyChange = { wifiOnly = it; saveCredentials() },
-                    onChargingOnlyChange = { chargingOnly = it; saveCredentials() },
-                    onSyncPhotosChange = { syncPhotos = it; saveCredentials() },
-                    onSyncVideosChange = { syncVideos = it; saveCredentials() },
-                    onSyncDocumentsChange = { syncDocuments = it; saveCredentials() },
-                    onUpdatePairedRule = { sId, mutator ->
-                        val existing = pairedRulesMap[sId]
-                        if (existing != null) {
-                            mutator(existing)
-                            pairedRulesMap[sId] = existing.copy()
+            if (!hasMediaPermissions) {
+                Surface(
+                    color = Color(0xFF2E1065),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(
+                                Icons.Default.Warning,
+                                contentDescription = "Permission Warning",
+                                tint = Color(0xFFFBBF24),
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Text(
+                                "Allow gallery access to enable background photo & video sync",
+                                fontSize = 12.sp,
+                                color = Color(0xFFF4F4F5),
+                                lineHeight = 16.sp
+                            )
                         }
-                    },
-                    onSavePolicy = savePolicyAction,
-                    onOpenFolderDialog = { showFolderDialog = true },
-                    onSyncNow = {
-                        saveCredentials()
-                        onSyncNow(serverUrl, deviceId, deviceKey, targetFolderId, syncPhotos, syncVideos, syncDocuments)
-                    },
-                    onScheduleSync = {
-                        saveCredentials()
-                        onScheduleSync(serverUrl, deviceId, deviceKey, targetFolderId, wifiOnly, chargingOnly, syncPhotos, syncVideos, syncDocuments)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Button(
+                            onClick = { permissionLauncher.launch(requiredPermissions) },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFA855F7)),
+                            shape = RoundedCornerShape(8.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                        ) {
+                            Text("Allow", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                        }
                     }
-                )
+                }
+            }
+
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+            ) {
+                when (selectedTab) {
+                    0 -> FilesScreen(
+                        storageSummary = storageSummary,
+                        files = filesList,
+                        folders = foldersList,
+                        selectedFolderId = selectedFilterFolderId,
+                        onSelectFilterFolder = { selectedFilterFolderId = it },
+                        serverUrl = serverUrl,
+                        deviceId = deviceId,
+                        deviceKey = deviceKey,
+                        isRefreshing = isRefreshing,
+                        isSelectionMode = isFilesSelectionMode,
+                        onSelectionModeChange = { isFilesSelectionMode = it },
+                        onOpenFile = { file -> previewItem = file },
+                        onRefresh = refreshData
+                    )
+                    1 -> FullGalleryScreen(
+                        mediaList = galleryList,
+                        foldersList = foldersList,
+                        pairedDevices = pairedDevicesList,
+                        serverUrl = serverUrl,
+                        deviceId = deviceId,
+                        deviceKey = deviceKey,
+                        isRefreshing = isRefreshing,
+                        onRefresh = refreshData
+                    )
+                    2 -> TransfersScreen(
+                        uploadedFiles = uploadedFilesList,
+                        inboundFiles = inboundSyncList,
+                        serverUrl = serverUrl,
+                        deviceId = deviceId,
+                        deviceKey = deviceKey,
+                        isRefreshing = isRefreshing,
+                        onOpenFile = { file -> previewItem = file },
+                        onDownloadToGallery = { item -> downloadInboundItem(item) },
+                        onSyncAllToGallery = syncAllToGallery,
+                        onRefresh = refreshData,
+                        onTriggerUploadGallery = {
+                            galleryPickerLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))
+                        },
+                        onTriggerUploadFiles = {
+                            documentPickerLauncher.launch(arrayOf("*/*"))
+                        }
+                    )
+                    3 -> DeviceAndPolicyScreen(
+                        serverUrl = serverUrl,
+                        deviceId = deviceId,
+                        deviceKey = deviceKey,
+                        targetFolderId = targetFolderId,
+                        targetFolderName = targetFolderName,
+                        wifiOnly = wifiOnly,
+                        chargingOnly = chargingOnly,
+                        syncPhotos = syncPhotos,
+                        syncVideos = syncVideos,
+                        syncDocuments = syncDocuments,
+                        lastSyncTimestamp = lastSyncTimestamp,
+                        totalSyncedCount = totalSyncedCount,
+                        lastSyncStatus = lastSyncStatus,
+                        pairedDevices = pairedDevicesList,
+                        pairedRules = pairedRulesMap.values.toList(),
+                        isSavingPolicy = isSavingPolicy,
+                        onServerUrlChange = { serverUrl = it; saveCredentials() },
+                        onDeviceIdChange = { deviceId = it; saveCredentials() },
+                        onDeviceKeyChange = { deviceKey = it; saveCredentials() },
+                        onWifiOnlyChange = { wifiOnly = it; saveCredentials() },
+                        onChargingOnlyChange = { chargingOnly = it; saveCredentials() },
+                        onSyncPhotosChange = { syncPhotos = it; saveCredentials() },
+                        onSyncVideosChange = { syncVideos = it; saveCredentials() },
+                        onSyncDocumentsChange = { syncDocuments = it; saveCredentials() },
+                        onUpdatePairedRule = { sId, mutator ->
+                            val existing = pairedRulesMap[sId]
+                            if (existing != null) {
+                                mutator(existing)
+                                pairedRulesMap[sId] = existing.copy()
+                            }
+                        },
+                        onSavePolicy = savePolicyAction,
+                        onOpenFolderDialog = { showFolderDialog = true },
+                        onSyncNow = {
+                            saveCredentials()
+                            onSyncNow(serverUrl, deviceId, deviceKey, targetFolderId, syncPhotos, syncVideos, syncDocuments)
+                        },
+                        onScheduleSync = {
+                            saveCredentials()
+                            onScheduleSync(serverUrl, deviceId, deviceKey, targetFolderId, wifiOnly, chargingOnly, syncPhotos, syncVideos, syncDocuments)
+                        }
+                    )
+                }
             }
         }
     }

@@ -86,6 +86,7 @@ export class FileController {
         contentHash,
         storageAccountId,
         providerFileId,
+        driveOpaqueName,
         folderId,
         deviceAssetId,
         isEncrypted,
@@ -95,6 +96,8 @@ export class FileController {
 
       const deviceId = req.device?.deviceId || (req.headers['x-device-id'] as string) || undefined;
 
+      const effectiveProviderId = providerFileId || driveOpaqueName || `file_${Date.now()}_${filename}`;
+
       const { file, isDuplicate } = await StorageEngineService.finalizeUpload({
         userId,
         folderId: folderId ? new Types.ObjectId(folderId) : null,
@@ -103,7 +106,7 @@ export class FileController {
         sizeBytes,
         contentHash,
         storageAccountId: new Types.ObjectId(storageAccountId),
-        providerFileId: providerFileId || `file_${Date.now()}`,
+        providerFileId: effectiveProviderId,
         deviceId,
         deviceAssetId,
         isEncrypted: !!isEncrypted,
@@ -355,8 +358,11 @@ export class FileController {
         const drive = google.drive({ version: 'v3', auth: oauth2Client });
         let actualFileId = latestVersion.providerFileId;
         if (actualFileId.startsWith('blob_') || actualFileId.startsWith('file_') || actualFileId.includes('.enc')) {
+          const query = (!actualFileId.includes('.') && actualFileId.startsWith('file_'))
+            ? `name contains '${actualFileId}' and trashed = false`
+            : `name = '${actualFileId}' and trashed = false`;
           const listRes = await drive.files.list({
-            q: `name = '${actualFileId}' and trashed = false`,
+            q: query,
             fields: 'files(id, name)',
             pageSize: 1,
           });

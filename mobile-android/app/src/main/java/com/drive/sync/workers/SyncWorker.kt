@@ -195,6 +195,7 @@ class SyncWorker(
                 // 2. Stream bytes directly to Google Drive Resumable Upload Session
                 val uploadUrl = initResult.getString("uploadSessionUrl")
                 val storageAccountId = initResult.getString("storageAccountId")
+                val driveOpaqueName = initResult.optString("driveOpaqueName", "")
 
                 val putRequest = Request.Builder()
                     .url(uploadUrl)
@@ -204,7 +205,20 @@ class SyncWorker(
                 val putResponse = client.newCall(putRequest).execute()
                 if (!putResponse.isSuccessful && putResponse.code != 200 && putResponse.code != 201) {
                     Log.w("SyncWorker", "Google Drive stream failed for $filename: ${putResponse.code}")
+                    putResponse.close()
                     continue
+                }
+
+                val putBody = putResponse.body?.string() ?: ""
+                var providerFileId = ""
+                try {
+                    if (putBody.isNotBlank()) {
+                        val putJson = JSONObject(putBody)
+                        providerFileId = putJson.optString("id", "")
+                    }
+                } catch (_: Exception) {}
+                if (providerFileId.isBlank()) {
+                    providerFileId = driveOpaqueName
                 }
 
                 // 3. Finalize upload with backend
@@ -214,6 +228,8 @@ class SyncWorker(
                     put("sizeBytes", sizeBytes)
                     put("contentHash", contentHash)
                     put("storageAccountId", storageAccountId)
+                    put("providerFileId", providerFileId)
+                    put("driveOpaqueName", driveOpaqueName)
                     put("deviceAssetId", id.toString())
                     if (!targetFolderId.isNullOrBlank()) {
                         put("folderId", targetFolderId)
@@ -227,8 +243,8 @@ class SyncWorker(
                     .post(completeJson.toString().toRequestBody("application/json".toMediaType()))
                     .build()
 
-                client.newCall(completeRequest).execute()
-                Log.d("SyncWorker", "Successfully backed up $filename to pooled storage")
+                client.newCall(completeRequest).execute().close()
+                Log.d("SyncWorker", "Successfully backed up $filename to pooled storage (ID: $providerFileId)")
                 processedCount++
             }
         }
