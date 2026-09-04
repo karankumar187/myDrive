@@ -15,7 +15,14 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import com.drive.sync.crypto.VaultCrypto
 import java.io.ByteArrayOutputStream
+import java.io.File
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color as AndroidColor
+import android.graphics.pdf.PdfRenderer
+import android.os.ParcelFileDescriptor
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -40,11 +47,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -977,19 +990,34 @@ fun MainAppScreen(
                 TopAppBar(
                     title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            Icons.Default.Cloud,
-                            contentDescription = "myDrive Cloud",
-                            tint = Color(0xFFA855F7),
-                            modifier = Modifier.size(24.dp)
+                        Image(
+                            painter = painterResource(R.drawable.ic_mydrive_logo),
+                            contentDescription = "myDrive",
+                            modifier = Modifier
+                                .size(32.dp)
+                                .clip(RoundedCornerShape(8.dp))
                         )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "myDrive",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 20.sp,
-                            color = Color.White
-                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = buildAnnotatedString {
+                                    append("my")
+                                    withStyle(style = SpanStyle(color = Color(0xFFC084FC))) {
+                                        append("Drive")
+                                    }
+                                },
+                                fontWeight = FontWeight.ExtraBold,
+                                fontSize = 20.sp,
+                                color = Color.White
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Box(
+                                modifier = Modifier
+                                    .size(6.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFFA855F7))
+                            )
+                        }
                     }
                 },
                 actions = {
@@ -2993,6 +3021,7 @@ fun MediaViewerDialog(
     val streamUrl = "${serverUrl.trimEnd('/')}/api/v1/files/${file.id}/stream?deviceId=$deviceId&deviceKey=$deviceKey"
     val isImage = file.mimeType.startsWith("image/")
     val isVideo = file.mimeType.startsWith("video/")
+    val isPdf = file.mimeType.contains("pdf") || file.filename.endsWith(".pdf", ignoreCase = true)
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -3138,6 +3167,13 @@ fun MediaViewerDialog(
                                 Text("Play in Video Player")
                             }
                         }
+                    } else if (isPdf) {
+                        PdfViewer(
+                            file = file,
+                            serverUrl = serverUrl,
+                            deviceId = deviceId,
+                            deviceKey = deviceKey
+                        )
                     } else {
                         Column(
                             horizontalAlignment = Alignment.CenterHorizontally,
@@ -3189,6 +3225,212 @@ fun MediaViewerDialog(
                 }
             }
         }
+    }
+}
+
+// ----------------------------------------------------
+// In-App PDF Document Viewer with PdfRenderer
+// ----------------------------------------------------
+@Composable
+fun PdfViewer(
+    file: CloudFile,
+    serverUrl: String,
+    deviceId: String,
+    deviceKey: String,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    var isLoading by remember { mutableStateOf(true) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+    var pdfPages by remember { mutableStateOf<List<Bitmap>>(emptyList()) }
+    var cachedFile by remember { mutableStateOf<File?>(null) }
+
+    LaunchedEffect(file.id) {
+        withContext(Dispatchers.IO) {
+            try {
+                isLoading = true
+                errorMessage = null
+                val cacheSubdir = File(context.cacheDir, "pdf_previews")
+                if (!cacheSubdir.exists()) cacheSubdir.mkdirs()
+
+                val safeName = file.filename.replace("[^a-zA-Z0-9._-]".toRegex(), "_")
+                val localFile = File(cacheSubdir, "${file.id}_$safeName")
+
+                if (!localFile.exists() || localFile.length() == 0L) {
+                    val streamUrl = "${serverUrl.trimEnd('/')}/api/v1/files/${file.id}/stream?deviceId=$deviceId&deviceKey=$deviceKey"
+                    val client = OkHttpClient()
+                    val request = Request.Builder()
+                        .url(streamUrl)
+                        .addHeader("x-device-id", deviceId)
+                        .addHeader("x-device-key", deviceKey)
+                        .build()
+                    val response = client.newCall(request).execute()
+                    if (!response.isSuccessful) {
+                        throw Exception("Server returned HTTP ${response.code}")
+                    }
+                    val body = response.body ?: throw Exception("Empty PDF response from server")
+                    localFile.outputStream().use { out ->
+                        body.byteStream().copyTo(out)
+                    }
+                }
+
+                cachedFile = localFile
+
+                val fileDescriptor = ParcelFileDescriptor.open(localFile, ParcelFileDescriptor.MODE_READ_ONLY)
+                val pdfRenderer = PdfRenderer(fileDescriptor)
+                val pages = mutableListOf<Bitmap>()
+                val maxPages = minOf(pdfRenderer.pageCount, 50)
+                val displayMetrics = context.resources.displayMetrics
+                val targetWidth = minOf(displayMetrics.widthPixels, 1200)
+
+                for (i in 0 until maxPages) {
+                    val page = pdfRenderer.openPage(i)
+                    val scale = targetWidth.toFloat() / page.width.toFloat()
+                    val renderWidth = (page.width * scale).toInt()
+                    val renderHeight = (page.height * scale).toInt()
+
+                    val bitmap = Bitmap.createBitmap(renderWidth, renderHeight, Bitmap.Config.ARGB_8888)
+                    val canvas = Canvas(bitmap)
+                    canvas.drawColor(AndroidColor.WHITE)
+                    page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                    pages.add(bitmap)
+                    page.close()
+                }
+                pdfRenderer.close()
+                fileDescriptor.close()
+
+                pdfPages = pages
+                isLoading = false
+            } catch (e: Exception) {
+                e.printStackTrace()
+                errorMessage = e.message ?: "Failed to render PDF"
+                isLoading = false
+            }
+        }
+    }
+
+    Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        if (isLoading) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                CircularProgressIndicator(
+                    color = Color(0xFFA855F7),
+                    modifier = Modifier.size(44.dp)
+                )
+                Spacer(modifier = Modifier.height(14.dp))
+                Text("Loading PDF...", color = Color(0xFF94A3B8), fontSize = 13.sp)
+            }
+        } else if (errorMessage != null) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+                modifier = Modifier.padding(24.dp)
+            ) {
+                Icon(
+                    Icons.Default.ErrorOutline,
+                    contentDescription = null,
+                    tint = Color(0xFFEF4444),
+                    modifier = Modifier.size(48.dp)
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Text("Unable to preview PDF", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(errorMessage ?: "", color = Color(0xFF94A3B8), fontSize = 12.sp, textAlign = TextAlign.Center)
+                Spacer(modifier = Modifier.height(16.dp))
+                if (cachedFile != null && cachedFile!!.exists()) {
+                    Button(
+                        onClick = { openPdfInExternalApp(context, cachedFile!!) },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF7E22CE)),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(Icons.Default.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Open in External PDF App")
+                    }
+                }
+            }
+        } else {
+            Column(modifier = Modifier.fillMaxSize()) {
+                // PDF Sub-header
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color(0xFF13131A))
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "${pdfPages.size} page(s)",
+                        color = Color(0xFF94A3B8),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                    cachedFile?.let { cFile ->
+                        Button(
+                            onClick = { openPdfInExternalApp(context, cFile) },
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E1A47)),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.OpenInNew,
+                                contentDescription = null,
+                                tint = Color(0xFFC084FC),
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Open in PDF App", color = Color(0xFFC084FC), fontSize = 12.sp)
+                        }
+                    }
+                }
+
+                // Scrollable pages
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color(0xFF16161E)),
+                    contentPadding = PaddingValues(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    items(pdfPages.size) { index ->
+                        val pageBitmap = pdfPages[index]
+                        Card(
+                            shape = RoundedCornerShape(4.dp),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Image(
+                                bitmap = pageBitmap.asImageBitmap(),
+                                contentDescription = "Page ${index + 1}",
+                                modifier = Modifier.fillMaxWidth(),
+                                contentScale = ContentScale.FillWidth
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fun openPdfInExternalApp(context: Context, pdfFile: File) {
+    try {
+        val uri = androidx.core.content.FileProvider.getUriForFile(
+            context,
+            "${context.packageName}.fileprovider",
+            pdfFile
+        )
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, "application/pdf")
+            flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK
+        }
+        context.startActivity(Intent.createChooser(intent, "Open PDF with"))
+    } catch (e: Exception) {
+        Toast.makeText(context, "No PDF viewer app found: ${e.message}", Toast.LENGTH_SHORT).show()
     }
 }
 

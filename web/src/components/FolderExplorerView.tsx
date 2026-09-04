@@ -32,6 +32,7 @@ import {
   Square,
   CheckCircle2,
   XCircle,
+  ExternalLink,
 } from 'lucide-react';
 import { api } from '../services/api.js';
 import { VaultCryptoService } from '../services/vault-crypto.js';
@@ -268,7 +269,12 @@ export const FolderExplorerView: React.FC<Props> = ({
   };
 
   const isPreviewable = (mimeType: string) => {
-    return mimeType.startsWith('image/') || mimeType.startsWith('video/');
+    return (
+      mimeType.startsWith('image/') ||
+      mimeType.startsWith('video/') ||
+      mimeType.includes('pdf') ||
+      mimeType === 'application/pdf'
+    );
   };
 
   // Open file preview - fetch, decrypt if needed, and display
@@ -561,10 +567,10 @@ export const FolderExplorerView: React.FC<Props> = ({
   };
 
   // ─── 3-Dot Kebab Dropdown for Files ─────────────────────────────────────
-  const FileKebabMenu: React.FC<{ file: FileItem }> = ({ file }) => {
+  const FileKebabMenu: React.FC<{ file: FileItem; isNearBottom?: boolean }> = ({ file, isNearBottom }) => {
     const isOpen = contextMenuFileId === file._id;
     return (
-      <div className="relative inline-block">
+      <div className="relative inline-block text-left">
         <button
           onClick={(e) => {
             e.stopPropagation();
@@ -578,7 +584,9 @@ export const FolderExplorerView: React.FC<Props> = ({
         </button>
         {isOpen && (
           <div
-            className="absolute right-0 top-8 z-50 w-52 bg-[#18181f] border border-[#2a2a36] rounded-xl shadow-2xl py-1.5 animate-in fade-in slide-in-from-top-2"
+            className={`absolute right-0 ${
+              isNearBottom ? 'bottom-8 slide-in-from-bottom-2' : 'top-8 slide-in-from-top-2'
+            } z-50 w-52 bg-[#18181f] border border-[#2a2a36] rounded-xl shadow-2xl py-1.5 animate-in fade-in`}
             onClick={(e) => e.stopPropagation()}
           >
             {isPreviewable(file.mimeType) && (
@@ -710,68 +718,76 @@ export const FolderExplorerView: React.FC<Props> = ({
   };
 
   // Reusable file row renderer
-  const renderFileRow = (file: FileItem, showSources: boolean = true) => (
-    <tr
-      key={file._id}
-      className={`hover:bg-[#15151a] transition group ${selectedFileIds.has(file._id) ? 'bg-purple-950/20 hover:bg-purple-950/30' : ''}`}
-    >
-      {isSelectionMode && (
-        <td className="py-3 pl-4 pr-1 w-8">
-          <button
-            onClick={(e) => { e.stopPropagation(); toggleFileSelection(file._id); }}
-            className="text-zinc-500 hover:text-purple-400 transition"
-          >
-            {selectedFileIds.has(file._id) ? (
-              <CheckSquare className="w-4 h-4 text-purple-400" />
-            ) : (
-              <Square className="w-4 h-4" />
-            )}
-          </button>
-        </td>
-      )}
-      <td
-        className="py-3 px-4 flex items-center space-x-3 cursor-pointer"
-        onClick={() => {
-          if (isSelectionMode) {
-            toggleFileSelection(file._id);
-          } else {
-            handleFileClick(file);
-          }
-        }}
+  const renderFileRow = (
+    file: FileItem,
+    showSources: boolean = true,
+    index: number = 0,
+    total: number = 1
+  ) => {
+    const isNearBottom = total > 1 && index >= Math.max(1, total - 2);
+    return (
+      <tr
+        key={file._id}
+        className={`hover:bg-[#15151a] transition group ${selectedFileIds.has(file._id) ? 'bg-purple-950/20 hover:bg-purple-950/30' : ''}`}
       >
-        {getFileIcon(file.mimeType)}
-        <span className={`font-semibold text-zinc-200 group-hover:text-purple-300 transition truncate max-w-[280px] ${isPreviewable(file.mimeType) ? 'hover:underline' : ''}`}>
-          {file.filename}
-        </span>
-        {file.isFavorite && (
-          <Heart className="w-3 h-3 text-pink-400 fill-pink-400 flex-shrink-0" />
+        {isSelectionMode && (
+          <td className="py-3 pl-4 pr-1 w-8">
+            <button
+              onClick={(e) => { e.stopPropagation(); toggleFileSelection(file._id); }}
+              className="text-zinc-500 hover:text-purple-400 transition"
+            >
+              {selectedFileIds.has(file._id) ? (
+                <CheckSquare className="w-4 h-4 text-purple-400" />
+              ) : (
+                <Square className="w-4 h-4" />
+              )}
+            </button>
+          </td>
         )}
-        {isPreviewable(file.mimeType) && (
-          <span className="text-[10px] text-zinc-600 group-hover:text-purple-500 transition">
-            {file.mimeType.startsWith('image/') ? '🖼' : '▶'}
+        <td
+          className="py-3 px-4 flex items-center space-x-3 cursor-pointer"
+          onClick={() => {
+            if (isSelectionMode) {
+              toggleFileSelection(file._id);
+            } else {
+              handleFileClick(file);
+            }
+          }}
+        >
+          {getFileIcon(file.mimeType)}
+          <span className={`font-semibold text-zinc-200 group-hover:text-purple-300 transition truncate max-w-[280px] ${isPreviewable(file.mimeType) ? 'hover:underline' : ''}`}>
+            {file.filename}
           </span>
-        )}
-      </td>
-      <td className="py-3 px-4 text-zinc-400">{formatBytes(file.sizeBytes)}</td>
-      {showSources && (
-        <td className="py-3 px-4">
-          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-[#1a1a22] text-zinc-400 border border-[#272733]">
-            {file.sourceDeviceIds.length > 0
-              ? `${file.sourceDeviceIds.length} device(s)`
-              : 'Cloud only'}
-          </span>
+          {file.isFavorite && (
+            <Heart className="w-3 h-3 text-pink-400 fill-pink-400 flex-shrink-0" />
+          )}
+          {isPreviewable(file.mimeType) && (
+            <span className="text-[10px] text-zinc-600 group-hover:text-purple-500 transition">
+              {file.mimeType.startsWith('image/') ? '🖼' : file.mimeType.includes('pdf') ? '📄' : '▶'}
+            </span>
+          )}
         </td>
-      )}
-      <td className="py-3 px-4 text-zinc-500">
-        {showSources
-          ? new Date(file.createdAt).toLocaleDateString()
-          : new Date(file.createdAt).toLocaleString()}
-      </td>
-      <td className="py-3 px-4 text-right">
-        <FileKebabMenu file={file} />
-      </td>
-    </tr>
-  );
+        <td className="py-3 px-4 text-zinc-400">{formatBytes(file.sizeBytes)}</td>
+        {showSources && (
+          <td className="py-3 px-4">
+            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-[#1a1a22] text-zinc-400 border border-[#272733]">
+              {file.sourceDeviceIds.length > 0
+                ? `${file.sourceDeviceIds.length} device(s)`
+                : 'Cloud only'}
+            </span>
+          </td>
+        )}
+        <td className="py-3 px-4 text-zinc-500">
+          {showSources
+            ? new Date(file.createdAt).toLocaleDateString()
+            : new Date(file.createdAt).toLocaleString()}
+        </td>
+        <td className="py-3 px-4 text-right">
+          <FileKebabMenu file={file} isNearBottom={isNearBottom} />
+        </td>
+      </tr>
+    );
+  };
 
   return (
     <div
@@ -947,7 +963,7 @@ export const FolderExplorerView: React.FC<Props> = ({
       )}
 
       {/* Files Table */}
-      <div className="bg-[#111114] rounded-2xl border border-[#222227] shadow-lg overflow-hidden">
+      <div className="bg-[#111114] rounded-2xl border border-[#222227] shadow-lg">
         {files.length === 0 && folders.length === 0 && !(!currentFolderId && recentFiles.length > 0) ? (
           <div className="p-16 text-center text-zinc-500 space-y-2">
             <Folder className="w-12 h-12 mx-auto text-zinc-700" />
@@ -955,9 +971,9 @@ export const FolderExplorerView: React.FC<Props> = ({
             <p className="text-xs text-zinc-500">Upload files or create subfolders to get started</p>
           </div>
         ) : files.length > 0 ? (
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto min-h-[340px] pb-16">
             <table className="w-full text-left text-xs">
-              <thead className="bg-[#141418] border-b border-[#222227] text-zinc-400 uppercase font-semibold text-[10px] tracking-wider">
+              <thead className="bg-[#141418] border-b border-[#222227] text-zinc-400 uppercase font-semibold text-[10px] tracking-wider rounded-t-2xl">
                 <tr>
                   {isSelectionMode && (
                     <th className="py-3 pl-4 pr-1 w-8">
@@ -984,7 +1000,7 @@ export const FolderExplorerView: React.FC<Props> = ({
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#18181f]">
-                {files.map((file) => renderFileRow(file, true))}
+                {files.map((file, idx) => renderFileRow(file, true, idx, files.length))}
               </tbody>
             </table>
           </div>
@@ -999,21 +1015,23 @@ export const FolderExplorerView: React.FC<Props> = ({
             <h4 className="text-xs font-bold text-zinc-300 uppercase tracking-wider">Recently Added Files</h4>
             <span className="text-[11px] text-zinc-500">({recentFiles.length})</span>
           </div>
-          <div className="bg-[#111114] rounded-2xl border border-[#222227] shadow-lg overflow-hidden">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-[#141418] border-b border-[#222227] text-zinc-400 uppercase font-semibold text-[10px] tracking-wider">
-                <tr>
-                  {isSelectionMode && <th className="py-3 pl-4 pr-1 w-8"></th>}
-                  <th className="py-3 px-4">Name</th>
-                  <th className="py-3 px-4">Size</th>
-                  <th className="py-3 px-4">Date Added</th>
-                  <th className="py-3 px-4 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[#18181f]">
-                {recentFiles.map((file) => renderFileRow(file, false))}
-              </tbody>
-            </table>
+          <div className="bg-[#111114] rounded-2xl border border-[#222227] shadow-lg">
+            <div className="overflow-x-auto min-h-[340px] pb-16">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-[#141418] border-b border-[#222227] text-zinc-400 uppercase font-semibold text-[10px] tracking-wider rounded-t-2xl">
+                  <tr>
+                    {isSelectionMode && <th className="py-3 pl-4 pr-1 w-8"></th>}
+                    <th className="py-3 px-4">Name</th>
+                    <th className="py-3 px-4">Size</th>
+                    <th className="py-3 px-4">Date Added</th>
+                    <th className="py-3 px-4 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#18181f]">
+                  {recentFiles.map((file, idx) => renderFileRow(file, false, idx, recentFiles.length))}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       )}
@@ -1093,6 +1111,29 @@ export const FolderExplorerView: React.FC<Props> = ({
                 <video src={previewUrl} controls autoPlay className="max-w-[90vw] max-h-[85vh] rounded-lg shadow-2xl" onError={() => setPreviewError('Unable to play video format in this browser.')}>
                   Your browser does not support the video tag.
                 </video>
+              ) : previewFile.mimeType.includes('pdf') || previewFile.filename.toLowerCase().endsWith('.pdf') ? (
+                <div className="w-[85vw] max-w-5xl h-[82vh] rounded-2xl overflow-hidden bg-[#18181f] border border-[#272733] shadow-2xl flex flex-col">
+                  <div className="flex items-center justify-between px-4 py-2.5 bg-[#141418] border-b border-[#272733]">
+                    <div className="flex items-center space-x-2 text-xs text-zinc-300">
+                      <span>📄</span>
+                      <span className="font-semibold truncate max-w-md">{previewFile.filename}</span>
+                    </div>
+                    <a
+                      href={previewUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center space-x-1 px-3 py-1 bg-purple-600/20 hover:bg-purple-600/30 text-purple-400 hover:text-purple-300 border border-purple-500/30 rounded-lg text-xs font-medium transition"
+                    >
+                      <span>Open in New Tab</span>
+                      <ExternalLink className="w-3.5 h-3.5" />
+                    </a>
+                  </div>
+                  <iframe
+                    src={previewUrl}
+                    title={previewFile.filename}
+                    className="w-full h-full border-0 bg-white"
+                  />
+                </div>
               ) : null
             ) : (
               <div className="text-zinc-400 text-sm">Unable to load preview</div>

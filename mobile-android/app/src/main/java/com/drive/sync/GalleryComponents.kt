@@ -32,9 +32,13 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -421,22 +425,37 @@ fun FullGalleryScreen(
                             )
                         )
                     } else {
-                        // Title: myDrive
+                        // Title: myDrive (matches web app logo badge and typography)
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                Icons.Default.Cloud,
-                                contentDescription = null,
-                                tint = Color(0xFFA855F7),
-                                modifier = Modifier.size(24.dp)
+                            Image(
+                                painter = painterResource(R.drawable.ic_mydrive_logo),
+                                contentDescription = "myDrive",
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .clip(RoundedCornerShape(8.dp))
                             )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "myDrive",
-                                color = Color.White,
-                                fontSize = 20.sp,
-                                fontWeight = FontWeight.ExtraBold,
-                                letterSpacing = (-0.5).sp
-                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = buildAnnotatedString {
+                                        append("my")
+                                        withStyle(style = SpanStyle(color = Color(0xFFC084FC))) {
+                                            append("Drive")
+                                        }
+                                    },
+                                    color = Color.White,
+                                    fontSize = 20.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    letterSpacing = (-0.5).sp
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Box(
+                                    modifier = Modifier
+                                        .size(6.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(0xFFA855F7))
+                                )
+                            }
                         }
 
                         // Right icons: Search & More Options
