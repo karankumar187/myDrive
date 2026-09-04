@@ -18,6 +18,8 @@ import java.io.ByteArrayOutputStream
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -269,6 +271,7 @@ fun MainAppScreen(
 ) {
     val context = LocalContext.current
     var selectedTab by remember { mutableIntStateOf(0) }
+    var isFilesSelectionMode by remember { mutableStateOf(false) }
 
     var serverUrl by remember { mutableStateOf(prefs.getString("server_url", "https://mydrive-sti3.onrender.com") ?: "https://mydrive-sti3.onrender.com") }
     var deviceId by remember { mutableStateOf(prefs.getString("device_id", "") ?: "") }
@@ -1073,7 +1076,7 @@ fun MainAppScreen(
             }
         },
         floatingActionButton = {
-            if (selectedTab != 3 && selectedTab != 1) {
+            if (selectedTab != 3 && selectedTab != 1 && !(selectedTab == 0 && isFilesSelectionMode)) {
                 FloatingActionButton(
                     onClick = { showManualUploadDialog = true },
                     containerColor = Color(0xFFA855F7),
@@ -1110,7 +1113,12 @@ fun MainAppScreen(
                     folders = foldersList,
                     selectedFolderId = selectedFilterFolderId,
                     onSelectFilterFolder = { selectedFilterFolderId = it },
+                    serverUrl = serverUrl,
+                    deviceId = deviceId,
+                    deviceKey = deviceKey,
                     isRefreshing = isRefreshing,
+                    isSelectionMode = isFilesSelectionMode,
+                    onSelectionModeChange = { isFilesSelectionMode = it },
                     onOpenFile = { file -> previewItem = file },
                     onRefresh = refreshData
                 )
@@ -1193,6 +1201,7 @@ fun MainAppScreen(
 // ----------------------------------------------------
 // TAB 0: Files & Storage Pool Explorer
 // ----------------------------------------------------
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun FilesScreen(
     storageSummary: StoragePoolSummary?,
@@ -1200,10 +1209,30 @@ fun FilesScreen(
     folders: List<CloudFolder>,
     selectedFolderId: String?,
     onSelectFilterFolder: (String?) -> Unit,
+    serverUrl: String,
+    deviceId: String,
+    deviceKey: String,
     isRefreshing: Boolean,
+    isSelectionMode: Boolean = false,
+    onSelectionModeChange: (Boolean) -> Unit = {},
     onOpenFile: (CloudFile) -> Unit,
     onRefresh: () -> Unit
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+
+    val selectedFileIds = remember { mutableStateListOf<String>() }
+
+    var selectedFileForMenu by remember { mutableStateOf<CloudFile?>(null) }
+    var selectedFolderForMenu by remember { mutableStateOf<CloudFolder?>(null) }
+    var fileToRename by remember { mutableStateOf<CloudFile?>(null) }
+    var newFileName by remember { mutableStateOf("") }
+    var fileToShowDetails by remember { mutableStateOf<CloudFile?>(null) }
+    var showMoveDialog by remember { mutableStateOf(false) }
+    var folderToDelete by remember { mutableStateOf<CloudFolder?>(null) }
+    
+    var showHeaderMenu by remember { mutableStateOf(false) }
+
     val filteredFiles = remember(files, selectedFolderId) {
         if (selectedFolderId == null) {
             files
@@ -1212,262 +1241,663 @@ fun FilesScreen(
         }
     }
 
-    LazyColumn(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        // Storage Pool Overview Card
-        item {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(20.dp),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF14141C))
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "Pooled Storage",
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White
-                        )
-                        Surface(
-                            shape = CircleShape,
-                            color = Color(0xFF1E1B4B)
+    Box(modifier = Modifier.fillMaxSize()) {
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            // Storage Pool Overview Card
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF14141C))
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = "${storageSummary?.connectedAccountsCount ?: 0} Drives",
+                                text = "Pooled Storage",
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                            Surface(
+                                shape = CircleShape,
+                                color = Color(0xFF1E1B4B)
+                            ) {
+                                Text(
+                                    text = "${storageSummary?.connectedAccountsCount ?: 0} Drives",
+                                    fontSize = 11.sp,
+                                    color = Color(0xFFC084FC),
+                                    fontWeight = FontWeight.SemiBold,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        LinearProgressIndicator(
+                            progress = {
+                                val pct = (storageSummary?.usagePercentage ?: 0.0) / 100f
+                                pct.toFloat().coerceIn(0f, 1f)
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(6.dp)
+                                .clip(RoundedCornerShape(3.dp)),
+                            color = Color(0xFFA855F7),
+                            trackColor = Color(0xFF27273A)
+                        )
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            val used = formatBytes(storageSummary?.totalUsedBytes ?: 0L)
+                            val total = formatBytes(storageSummary?.totalCapacityBytes ?: (60L * 1024 * 1024 * 1024))
+                            Text(
+                                text = "$used used of $total",
                                 fontSize = 11.sp,
-                                color = Color(0xFFC084FC),
-                                fontWeight = FontWeight.SemiBold,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                color = Color(0xFF94A3B8)
+                            )
+                            Text(
+                                text = "%.0f%%".format(storageSummary?.usagePercentage ?: 0.0),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFFA855F7)
                             )
                         }
                     }
-
-                    Spacer(modifier = Modifier.height(14.dp))
-
-                    LinearProgressIndicator(
-                        progress = {
-                            val pct = (storageSummary?.usagePercentage ?: 0.0) / 100f
-                            pct.toFloat().coerceIn(0f, 1f)
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(6.dp)
-                            .clip(RoundedCornerShape(3.dp)),
-                        color = Color(0xFFA855F7),
-                        trackColor = Color(0xFF27273A)
-                    )
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        val used = formatBytes(storageSummary?.totalUsedBytes ?: 0L)
-                        val total = formatBytes(storageSummary?.totalCapacityBytes ?: (60L * 1024 * 1024 * 1024))
-                        Text(
-                            text = "$used used of $total",
-                            fontSize = 11.sp,
-                            color = Color(0xFF94A3B8)
-                        )
-                        Text(
-                            text = "%.0f%%".format(storageSummary?.usagePercentage ?: 0.0),
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFFA855F7)
-                        )
-                    }
                 }
             }
-        }
 
-        // Folders Section (if folders exist in library)
-        if (folders.isNotEmpty()) {
-            item {
-                Column(modifier = Modifier.padding(vertical = 4.dp)) {
-                    Text(
-                        text = "Cloud Folders",
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = Color(0xFF94A3B8),
-                        modifier = Modifier.padding(bottom = 6.dp)
-                    )
-                    LazyRow(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        item {
-                            Surface(
-                                shape = RoundedCornerShape(10.dp),
-                                color = if (selectedFolderId == null) Color(0xFF26193E) else Color(0xFF181824),
-                                modifier = Modifier.clickable { onSelectFilterFolder(null) }
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                                    verticalAlignment = Alignment.CenterVertically
+            // Folders Section (if folders exist in library)
+            if (folders.isNotEmpty()) {
+                item {
+                    Column(modifier = Modifier.padding(vertical = 4.dp)) {
+                        Text(
+                            text = "Cloud Folders",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color(0xFF94A3B8),
+                            modifier = Modifier.padding(bottom = 6.dp)
+                        )
+                        LazyRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            item {
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = if (selectedFolderId == null) Color(0xFF26193E) else Color(0xFF181824),
+                                    modifier = Modifier.clickable { onSelectFilterFolder(null) }
                                 ) {
-                                    Icon(
-                                        Icons.Default.CloudQueue,
-                                        contentDescription = null,
-                                        tint = if (selectedFolderId == null) Color(0xFFC084FC) else Color(0xFF71717A),
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = "All Files",
-                                        color = Color.White,
-                                        fontSize = 12.sp,
-                                        fontWeight = if (selectedFolderId == null) FontWeight.Bold else FontWeight.Normal
-                                    )
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            Icons.Default.CloudQueue,
+                                            contentDescription = null,
+                                            tint = if (selectedFolderId == null) Color(0xFFC084FC) else Color(0xFF71717A),
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = "All Files",
+                                            color = Color.White,
+                                            fontSize = 12.sp,
+                                            fontWeight = if (selectedFolderId == null) FontWeight.Bold else FontWeight.Normal
+                                        )
+                                    }
                                 }
                             }
-                        }
 
-                        items(folders) { folder ->
-                            val isSelected = selectedFolderId == folder.id
-                            Surface(
-                                shape = RoundedCornerShape(10.dp),
-                                color = if (isSelected) Color(0xFF26193E) else Color(0xFF181824),
-                                modifier = Modifier.clickable { onSelectFilterFolder(folder.id) }
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                                    verticalAlignment = Alignment.CenterVertically
+                            items(folders) { folder ->
+                                val isSelected = selectedFolderId == folder.id
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = if (isSelected) Color(0xFF26193E) else Color(0xFF181824),
+                                    modifier = Modifier.combinedClickable(
+                                        onClick = { onSelectFilterFolder(folder.id) },
+                                        onLongClick = { selectedFolderForMenu = folder }
+                                    )
                                 ) {
-                                    Icon(
-                                        Icons.Default.Folder,
-                                        contentDescription = null,
-                                        tint = if (isSelected) Color(0xFFC084FC) else Color(0xFFFBBF24),
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = folder.name,
-                                        color = Color.White,
-                                        fontSize = 12.sp,
-                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
-                                    )
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Folder,
+                                            contentDescription = null,
+                                            tint = if (isSelected) Color(0xFFC084FC) else Color(0xFFFBBF24),
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = folder.name,
+                                            color = Color.White,
+                                            fontSize = 12.sp,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                        )
+                                    }
                                 }
                             }
                         }
                     }
                 }
             }
-        }
 
-        // Files List Header
-        item {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 6.dp, bottom = 4.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "Cloud Files (${filteredFiles.size})",
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = Color.White
-                )
-            }
-        }
-
-        if (filteredFiles.isEmpty() && !isRefreshing) {
+            // Files List Header
             item {
-                Box(
+                Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(top = 40.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(
-                            Icons.Default.CloudQueue,
-                            contentDescription = null,
-                            modifier = Modifier.size(48.dp),
-                            tint = Color(0xFF3F3F46)
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text("No files found in this view", color = Color(0xFF71717A), fontSize = 13.sp)
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text("Backed up media will show here", color = Color(0xFF52525B), fontSize = 11.sp)
-                    }
-                }
-            }
-        }
-
-        items(filteredFiles) { file ->
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { onOpenFile(file) },
-                shape = RoundedCornerShape(14.dp),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF14141C))
-            ) {
-                Row(
-                    modifier = Modifier.padding(12.dp),
+                        .padding(top = 6.dp, bottom = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    val icon = when {
-                        file.mimeType.startsWith("image/") -> Icons.Default.Image
-                        file.mimeType.startsWith("video/") -> Icons.Default.Videocam
-                        file.mimeType.contains("pdf") -> Icons.Default.PictureAsPdf
-                        else -> Icons.Default.Description
+                    val headerText = if (isSelectionMode) {
+                        "${selectedFileIds.size} Selected"
+                    } else {
+                        "Cloud Files (${filteredFiles.size})"
                     }
-                    val iconTint = when {
-                        file.mimeType.startsWith("image/") -> Color(0xFF38BDF8)
-                        file.mimeType.startsWith("video/") -> Color(0xFFA855F7)
-                        file.mimeType.contains("pdf") -> Color(0xFFF87171)
-                        else -> Color(0xFFFBBF24)
+                    Text(
+                        text = headerText,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color.White
+                    )
+                    
+                    Box {
+                        IconButton(onClick = { showHeaderMenu = true }) {
+                            Icon(Icons.Default.MoreVert, contentDescription = "Menu", tint = Color.White)
+                        }
+                        DropdownMenu(
+                            expanded = showHeaderMenu,
+                            onDismissRequest = { showHeaderMenu = false },
+                            modifier = Modifier.background(Color(0xFF1C1C28))
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Select Mode", color = Color.White) },
+                                onClick = {
+                                    onSelectionModeChange(true)
+                                    showHeaderMenu = false
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Select All", color = Color.White) },
+                                onClick = {
+                                    onSelectionModeChange(true)
+                                    selectedFileIds.clear()
+                                    selectedFileIds.addAll(filteredFiles.map { it.id })
+                                    showHeaderMenu = false
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Refresh", color = Color.White) },
+                                onClick = {
+                                    onRefresh()
+                                    showHeaderMenu = false
+                                }
+                            )
+                        }
                     }
+                }
+            }
 
+            if (filteredFiles.isEmpty() && !isRefreshing) {
+                item {
                     Box(
                         modifier = Modifier
-                            .size(38.dp)
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(Color(0xFF1C1C28)),
+                            .fillMaxWidth()
+                            .padding(top = 40.dp),
                         contentAlignment = Alignment.Center
                     ) {
-                        Icon(icon, contentDescription = null, tint = iconTint, modifier = Modifier.size(20.dp))
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(
+                                Icons.Default.CloudQueue,
+                                contentDescription = null,
+                                modifier = Modifier.size(48.dp),
+                                tint = Color(0xFF3F3F46)
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text("No files found in this view", color = Color(0xFF71717A), fontSize = 13.sp)
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text("Backed up media will show here", color = Color(0xFF52525B), fontSize = 11.sp)
+                        }
                     }
+                }
+            }
 
-                    Spacer(modifier = Modifier.width(12.dp))
+            items(filteredFiles, key = { it.id }) { file ->
+                val isSelected = selectedFileIds.contains(file.id)
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .combinedClickable(
+                            onClick = {
+                                if (isSelectionMode) {
+                                    if (isSelected) selectedFileIds.remove(file.id) else selectedFileIds.add(file.id)
+                                    if (selectedFileIds.isEmpty()) onSelectionModeChange(false)
+                                } else {
+                                    onOpenFile(file)
+                                }
+                            },
+                            onLongClick = {
+                                if (isSelectionMode) {
+                                    if (isSelected) selectedFileIds.remove(file.id) else selectedFileIds.add(file.id)
+                                    if (selectedFileIds.isEmpty()) onSelectionModeChange(false)
+                                } else {
+                                    selectedFileForMenu = file
+                                }
+                            }
+                        ),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = CardDefaults.cardColors(containerColor = if (isSelected) Color(0xFF26193E) else Color(0xFF14141C)),
+                    border = if (isSelected) BorderStroke(1.dp, Color(0xFFA855F7)) else null
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        val icon = when {
+                            file.mimeType.startsWith("image/") -> Icons.Default.Image
+                            file.mimeType.startsWith("video/") -> Icons.Default.Videocam
+                            file.mimeType.contains("pdf") -> Icons.Default.PictureAsPdf
+                            else -> Icons.Default.Description
+                        }
+                        val iconTint = when {
+                            file.mimeType.startsWith("image/") -> Color(0xFF38BDF8)
+                            file.mimeType.startsWith("video/") -> Color(0xFFA855F7)
+                            file.mimeType.contains("pdf") -> Color(0xFFF87171)
+                            else -> Color(0xFFFBBF24)
+                        }
 
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = file.filename,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = Color.White,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Text(
-                            text = formatBytes(file.sizeBytes),
-                            fontSize = 11.sp,
-                            color = Color(0xFF71717A)
-                        )
+                        Box(
+                            modifier = Modifier
+                                .size(38.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(Color(0xFF1C1C28)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (isSelectionMode) {
+                                Checkbox(
+                                    checked = isSelected,
+                                    onCheckedChange = null,
+                                    colors = CheckboxDefaults.colors(
+                                        checkedColor = Color(0xFFA855F7),
+                                        uncheckedColor = Color(0xFF71717A)
+                                    )
+                                )
+                            } else {
+                                Icon(icon, contentDescription = null, tint = iconTint, modifier = Modifier.size(20.dp))
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.width(12.dp))
+
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = file.filename,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = Color.White,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = formatBytes(file.sizeBytes),
+                                fontSize = 11.sp,
+                                color = Color(0xFF71717A)
+                            )
+                        }
+                        
+                        if (!isSelectionMode) {
+                            IconButton(onClick = { selectedFileForMenu = file }, modifier = Modifier.size(36.dp)) {
+                                Icon(
+                                    Icons.Default.MoreVert,
+                                    contentDescription = "More options",
+                                    tint = Color(0xFF94A3B8),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
                     }
+                }
+            }
+            
+            if (isSelectionMode) {
+                item { Spacer(modifier = Modifier.height(80.dp)) }
+            }
+        }
 
-                    Icon(
-                        Icons.Default.Visibility,
-                        contentDescription = "View",
-                        tint = Color(0xFF71717A),
-                        modifier = Modifier.size(18.dp)
-                    )
+        // Floating Selection Bar
+        if (isSelectionMode && selectedFileIds.isNotEmpty()) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 16.dp, start = 16.dp, end = 16.dp)
+                    .fillMaxWidth()
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(24.dp),
+                    color = Color(0xFF26193E),
+                    shadowElevation = 8.dp,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconButton(onClick = {
+                            if (selectedFileIds.size == filteredFiles.size) {
+                                selectedFileIds.clear()
+                                onSelectionModeChange(false)
+                            } else {
+                                selectedFileIds.clear()
+                                selectedFileIds.addAll(filteredFiles.map { it.id })
+                            }
+                        }) {
+                            Icon(Icons.Default.SelectAll, contentDescription = "Select All", tint = Color(0xFFA855F7))
+                        }
+                        IconButton(onClick = {
+                            val itemsToDownload = filteredFiles.filter { it.id in selectedFileIds }
+                            itemsToDownload.forEach { f ->
+                                val streamUrl = "${serverUrl.trimEnd('/')}/api/v1/files/${f.id}/stream?deviceId=$deviceId&deviceKey=$deviceKey"
+                                downloadFileToDevice(context, streamUrl, f.filename, deviceId, deviceKey)
+                            }
+                            onSelectionModeChange(false)
+                            selectedFileIds.clear()
+                        }) {
+                            Icon(Icons.Default.Download, contentDescription = "Download", tint = Color(0xFFA855F7))
+                        }
+                        IconButton(onClick = {
+                            coroutineScope.launch {
+                                apiBulkAction(serverUrl, deviceId, deviceKey, "favorite", selectedFileIds.toList())
+                                onRefresh()
+                                onSelectionModeChange(false)
+                                selectedFileIds.clear()
+                            }
+                        }) {
+                            Icon(Icons.Default.Star, contentDescription = "Favorite", tint = Color.White)
+                        }
+                        IconButton(onClick = { showMoveDialog = true }) {
+                            Icon(Icons.Default.DriveFileMove, contentDescription = "Move", tint = Color.White)
+                        }
+                        IconButton(onClick = {
+                            coroutineScope.launch {
+                                apiBulkAction(serverUrl, deviceId, deviceKey, "trash", selectedFileIds.toList())
+                                onRefresh()
+                                onSelectionModeChange(false)
+                                selectedFileIds.clear()
+                            }
+                        }) {
+                            Icon(Icons.Default.Delete, contentDescription = "Trash", tint = Color.Red)
+                        }
+                        IconButton(onClick = {
+                            onSelectionModeChange(false)
+                            selectedFileIds.clear()
+                        }) {
+                            Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White)
+                        }
+                    }
                 }
             }
         }
+    }
+
+    // Context Menu Bottom Sheet / Dialog
+    if (selectedFileForMenu != null) {
+        val file = selectedFileForMenu!!
+        AlertDialog(
+            onDismissRequest = { selectedFileForMenu = null },
+            containerColor = Color(0xFF1C1C28),
+            title = { Text(file.filename, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+            text = {
+                Column {
+                    DropdownMenuItem(
+                        text = { Text("Select", color = Color.White) },
+                        leadingIcon = { Icon(Icons.Default.CheckCircle, contentDescription = null, tint = Color(0xFFA855F7)) },
+                        onClick = {
+                            onSelectionModeChange(true)
+                            if (!selectedFileIds.contains(file.id)) {
+                                selectedFileIds.add(file.id)
+                            }
+                            selectedFileForMenu = null
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Download to Phone", color = Color.White) },
+                        leadingIcon = { Icon(Icons.Default.Download, contentDescription = null, tint = Color.White) },
+                        onClick = {
+                            val streamUrl = "${serverUrl.trimEnd('/')}/api/v1/files/${file.id}/stream?deviceId=$deviceId&deviceKey=$deviceKey"
+                            downloadFileToDevice(context, streamUrl, file.filename, deviceId, deviceKey)
+                            selectedFileForMenu = null
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Rename", color = Color.White) },
+                        leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null, tint = Color.White) },
+                        onClick = {
+                            fileToRename = file
+                            newFileName = file.filename
+                            selectedFileForMenu = null
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Move to Folder", color = Color.White) },
+                        leadingIcon = { Icon(Icons.Default.DriveFileMove, contentDescription = null, tint = Color.White) },
+                        onClick = {
+                            selectedFileIds.clear()
+                            selectedFileIds.add(file.id)
+                            showMoveDialog = true
+                            selectedFileForMenu = null
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Favorite / Unfavorite", color = Color.White) },
+                        leadingIcon = { Icon(Icons.Default.Star, contentDescription = null, tint = Color.White) },
+                        onClick = {
+                            coroutineScope.launch {
+                                apiToggleFavorite(serverUrl, deviceId, deviceKey, file.id, true)
+                                onRefresh()
+                            }
+                            selectedFileForMenu = null
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Move to Trash", color = Color.White) },
+                        leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = Color.White) },
+                        onClick = {
+                            coroutineScope.launch {
+                                apiTrashFile(serverUrl, deviceId, deviceKey, file.id)
+                                onRefresh()
+                            }
+                            selectedFileForMenu = null
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("File Details", color = Color.White) },
+                        leadingIcon = { Icon(Icons.Default.Info, contentDescription = null, tint = Color.White) },
+                        onClick = {
+                            fileToShowDetails = file
+                            selectedFileForMenu = null
+                        }
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { selectedFileForMenu = null }) {
+                    Text("Close", color = Color(0xFFA855F7))
+                }
+            }
+        )
+    }
+
+    if (fileToRename != null) {
+        AlertDialog(
+            onDismissRequest = { fileToRename = null },
+            containerColor = Color(0xFF14141C),
+            title = { Text("Rename File", color = Color.White) },
+            text = {
+                OutlinedTextField(
+                    value = newFileName,
+                    onValueChange = { newFileName = it },
+                    label = { Text("Filename") },
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Color(0xFFA855F7),
+                        unfocusedBorderColor = Color(0xFF2E2E3E),
+                        focusedTextColor = Color.White,
+                        unfocusedTextColor = Color.White
+                    )
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val f = fileToRename!!
+                    coroutineScope.launch {
+                        apiRenameFile(serverUrl, deviceId, deviceKey, f.id, newFileName)
+                        onRefresh()
+                    }
+                    fileToRename = null
+                }) {
+                    Text("Rename", color = Color(0xFFA855F7))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { fileToRename = null }) {
+                    Text("Cancel", color = Color(0xFF94A3B8))
+                }
+            }
+        )
+    }
+
+    if (fileToShowDetails != null) {
+        val f = fileToShowDetails!!
+        AlertDialog(
+            onDismissRequest = { fileToShowDetails = null },
+            containerColor = Color(0xFF14141C),
+            title = { Text("File Details", color = Color.White) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Name: ${f.filename}", color = Color.White)
+                    Text("Type: ${f.mimeType}", color = Color.White)
+                    Text("Size: ${formatBytes(f.sizeBytes)}", color = Color.White)
+                    Text("Created: ${f.createdAt}", color = Color.White)
+                    Text("Folder ID: ${f.folderId ?: "None"}", color = Color.White)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { fileToShowDetails = null }) {
+                    Text("Close", color = Color(0xFFA855F7))
+                }
+            }
+        )
+    }
+
+    if (showMoveDialog) {
+        FolderPickerDialog(
+            folders = folders,
+            currentFolderId = "", 
+            onSelectFolder = { folderId, _ ->
+                coroutineScope.launch {
+                    if (selectedFileIds.isNotEmpty()) {
+                        apiBulkAction(serverUrl, deviceId, deviceKey, "move", selectedFileIds.toList(), folderId)
+                    }
+                    onRefresh()
+                    onSelectionModeChange(false)
+                    selectedFileIds.clear()
+                }
+                showMoveDialog = false
+            },
+            onCreateFolder = { folderName ->
+            },
+            onDismiss = { showMoveDialog = false }
+        )
+    }
+    
+    if (selectedFolderForMenu != null) {
+        val f = selectedFolderForMenu!!
+        AlertDialog(
+            onDismissRequest = { selectedFolderForMenu = null },
+            containerColor = Color(0xFF1C1C28),
+            title = { Text(f.name, color = Color.White) },
+            text = {
+                Column {
+                    DropdownMenuItem(
+                        text = { Text("Open Folder", color = Color.White) },
+                        leadingIcon = { Icon(Icons.Default.FolderOpen, contentDescription = null, tint = Color(0xFFFBBF24)) },
+                        onClick = {
+                            onSelectFilterFolder(f.id)
+                            selectedFolderForMenu = null
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Delete Folder", color = Color.White) },
+                        leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = Color.Red) },
+                        onClick = {
+                            folderToDelete = f
+                            selectedFolderForMenu = null
+                        }
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { selectedFolderForMenu = null }) {
+                    Text("Close", color = Color(0xFFA855F7))
+                }
+            }
+        )
+    }
+
+    if (folderToDelete != null) {
+        val f = folderToDelete!!
+        AlertDialog(
+            onDismissRequest = { folderToDelete = null },
+            containerColor = Color(0xFF14141C),
+            title = { Text("Delete Folder", color = Color.White) },
+            text = { Text("Are you sure you want to delete '${f.name}'? Files inside might be orphaned.", color = Color.White) },
+            confirmButton = {
+                TextButton(onClick = {
+                    coroutineScope.launch {
+                        withContext(Dispatchers.IO) {
+                            try {
+                                val req = okhttp3.Request.Builder()
+                                    .url("${serverUrl.trimEnd('/')}/api/v1/files/folders/${f.id}")
+                                    .delete()
+                                    .addHeader("x-device-id", deviceId)
+                                    .addHeader("x-device-key", deviceKey)
+                                    .build()
+                                val client = okhttp3.OkHttpClient()
+                                client.newCall(req).execute().close()
+                            } catch (e: Exception) {
+                                e.printStackTrace()
+                            }
+                        }
+                        onRefresh()
+                    }
+                    folderToDelete = null
+                }) {
+                    Text("Delete", color = Color.Red)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { folderToDelete = null }) {
+                    Text("Cancel", color = Color(0xFF94A3B8))
+                }
+            }
+        )
     }
 }
 
