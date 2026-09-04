@@ -28,6 +28,7 @@ export const VaultModal: React.FC<Props> = ({ isOpen, onClose, onVaultUnlocked, 
       setError(null);
       const salt = saltHex || '0123456789abcdef0123456789abcdef';
       const derivedKey = await VaultCryptoService.deriveKeyFromPassphrase(passphrase, salt);
+      await VaultCryptoService.exportKeyToSession(derivedKey);
       onVaultUnlocked(derivedKey);
       onClose();
     } catch (err: any) {

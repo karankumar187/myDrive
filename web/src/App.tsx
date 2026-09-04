@@ -23,6 +23,7 @@ import { DeviceManagerView } from './components/DeviceManagerView.js';
 import { TrashBinView } from './components/TrashBinView.js';
 import { IPhoneShortcutModal } from './components/IPhoneShortcutModal.js';
 import { VaultModal } from './components/VaultModal.js';
+import { VaultCryptoService } from './services/vault-crypto.js';
 
 type Tab = 'dashboard' | 'folders' | 'gallery' | 'devices' | 'trash';
 
@@ -84,6 +85,11 @@ export const App: React.FC = () => {
     } else {
       setIsCheckingAuth(false);
     }
+
+    // Restore Vault key from session if previously unlocked
+    VaultCryptoService.restoreKeyFromSession().then((key) => {
+      if (key) setVaultKey(key);
+    });
   }, []);
 
   // Socket.io Real-time connection
@@ -392,19 +398,29 @@ export const App: React.FC = () => {
           <div className="flex items-center space-x-3">
             {/* Vault Unlock Pill */}
             <button
-              onClick={() => setIsVaultModalOpen(true)}
-              className={`hidden sm:flex items-center space-x-1.5 px-3 py-1.5 rounded-full text-xs font-medium border transition ${
+              onClick={() => {
+                if (vaultKey) {
+                  if (confirm('Lock Zero-Knowledge Vault? Encrypted files will be protected and require your Master Passphrase to view.')) {
+                    VaultCryptoService.clearSessionKey();
+                    setVaultKey(null);
+                  }
+                } else {
+                  setIsVaultModalOpen(true);
+                }
+              }}
+              className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-full text-xs font-medium border transition active:scale-95 ${
                 vaultKey
-                  ? 'bg-purple-950/40 border-purple-500/50 text-purple-300 shadow-glow-purple'
-                  : 'bg-[#141418] border-[#222229] text-zinc-400 hover:text-white'
+                  ? 'bg-purple-950/50 border-purple-500/60 text-purple-300 shadow-glow-purple hover:bg-purple-900/40'
+                  : 'bg-[#141418] border-[#222229] text-zinc-400 hover:text-white hover:border-purple-500/30'
               }`}
+              title={vaultKey ? 'Vault unlocked - Click to lock' : 'Click to unlock Zero-Knowledge Vault'}
             >
               {vaultKey ? (
                 <ShieldCheck className="w-3.5 h-3.5 text-purple-400" />
               ) : (
                 <Shield className="w-3.5 h-3.5 text-zinc-500" />
               )}
-              <span>{vaultKey ? 'Vault Active' : 'Unlock Vault'}</span>
+              <span className="hidden xs:inline">{vaultKey ? 'Vault Active' : 'Unlock Vault'}</span>
             </button>
 
             {/* Profile Avatar with Dropdown */}
@@ -483,6 +499,7 @@ export const App: React.FC = () => {
             onSelectFolder={(id) => setCurrentFolderId(id)}
             onRefresh={loadDashboardData}
             vaultKey={vaultKey}
+            onOpenVault={() => setIsVaultModalOpen(true)}
           />
         )}
 
@@ -490,6 +507,7 @@ export const App: React.FC = () => {
           <GalleryTimelineView
             media={media}
             vaultKey={vaultKey}
+            onOpenVault={() => setIsVaultModalOpen(true)}
           />
         )}
 

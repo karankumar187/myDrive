@@ -16,6 +16,7 @@ import {
   Clock,
   X,
   Loader2,
+  Lock,
 } from 'lucide-react';
 import { api } from '../services/api.js';
 import { VaultCryptoService } from '../services/vault-crypto.js';
@@ -30,6 +31,7 @@ interface Props {
   onSelectFolder: (id: string | null) => void;
   onRefresh: () => void;
   vaultKey: CryptoKey | null;
+  onOpenVault?: () => void;
 }
 
 export const FolderExplorerView: React.FC<Props> = ({
@@ -42,6 +44,7 @@ export const FolderExplorerView: React.FC<Props> = ({
   onSelectFolder,
   onRefresh,
   vaultKey,
+  onOpenVault,
 }) => {
   const [uploading, setUploading] = useState(false);
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
@@ -173,6 +176,20 @@ export const FolderExplorerView: React.FC<Props> = ({
   const uploadFiles = async (selectedFiles: FileList | File[]) => {
     if (!selectedFiles || selectedFiles.length === 0) return;
 
+    // If Vault is locked, ask user if they'd like to unlock to encrypt first
+    if (!vaultKey) {
+      const wantToUnlock = confirm(
+        '🔒 Zero-Knowledge Vault is currently locked!\n\n' +
+        '• Click "OK" to unlock your Vault with your Master Passphrase and encrypt files with AES-256-GCM before uploading to Google Drive.\n\n' +
+        '• Click "Cancel" to upload files in standard unencrypted format.'
+      );
+      if (wantToUnlock) {
+        onOpenVault?.();
+        if (fileInputRef.current) fileInputRef.current.value = '';
+        return;
+      }
+    }
+
     setUploading(true);
     setUploadMessage(null);
 
@@ -198,12 +215,12 @@ export const FolderExplorerView: React.FC<Props> = ({
           ivHex = encrypted.ivHex;
         }
 
-        // 3. Initiate Upload
+        // 3. Initiate Upload (sizeBytes must match actual upload payload byte length)
         setUploadMessage(`Allocating storage pool for ${file.name}...`);
         const initResult = await api.initiateUpload({
           filename: file.name,
           mimeType: file.type || 'application/octet-stream',
-          sizeBytes: file.size,
+          sizeBytes: isEncrypted ? uploadPayloadBuffer.byteLength : file.size,
           contentHash,
           folderId: currentFolderId,
           isEncrypted,
@@ -470,11 +487,24 @@ export const FolderExplorerView: React.FC<Props> = ({
 
         {/* Right Actions */}
         <div className="flex items-center space-x-2 flex-shrink-0">
-          {vaultKey && (
-            <span className="inline-flex items-center px-2.5 py-1 text-[11px] font-semibold text-purple-300 bg-purple-950/40 border border-purple-800/40 rounded-full shadow-glow-purple">
+          {vaultKey ? (
+            <button
+              onClick={onOpenVault}
+              className="inline-flex items-center px-2.5 py-1 text-[11px] font-semibold text-purple-300 bg-purple-950/40 border border-purple-800/50 hover:bg-purple-900/40 rounded-full shadow-glow-purple transition active:scale-95"
+              title="Zero-Knowledge Encryption is Active (AES-256-GCM) - Click to manage"
+            >
               <ShieldCheck className="w-3 h-3 mr-1 text-purple-400" />
-              E2EE Active
-            </span>
+              <span>E2EE Active</span>
+            </button>
+          ) : (
+            <button
+              onClick={onOpenVault}
+              className="inline-flex items-center px-2.5 py-1 text-[11px] font-semibold text-zinc-400 hover:text-white bg-[#181820] hover:bg-[#22222b] border border-[#272736] hover:border-purple-500/40 rounded-full transition active:scale-95"
+              title="Vault is locked - Click to unlock and enable Zero-Knowledge Encryption"
+            >
+              <Lock className="w-3 h-3 mr-1 text-amber-400" />
+              <span>Unlock Vault</span>
+            </button>
           )}
 
           <button

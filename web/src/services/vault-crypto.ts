@@ -31,9 +31,48 @@ export class VaultCryptoService {
       },
       passphraseKey,
       { name: 'AES-GCM', length: 256 },
-      false,
+      true, // Allow exporting to sessionStorage for browser session persistence
       ['encrypt', 'decrypt']
     );
+  }
+
+  /**
+   * Persists derived key in browser sessionStorage so page refreshes don't re-lock vault.
+   */
+  static async exportKeyToSession(key: CryptoKey): Promise<void> {
+    try {
+      const jwk = await window.crypto.subtle.exportKey('jwk', key);
+      sessionStorage.setItem('drive_vault_jwk', JSON.stringify(jwk));
+    } catch (e) {
+      console.warn('Could not save vault key to session:', e);
+    }
+  }
+
+  /**
+   * Restores derived key from browser sessionStorage if available.
+   */
+  static async restoreKeyFromSession(): Promise<CryptoKey | null> {
+    try {
+      const stored = sessionStorage.getItem('drive_vault_jwk');
+      if (!stored) return null;
+      const jwk = JSON.parse(stored);
+      return await window.crypto.subtle.importKey(
+        'jwk',
+        jwk,
+        { name: 'AES-GCM', length: 256 },
+        true,
+        ['encrypt', 'decrypt']
+      );
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Clears derived key from sessionStorage (locks vault).
+   */
+  static clearSessionKey(): void {
+    sessionStorage.removeItem('drive_vault_jwk');
   }
 
   /**

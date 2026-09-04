@@ -6,6 +6,7 @@ import { VaultCryptoService } from '../services/vault-crypto.js';
 interface Props {
   media: FileItem[];
   vaultKey: CryptoKey | null;
+  onOpenVault?: () => void;
 }
 
 interface LoadedMediaState {
@@ -22,7 +23,7 @@ const getStreamUrl = (fileId: string) => {
   return `${rawApiUrl}/api/v1/files/${fileId}/stream?token=${encodeURIComponent(token)}`;
 };
 
-export const GalleryTimelineView: React.FC<Props> = ({ media, vaultKey }) => {
+export const GalleryTimelineView: React.FC<Props> = ({ media, vaultKey, onOpenVault }) => {
   const [selectedMedia, setSelectedMedia] = useState<LoadedMediaState | null>(null);
 
   // Group media by Month & Year
@@ -45,15 +46,23 @@ export const GalleryTimelineView: React.FC<Props> = ({ media, vaultKey }) => {
           <p className="text-xs text-zinc-400">{media.length} photos and videos across all pooled accounts</p>
         </div>
         {vaultKey ? (
-          <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-purple-950/40 text-purple-300 border border-purple-800/40 shadow-glow-purple">
+          <button
+            onClick={onOpenVault}
+            className="inline-flex items-center px-3 py-1.5 rounded-full text-xs font-semibold bg-purple-950/40 hover:bg-purple-900/40 text-purple-300 border border-purple-800/40 shadow-glow-purple transition active:scale-95"
+            title="Zero-Knowledge Encryption Active - Click to manage"
+          >
             <ShieldCheck className="w-3.5 h-3.5 mr-1.5 text-purple-400" />
             Zero-Knowledge Decryption Active
-          </span>
+          </button>
         ) : (
-          <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[#181820] text-zinc-400 border border-[#272736]">
+          <button
+            onClick={onOpenVault}
+            className="inline-flex items-center px-3 py-1.5 rounded-full text-xs font-semibold bg-[#181820] hover:bg-[#22222b] text-zinc-300 border border-[#272736] hover:border-purple-500/40 transition active:scale-95"
+            title="Vault is locked - Click to enter Master Passphrase"
+          >
             <Lock className="w-3.5 h-3.5 mr-1.5 text-amber-400" />
             Unlock Vault to View E2EE Media
-          </span>
+          </button>
         )}
       </div>
 
