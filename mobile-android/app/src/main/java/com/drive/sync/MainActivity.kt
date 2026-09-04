@@ -335,6 +335,324 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+// ══════════════════════════════════════════════════════════════════
+// Device Setup / Credentials Screen  (shown on first launch)
+// ══════════════════════════════════════════════════════════════════
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun DeviceSetupScreen(
+    prefs: android.content.SharedPreferences,
+    httpClient: OkHttpClient,
+    onSetupComplete: () -> Unit
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
+    var serverUrl by remember { mutableStateOf("https://mydrive-sti3.onrender.com") }
+    var deviceId by remember { mutableStateOf("") }
+    var deviceKey by remember { mutableStateOf("") }
+
+    var isConnecting by remember { mutableStateOf(false) }
+    var errorMsg by remember { mutableStateOf<String?>(null) }
+    var showKey by remember { mutableStateOf(false) }
+
+    fun connectAndSave() {
+        if (deviceId.isBlank() || deviceKey.isBlank()) {
+            errorMsg = "Device ID and Device Key are required."
+            return
+        }
+        if (serverUrl.isBlank()) {
+            errorMsg = "Server URL is required."
+            return
+        }
+        errorMsg = null
+        isConnecting = true
+        scope.launch(Dispatchers.IO) {
+            try {
+                val base = serverUrl.trimEnd('/')
+                val req = Request.Builder()
+                    .url("$base/api/v1/storage/summary")
+                    .addHeader("x-device-id", deviceId.trim())
+                    .addHeader("x-device-key", deviceKey.trim())
+                    .build()
+                val res = httpClient.newCall(req).execute()
+                withContext(Dispatchers.Main) {
+                    isConnecting = false
+                    if (res.isSuccessful) {
+                        // Save credentials
+                        prefs.edit().apply {
+                            putString("server_url", serverUrl.trimEnd('/'))
+                            putString("device_id", deviceId.trim())
+                            putString("device_key", deviceKey.trim())
+                            apply()
+                        }
+                        Toast.makeText(context, "Connected! Welcome to myDrive 🎉", Toast.LENGTH_SHORT).show()
+                        onSetupComplete()
+                    } else {
+                        errorMsg = "Connection failed (HTTP ${res.code}). Check your credentials."
+                    }
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    isConnecting = false
+                    errorMsg = "Could not reach server: ${e.message}"
+                }
+            }
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(
+                Brush.verticalGradient(
+                    colors = listOf(Color(0xFF0D0D11), Color(0xFF1A0A2E), Color(0xFF0D0D11))
+                )
+            )
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 28.dp, vertical = 56.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            // ── Logo ────────────────────────────────────────────────────
+            Box(
+                modifier = Modifier
+                    .size(80.dp)
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(Color(0xFF1E1E28)),
+                contentAlignment = Alignment.Center
+            ) {
+                Image(
+                    painter = painterResource(R.drawable.ic_mydrive_logo),
+                    contentDescription = "myDrive",
+                    modifier = Modifier.size(52.dp)
+                )
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            // ── Headline ────────────────────────────────────────────────
+            Text(
+                text = buildAnnotatedString {
+                    append("my")
+                    withStyle(style = SpanStyle(color = Color(0xFFC084FC))) { append("Drive") }
+                },
+                fontSize = 30.sp,
+                fontWeight = FontWeight.ExtraBold,
+                color = Color.White
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = "Connect your device to get started",
+                fontSize = 14.sp,
+                color = Color(0xFF9CA3AF),
+                textAlign = TextAlign.Center
+            )
+
+            Spacer(modifier = Modifier.height(40.dp))
+
+            // ── Card ────────────────────────────────────────────────────
+            Surface(
+                shape = RoundedCornerShape(20.dp),
+                color = Color(0xFF13131A),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(24.dp)) {
+
+                    Text(
+                        "Device Credentials",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        "Enter the credentials generated by your myDrive server.",
+                        fontSize = 12.sp,
+                        color = Color(0xFF71717A),
+                        lineHeight = 18.sp
+                    )
+
+                    Spacer(modifier = Modifier.height(20.dp))
+
+                    // Server URL
+                    Text("Server URL", fontSize = 12.sp, color = Color(0xFFA1A1AA), fontWeight = FontWeight.Medium)
+                    Spacer(modifier = Modifier.height(6.dp))
+                    OutlinedTextField(
+                        value = serverUrl,
+                        onValueChange = { serverUrl = it; errorMsg = null },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        placeholder = { Text("https://your-server.com", color = Color(0xFF52525B), fontSize = 14.sp) },
+                        leadingIcon = { Icon(Icons.Default.Cloud, contentDescription = null, tint = Color(0xFF9333EA)) },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = Color(0xFF9333EA),
+                            unfocusedBorderColor = Color(0xFF27272A),
+                            focusedTextColor = Color.White,
+                            unfocusedTextColor = Color(0xFFD4D4D8),
+                            cursorColor = Color(0xFFA855F7),
+                            focusedContainerColor = Color(0xFF1E1E28),
+                            unfocusedContainerColor = Color(0xFF1A1A22)
+                        ),
+                        shape = RoundedCornerShape(12.dp)
+                    )
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // Device ID
+                    Text("Device ID", fontSize = 12.sp, color = Color(0xFFA1A1AA), fontWeight = FontWeight.Medium)
+                    Spacer(modifier = Modifier.height(6.dp))
+                    OutlinedTextField(
+                        value = deviceId,
+                        onValueChange = { deviceId = it; errorMsg = null },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        placeholder = { Text("your-device-id", color = Color(0xFF52525B), fontSize = 14.sp) },
+                        leadingIcon = { Icon(Icons.Default.PhoneAndroid, contentDescription = null, tint = Color(0xFF9333EA)) },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = Color(0xFF9333EA),
+                            unfocusedBorderColor = Color(0xFF27272A),
+                            focusedTextColor = Color.White,
+                            unfocusedTextColor = Color(0xFFD4D4D8),
+                            cursorColor = Color(0xFFA855F7),
+                            focusedContainerColor = Color(0xFF1E1E28),
+                            unfocusedContainerColor = Color(0xFF1A1A22)
+                        ),
+                        shape = RoundedCornerShape(12.dp)
+                    )
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // Device Key
+                    Text("Device Key", fontSize = 12.sp, color = Color(0xFFA1A1AA), fontWeight = FontWeight.Medium)
+                    Spacer(modifier = Modifier.height(6.dp))
+                    OutlinedTextField(
+                        value = deviceKey,
+                        onValueChange = { deviceKey = it; errorMsg = null },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        placeholder = { Text("your-device-key", color = Color(0xFF52525B), fontSize = 14.sp) },
+                        leadingIcon = { Icon(Icons.Default.VpnKey, contentDescription = null, tint = Color(0xFF9333EA)) },
+                        trailingIcon = {
+                            IconButton(onClick = { showKey = !showKey }) {
+                                Icon(
+                                    if (showKey) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                    contentDescription = if (showKey) "Hide key" else "Show key",
+                                    tint = Color(0xFF71717A)
+                                )
+                            }
+                        },
+                        visualTransformation = if (showKey)
+                            androidx.compose.ui.text.input.VisualTransformation.None
+                        else
+                            androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = Color(0xFF9333EA),
+                            unfocusedBorderColor = Color(0xFF27272A),
+                            focusedTextColor = Color.White,
+                            unfocusedTextColor = Color(0xFFD4D4D8),
+                            cursorColor = Color(0xFFA855F7),
+                            focusedContainerColor = Color(0xFF1E1E28),
+                            unfocusedContainerColor = Color(0xFF1A1A22)
+                        ),
+                        shape = RoundedCornerShape(12.dp)
+                    )
+
+                    // Error message
+                    if (errorMsg != null) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = Color(0xFF2D1010)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    Icons.Default.ErrorOutline,
+                                    contentDescription = null,
+                                    tint = Color(0xFFEF4444),
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    errorMsg!!,
+                                    fontSize = 12.sp,
+                                    color = Color(0xFFEF4444),
+                                    lineHeight = 16.sp
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(24.dp))
+
+                    // Connect button
+                    Button(
+                        onClick = { connectAndSave() },
+                        enabled = !isConnecting,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(52.dp),
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFF9333EA),
+                            disabledContainerColor = Color(0xFF3B1F6B)
+                        )
+                    ) {
+                        if (isConnecting) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                color = Color.White,
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Text("Connecting...", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                        } else {
+                            Icon(Icons.Default.Link, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Connect & Save", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // ── Help hint ────────────────────────────────────────────────
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = Color(0xFF1E1E28),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.padding(16.dp),
+                    verticalAlignment = Alignment.Top
+                ) {
+                    Icon(
+                        Icons.Default.Info,
+                        contentDescription = null,
+                        tint = Color(0xFF7C3AED),
+                        modifier = Modifier.size(16.dp).padding(top = 1.dp)
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        "Find your Device ID and Device Key in the myDrive web app under Settings → Devices → Register New Device.",
+                        fontSize = 12.sp,
+                        color = Color(0xFF71717A),
+                        lineHeight = 18.sp
+                    )
+                }
+            }
+        }
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainAppScreen(
@@ -344,6 +662,26 @@ fun MainAppScreen(
     httpClient: OkHttpClient
 ) {
     val context = LocalContext.current
+
+    // ── Setup gate ──────────────────────────────────────────────────────────
+    // isSetupComplete is true only when both device_id AND device_key are persisted.
+    var isSetupComplete by remember {
+        mutableStateOf(
+            prefs.getString("device_id", "").orEmpty().isNotBlank() &&
+            prefs.getString("device_key", "").orEmpty().isNotBlank()
+        )
+    }
+
+    if (!isSetupComplete) {
+        DeviceSetupScreen(
+            prefs = prefs,
+            httpClient = httpClient,
+            onSetupComplete = { isSetupComplete = true }
+        )
+        return
+    }
+    // ────────────────────────────────────────────────────────────────────────
+
     val requiredPermissions = remember {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             arrayOf(
