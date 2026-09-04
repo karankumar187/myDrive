@@ -260,6 +260,10 @@ export class FileController {
           ? accountMap.get(latestStorageId)
           : 'Google Drive Account';
         obj.status = 'safely_backed_up';
+        // Strip short-lived Google CDN links from metadata.thumbnail so client always routes through /thumbnail
+        if (obj.metadata?.thumbnail && obj.metadata.thumbnail.startsWith('http')) {
+          delete obj.metadata.thumbnail;
+        }
         return obj;
       });
 
@@ -355,17 +359,26 @@ export class FileController {
 
       // If file has a direct thumbnail link stored (URL or base64 data URI)
       if (file.metadata?.thumbnail) {
-        if (file.metadata.thumbnail.startsWith('http')) {
-          res.setHeader('Cache-Control', 'public, max-age=604800, immutable');
-          res.redirect(301, file.metadata.thumbnail);
-          return;
-        } else if (file.metadata.thumbnail.startsWith('data:image/')) {
+        if (file.metadata.thumbnail.startsWith('data:image/')) {
           const matches = file.metadata.thumbnail.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
           if (matches && matches.length === 3) {
             res.setHeader('Content-Type', matches[1]);
             res.setHeader('Cache-Control', 'public, max-age=86400');
             res.send(Buffer.from(matches[2], 'base64'));
             return;
+          }
+        } else if (file.metadata.thumbnail.startsWith('http')) {
+          try {
+            const thumbRes = await fetch(file.metadata.thumbnail);
+            if (thumbRes.ok) {
+              res.setHeader('Content-Type', thumbRes.headers.get('content-type') || 'image/jpeg');
+              res.setHeader('Cache-Control', 'public, max-age=86400');
+              const buffer = Buffer.from(await thumbRes.arrayBuffer());
+              res.send(buffer);
+              return;
+            }
+          } catch (_e) {
+            // Stored Google URL expired, fall through to refresh via Google Drive API below
           }
         }
       }

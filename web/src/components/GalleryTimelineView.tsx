@@ -944,43 +944,37 @@ const GalleryGridTile: React.FC<{
   onClick: () => void;
 }> = React.memo(({ item, vaultKey, isSelected, isSelectionMode, onToggleSelect, onToggleFavorite, onClick }) => {
   const isVideo = item.mimeType.startsWith('video/');
-  const [thumbUrl, setThumbUrl] = useState<string | null>(() => {
-    return item.metadata?.thumbnail || mediaCache.getThumbnail(item._id) || mediaCache.get(item._id) || null;
-  });
-  const [loading, setLoading] = useState(!thumbUrl);
   const isEncrypted = item.versions?.[item.versions.length - 1]?.isEncrypted || false;
+  const [loadError, setLoadError] = useState(false);
+
+  // If local base64 thumbnail exists, use it. Otherwise, use fast /thumbnail endpoint for non-encrypted files.
+  const initialThumb = (item.metadata?.thumbnail && item.metadata.thumbnail.startsWith('data:image/'))
+    ? item.metadata.thumbnail
+    : mediaCache.getThumbnail(item._id) || mediaCache.get(item._id) || (!isEncrypted ? api.getThumbnailUrl(item._id) : null);
+
+  const [thumbUrl, setThumbUrl] = useState<string | null>(initialThumb);
+  const [loading, setLoading] = useState(!initialThumb);
 
   useEffect(() => {
-    if (thumbUrl) {
+    setLoadError(false);
+    if (!isEncrypted) {
+      setThumbUrl(api.getThumbnailUrl(item._id));
       setLoading(false);
       return;
     }
 
-    let active = true;
-
-    const loadThumb = async () => {
-      // 1. Check local cache
-      const cached = mediaCache.getThumbnail(item._id) || mediaCache.get(item._id);
+    // Encrypted items require client-side decryption
+    if (isEncrypted && vaultKey) {
+      let active = true;
+      const cached = mediaCache.get(item._id);
       if (cached) {
-        if (active) {
-          setThumbUrl(cached);
-          setLoading(false);
-        }
+        setThumbUrl(cached);
+        setLoading(false);
         return;
       }
 
-      // 2. If not encrypted, use fast thumbnail endpoint
-      if (!isEncrypted) {
-        const url = api.getThumbnailUrl(item._id);
-        if (active) {
-          setThumbUrl(url);
-          setLoading(false);
-        }
-        return;
-      }
-
-      // 3. If encrypted and vaultKey available, decrypt preview
-      if (isEncrypted && vaultKey) {
+      setLoading(true);
+      const decryptThumb = async () => {
         try {
           const version = item.versions?.[item.versions.length - 1];
           if (!version?.iv) return;
@@ -998,24 +992,26 @@ const GalleryGridTile: React.FC<{
         } catch (err) {
           if (active) setLoading(false);
         }
-      } else {
-        if (active) setLoading(false);
-      }
-    };
+      };
 
-    loadThumb();
-    return () => {
-      active = false;
-    };
-  }, [item._id, item.mimeType, item.versions, isEncrypted, vaultKey, thumbUrl]);
+      decryptThumb();
+      return () => {
+        active = false;
+      };
+    } else if (isEncrypted && !vaultKey) {
+      setThumbUrl(null);
+      setLoading(false);
+    }
+  }, [item._id, isEncrypted, vaultKey]);
 
   return (
     <div
       onClick={onClick}
-      className={`group relative aspect-square bg-[#121217] border rounded-xl sm:rounded-2xl overflow-hidden cursor-pointer transition-all duration-150 select-none ${
+      style={{ contentVisibility: 'auto', containIntrinsicSize: '160px' }}
+      className={`group relative aspect-square bg-[#121217] border rounded-xl sm:rounded-2xl overflow-hidden cursor-pointer transition-colors duration-150 select-none ${
         isSelected
           ? 'border-purple-500 ring-2 ring-purple-500/80 scale-[0.98]'
-          : 'border-[#202026] hover:border-purple-500/40 hover:scale-[1.01]'
+          : 'border-[#202026] hover:border-purple-500/40'
       }`}
     >
       {/* Media display */}
@@ -1028,18 +1024,28 @@ const GalleryGridTile: React.FC<{
           <Lock className="w-5 h-5 text-amber-400 mb-1" />
           <span className="text-[9px] text-zinc-400">Locked</span>
         </div>
-      ) : thumbUrl ? (
+      ) : thumbUrl && !loadError ? (
         <img
           src={thumbUrl}
           alt={item.filename}
           className="w-full h-full object-cover"
           loading="lazy"
           decoding="async"
+          onError={() => {
+            if (thumbUrl !== getStreamUrl(item._id) && !isEncrypted) {
+              setThumbUrl(getStreamUrl(item._id));
+            } else {
+              setLoadError(true);
+            }
+          }}
         />
       ) : (
-        <div className="w-full h-full flex items-center justify-center bg-[#141419]">
+        <div className="w-full h-full flex flex-col items-center justify-center bg-[#141419] p-2">
           {isVideo ? (
-            <Film className="w-6 h-6 text-purple-400" />
+            <div className="flex flex-col items-center space-y-1">
+              <Film className="w-7 h-7 text-purple-400" />
+              <span className="text-[9px] text-zinc-500 font-mono">Video</span>
+            </div>
           ) : (
             <ImageIcon className="w-6 h-6 text-zinc-600" />
           )}
@@ -1135,6 +1141,8 @@ const FullScreenViewer: React.FC<{
   // Decrypted or stream URL
   const [fullUrl, setFullUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [videoError, setVideoError] = useState(false);
+  const [imgError, setImgError] = useState(false);
 
   // Touch gesture handling for mobile swipe left/right/down
   const touchStartRef = useRef<{ x: number; y: number } | null>(null);
@@ -1165,6 +1173,8 @@ const FullScreenViewer: React.FC<{
     let active = true;
     setScale(1);
     setLoading(true);
+    setVideoError(false);
+    setImgError(false);
 
     const version = item.versions?.[item.versions.length - 1];
     const isEncrypted = !!version?.isEncrypted;
@@ -1413,19 +1423,53 @@ const FullScreenViewer: React.FC<{
             <Loader2 className="w-10 h-10 animate-spin" />
             <span className="text-xs text-zinc-400">Loading full resolution...</span>
           </div>
-        ) : isVideo && fullUrl ? (
+        ) : isVideo && fullUrl && !videoError ? (
           <video
             src={fullUrl}
             controls
             autoPlay
             playsInline
+            onLoadedData={() => setLoading(false)}
+            onError={() => {
+              setLoading(false);
+              setVideoError(true);
+            }}
             onClick={(e) => e.stopPropagation()}
             className="max-h-[82vh] max-w-full rounded-xl shadow-2xl"
           />
-        ) : fullUrl ? (
+        ) : isVideo && videoError ? (
+          <div className="p-8 text-center bg-[#16161d] border border-purple-500/30 rounded-2xl max-w-md space-y-4">
+            <Film className="w-12 h-12 mx-auto text-purple-400" />
+            <div>
+              <h4 className="text-sm font-bold text-white">Video Playback</h4>
+              <p className="text-xs text-zinc-400 mt-1">This video format or codec cannot be played inline in your current browser.</p>
+            </div>
+            <div className="flex items-center justify-center space-x-3">
+              <a
+                href={getStreamUrl(item._id)}
+                download={item.filename}
+                className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white text-xs font-semibold rounded-lg flex items-center space-x-1.5 transition"
+              >
+                <Download className="w-4 h-4" />
+                <span>Download Video</span>
+              </a>
+              <button
+                onClick={() => window.open(getStreamUrl(item._id), '_blank')}
+                className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-semibold rounded-lg transition"
+              >
+                Open Stream in New Tab
+              </button>
+            </div>
+          </div>
+        ) : fullUrl && !imgError ? (
           <img
             src={fullUrl}
             alt={item.filename}
+            onLoad={() => setLoading(false)}
+            onError={() => {
+              setLoading(false);
+              setImgError(true);
+            }}
             onDoubleClick={(e) => {
               e.stopPropagation();
               setScale((s) => (s === 1 ? 2 : 1));
@@ -1433,6 +1477,20 @@ const FullScreenViewer: React.FC<{
             style={{ transform: `scale(${scale})`, transition: 'transform 0.2s ease-out' }}
             className="max-h-[82vh] max-w-full object-contain rounded-xl shadow-2xl cursor-zoom-in"
           />
+        ) : imgError ? (
+          <div className="p-8 text-center bg-[#16161d] border border-red-500/30 rounded-2xl max-w-md space-y-3">
+            <ImageIcon className="w-8 h-8 mx-auto text-red-400" />
+            <h4 className="text-sm font-bold text-white">Image Preview Unavailable</h4>
+            <p className="text-xs text-zinc-400">The high-resolution media could not be loaded directly.</p>
+            <a
+              href={getStreamUrl(item._id)}
+              download={item.filename}
+              className="mt-2 inline-flex items-center space-x-1.5 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white text-xs font-semibold rounded-lg"
+            >
+              <Download className="w-4 h-4" />
+              <span>Download File</span>
+            </a>
+          </div>
         ) : (
           <div className="p-8 text-center bg-[#16161d] border border-red-500/30 rounded-2xl max-w-md space-y-2">
             <Lock className="w-8 h-8 mx-auto text-amber-400" />
