@@ -98,6 +98,11 @@ export const FolderExplorerView: React.FC<Props> = ({
   const [renameValue, setRenameValue] = useState('');
   const [renaming, setRenaming] = useState(false);
 
+  // Rename folder modal state
+  const [renameFolder, setRenameFolder] = useState<FolderItem | null>(null);
+  const [renameFolderName, setRenameFolderName] = useState('');
+  const [renamingFolder, setRenamingFolder] = useState(false);
+
   // Move to folder modal state
   const [moveFile, setMoveFile] = useState<FileItem | null>(null);
   const [moveFolders, setMoveFolders] = useState<FolderItem[]>([]);
@@ -513,6 +518,22 @@ export const FolderExplorerView: React.FC<Props> = ({
     }
   };
 
+  const handleRenameFolder = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!renameFolder || !renameFolderName.trim()) return;
+    try {
+      setRenamingFolder(true);
+      await api.renameFolder(renameFolder._id, renameFolderName.trim());
+      setRenameFolder(null);
+      setRenameFolderName('');
+      onRefresh();
+    } catch (err: any) {
+      alert(err.message || 'Failed to rename folder');
+    } finally {
+      setRenamingFolder(false);
+    }
+  };
+
   const handleDeleteFolder = async (folderId: string, folderName: string) => {
     if (!confirm(`Are you sure you want to move folder "${folderName}" and all its files to Trash?`)) return;
     try {
@@ -662,6 +683,17 @@ export const FolderExplorerView: React.FC<Props> = ({
             >
               <FolderOpen className="w-3.5 h-3.5 text-purple-400" />
               <span>Open Folder</span>
+            </button>
+            <button
+              onClick={() => {
+                setContextMenuFolderId(null);
+                setRenameFolder(folder);
+                setRenameFolderName(folder.name);
+              }}
+              className="w-full flex items-center space-x-2.5 px-3.5 py-2 text-xs text-zinc-300 hover:bg-[#22222b] hover:text-white transition"
+            >
+              <Pencil className="w-3.5 h-3.5 text-amber-400" />
+              <span>Rename Folder</span>
             </button>
             <div className="border-t border-[#222230] my-1" />
             <button
@@ -869,14 +901,27 @@ export const FolderExplorerView: React.FC<Props> = ({
         </div>
 
         {currentFolderId && currentFolder && (
-          <button
-            onClick={() => handleDeleteFolder(currentFolder._id, currentFolder.name)}
-            className="flex items-center space-x-1.5 px-3 py-1 rounded-full text-xs font-semibold text-zinc-400 hover:text-red-400 bg-[#16161c] hover:bg-red-950/30 border border-[#272733] hover:border-red-800/40 transition active:scale-95"
-            title="Move this folder and its files to Trash"
-          >
-            <Trash2 className="w-3.5 h-3.5 text-red-400" />
-            <span>Delete Folder</span>
-          </button>
+          <div className="flex items-center space-x-2">
+            <button
+              onClick={() => {
+                setRenameFolder(currentFolder);
+                setRenameFolderName(currentFolder.name);
+              }}
+              className="flex items-center space-x-1.5 px-3 py-1 rounded-full text-xs font-semibold text-zinc-400 hover:text-amber-400 bg-[#16161c] hover:bg-amber-950/30 border border-[#272733] hover:border-amber-800/40 transition active:scale-95"
+              title="Rename this folder"
+            >
+              <Pencil className="w-3.5 h-3.5 text-amber-400" />
+              <span>Rename</span>
+            </button>
+            <button
+              onClick={() => handleDeleteFolder(currentFolder._id, currentFolder.name)}
+              className="flex items-center space-x-1.5 px-3 py-1 rounded-full text-xs font-semibold text-zinc-400 hover:text-red-400 bg-[#16161c] hover:bg-red-950/30 border border-[#272733] hover:border-red-800/40 transition active:scale-95"
+              title="Move this folder and its files to Trash"
+            >
+              <Trash2 className="w-3.5 h-3.5 text-red-400" />
+              <span>Delete Folder</span>
+            </button>
+          </div>
         )}
       </div>
 
@@ -1066,6 +1111,46 @@ export const FolderExplorerView: React.FC<Props> = ({
               <div className="flex justify-end space-x-2 pt-1">
                 <button type="button" onClick={() => setShowFolderModal(false)} className="px-4 py-2 text-xs font-semibold text-zinc-400 hover:bg-[#18181f] rounded-full transition">Cancel</button>
                 <button type="submit" className="px-5 py-2 text-xs font-bold text-white bg-gradient-to-r from-purple-600 to-violet-500 rounded-full shadow-glow-purple hover:from-purple-500 hover:to-violet-400 transition">Create</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ======== RENAME FOLDER MODAL ======== */}
+      {renameFolder && (
+        <div className="fixed inset-0 bg-black/75 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+          <div className="bg-[#111114] border border-[#222227] rounded-3xl p-6 max-w-sm w-full shadow-2xl space-y-4">
+            <div className="flex items-center space-x-2.5">
+              <div className="p-2 rounded-xl bg-amber-600/20 text-amber-400 border border-amber-500/30">
+                <Pencil className="w-4 h-4" />
+              </div>
+              <h3 className="font-bold text-white text-base">Rename Folder</h3>
+            </div>
+            <form onSubmit={handleRenameFolder} className="space-y-4">
+              <input
+                type="text"
+                value={renameFolderName}
+                onChange={(e) => setRenameFolderName(e.target.value)}
+                placeholder="Folder name"
+                className="w-full px-3.5 py-2.5 bg-[#18181f] border border-[#272733] rounded-xl text-sm text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                autoFocus
+              />
+              <div className="flex justify-end space-x-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => { setRenameFolder(null); setRenameFolderName(''); }}
+                  className="px-4 py-2 text-xs font-semibold text-zinc-400 hover:bg-[#18181f] rounded-full transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={renamingFolder || !renameFolderName.trim() || renameFolderName.trim() === renameFolder.name}
+                  className="px-5 py-2 text-xs font-bold text-white bg-gradient-to-r from-amber-600 to-orange-500 rounded-full shadow hover:from-amber-500 hover:to-orange-400 transition disabled:opacity-50"
+                >
+                  {renamingFolder ? 'Renaming...' : 'Rename'}
+                </button>
               </div>
             </form>
           </div>

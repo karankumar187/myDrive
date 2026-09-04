@@ -1230,6 +1230,8 @@ fun FilesScreen(
     var fileToShowDetails by remember { mutableStateOf<CloudFile?>(null) }
     var showMoveDialog by remember { mutableStateOf(false) }
     var folderToDelete by remember { mutableStateOf<CloudFolder?>(null) }
+    var folderToRename by remember { mutableStateOf<CloudFolder?>(null) }
+    var renameFolderNameInput by remember { mutableStateOf("") }
     
     var showHeaderMenu by remember { mutableStateOf(false) }
 
@@ -1844,6 +1846,15 @@ fun FilesScreen(
                         }
                     )
                     DropdownMenuItem(
+                        text = { Text("Rename Folder", color = Color.White) },
+                        leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null, tint = Color(0xFFF59E0B)) },
+                        onClick = {
+                            folderToRename = f
+                            renameFolderNameInput = f.name
+                            selectedFolderForMenu = null
+                        }
+                    )
+                    DropdownMenuItem(
                         text = { Text("Delete Folder", color = Color.White) },
                         leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = Color.Red) },
                         onClick = {
@@ -1856,6 +1867,69 @@ fun FilesScreen(
             confirmButton = {
                 TextButton(onClick = { selectedFolderForMenu = null }) {
                     Text("Close", color = Color(0xFFA855F7))
+                }
+            }
+        )
+    }
+
+    if (folderToRename != null) {
+        val f = folderToRename!!
+        AlertDialog(
+            onDismissRequest = { folderToRename = null },
+            containerColor = Color(0xFF14141C),
+            title = { Text("Rename Folder", color = Color.White) },
+            text = {
+                OutlinedTextField(
+                    value = renameFolderNameInput,
+                    onValueChange = { renameFolderNameInput = it },
+                    label = { Text("Folder Name", color = Color(0xFF94A3B8)) },
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = Color.White,
+                        unfocusedTextColor = Color.White,
+                        focusedBorderColor = Color(0xFFA855F7),
+                        unfocusedBorderColor = Color(0xFF333340)
+                    ),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val newName = renameFolderNameInput.trim()
+                        if (newName.isNotEmpty() && newName != f.name) {
+                            coroutineScope.launch {
+                                withContext(Dispatchers.IO) {
+                                    try {
+                                        val jsonBody = JSONObject().apply {
+                                            put("name", newName)
+                                        }.toString()
+                                        val body = jsonBody.toRequestBody("application/json".toMediaType())
+                                        val req = Request.Builder()
+                                            .url("${serverUrl.trimEnd('/')}/api/v1/files/folders/${f.id}/rename")
+                                            .patch(body)
+                                            .addHeader("x-device-id", deviceId)
+                                            .addHeader("x-device-key", deviceKey)
+                                            .build()
+                                        val client = OkHttpClient()
+                                        client.newCall(req).execute().close()
+                                    } catch (e: Exception) {
+                                        e.printStackTrace()
+                                    }
+                                }
+                                onRefresh()
+                            }
+                        }
+                        folderToRename = null
+                    },
+                    enabled = renameFolderNameInput.isNotBlank() && renameFolderNameInput.trim() != f.name
+                ) {
+                    Text("Rename", color = Color(0xFFA855F7))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { folderToRename = null }) {
+                    Text("Cancel", color = Color(0xFF94A3B8))
                 }
             }
         )

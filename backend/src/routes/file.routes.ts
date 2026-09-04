@@ -31,7 +31,9 @@ router.delete('/:id/permanent', requireUserAuth, FileController.permanentDelete)
 // Folders
 router.get('/folders/list', requireAnyAuth, FileController.listFolders);
 router.post('/folders/create', requireAnyAuth, FileController.createFolder);
-router.delete('/folders/:id', requireUserAuth, FileController.deleteFolder);
+router.patch('/folders/:id/rename', requireAnyAuth, FileController.renameFolder);
+router.post('/folders/:id/rename', requireAnyAuth, FileController.renameFolder);
+router.delete('/folders/:id', requireAnyAuth, FileController.deleteFolder);
 
 // Per-device upload history and inbound sync
 router.get('/device/:deviceId/uploads', requireAnyAuth, FileController.listFilesByDevice);

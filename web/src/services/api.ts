@@ -209,6 +209,16 @@ export const api = {
     return res.json();
   },
 
+  async renameFolder(folderId: string, name: string): Promise<{ folder: FolderItem }> {
+    const res = await fetch(`${API_BASE}/files/folders/${folderId}/rename`, {
+      method: 'PATCH',
+      headers: getHeaders(),
+      body: JSON.stringify({ name }),
+    });
+    if (!res.ok) throw new Error('Failed to rename folder');
+    return res.json();
+  },
+
   async deleteFolder(folderId: string): Promise<any> {
     const res = await fetch(`${API_BASE}/files/folders/${folderId}`, {
       method: 'DELETE',

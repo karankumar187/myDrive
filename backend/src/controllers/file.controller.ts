@@ -636,6 +636,73 @@ export class FileController {
   }
 
   /**
+   * Renames a folder and updates descendant paths.
+   */
+  static async renameFolder(req: Request, res: Response): Promise<void> {
+    try {
+      const userId = req.user!._id;
+      const folderId = new Types.ObjectId(req.params.id);
+      const { name } = req.body;
+      if (!name || typeof name !== 'string' || !name.trim()) {
+        res.status(400).json({ error: 'Valid folder name is required' });
+        return;
+      }
+      const newName = name.trim();
+      const folder = await Folder.findOne({ _id: folderId, userId });
+      if (!folder) {
+        res.status(404).json({ error: 'Folder not found or access denied' });
+        return;
+      }
+
+      if (folder.name === newName) {
+        res.json({ success: true, folder });
+        return;
+      }
+
+      const existing = await Folder.findOne({
+        userId,
+        parentFolderId: folder.parentFolderId,
+        name: newName,
+        _id: { $ne: folder._id },
+        isTrash: { $ne: true },
+      });
+      if (existing) {
+        res.status(409).json({ error: 'A folder with this name already exists in this location' });
+        return;
+      }
+
+      const oldPath = folder.path;
+      let newPath = `/${newName}/`;
+      if (folder.parentFolderId) {
+        const parent = await Folder.findOne({ _id: folder.parentFolderId, userId });
+        if (parent) {
+          newPath = `${parent.path}${newName}/`;
+        }
+      }
+
+      folder.name = newName;
+      folder.path = newPath;
+      await folder.save();
+
+      const escapedOldPath = oldPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const descendants = await Folder.find({
+        userId,
+        path: new RegExp(`^${escapedOldPath}`),
+        _id: { $ne: folder._id },
+      });
+      for (const desc of descendants) {
+        desc.path = newPath + desc.path.slice(oldPath.length);
+        await desc.save();
+      }
+
+      await CacheService.invalidateUser(userId.toString());
+      res.json({ success: true, folder });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+
+  /**
    * Delete folder: moves folder and all its contents to Trash.
    */
   static async deleteFolder(req: Request, res: Response): Promise<void> {
