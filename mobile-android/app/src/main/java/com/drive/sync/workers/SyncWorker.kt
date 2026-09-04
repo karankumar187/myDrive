@@ -22,7 +22,7 @@ class SyncWorker(
     params: WorkerParameters
 ) : CoroutineWorker(context, params) {
 
-    private val client = OkHttpClient()
+    private val client = com.drive.sync.sharedHttpClient
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         val serverUrl = (inputData.getString("server_url") ?: "http://10.0.2.2:5000").trimEnd('/')

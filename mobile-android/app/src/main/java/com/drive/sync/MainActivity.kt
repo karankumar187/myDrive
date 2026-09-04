@@ -30,9 +30,6 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -54,7 +51,6 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
@@ -163,7 +159,7 @@ data class InboundSyncItem(
 
 class MainActivity : ComponentActivity() {
 
-    private val httpClient = OkHttpClient()
+    private val httpClient = sharedHttpClient
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -1927,24 +1923,7 @@ fun FilesScreen(
                         val newName = renameFolderNameInput.trim()
                         if (newName.isNotEmpty() && newName != f.name) {
                             coroutineScope.launch {
-                                withContext(Dispatchers.IO) {
-                                    try {
-                                        val jsonBody = JSONObject().apply {
-                                            put("name", newName)
-                                        }.toString()
-                                        val body = jsonBody.toRequestBody("application/json".toMediaType())
-                                        val req = Request.Builder()
-                                            .url("${serverUrl.trimEnd('/')}/api/v1/files/folders/${f.id}/rename")
-                                            .patch(body)
-                                            .addHeader("x-device-id", deviceId)
-                                            .addHeader("x-device-key", deviceKey)
-                                            .build()
-                                        val client = OkHttpClient()
-                                        client.newCall(req).execute().close()
-                                    } catch (e: Exception) {
-                                        e.printStackTrace()
-                                    }
-                                }
+                                apiRenameFolder(serverUrl, deviceId, deviceKey, f.id, newName)
                                 onRefresh()
                             }
                         }
@@ -1973,20 +1952,7 @@ fun FilesScreen(
             confirmButton = {
                 TextButton(onClick = {
                     coroutineScope.launch {
-                        withContext(Dispatchers.IO) {
-                            try {
-                                val req = okhttp3.Request.Builder()
-                                    .url("${serverUrl.trimEnd('/')}/api/v1/files/folders/${f.id}")
-                                    .delete()
-                                    .addHeader("x-device-id", deviceId)
-                                    .addHeader("x-device-key", deviceKey)
-                                    .build()
-                                val client = okhttp3.OkHttpClient()
-                                client.newCall(req).execute().close()
-                            } catch (e: Exception) {
-                                e.printStackTrace()
-                            }
-                        }
+                        apiDeleteFolder(serverUrl, deviceId, deviceKey, f.id)
                         onRefresh()
                     }
                     folderToDelete = null
@@ -3258,13 +3224,12 @@ fun PdfViewer(
 
                 if (!localFile.exists() || localFile.length() == 0L) {
                     val streamUrl = "${serverUrl.trimEnd('/')}/api/v1/files/${file.id}/stream?deviceId=$deviceId&deviceKey=$deviceKey"
-                    val client = OkHttpClient()
                     val request = Request.Builder()
                         .url(streamUrl)
                         .addHeader("x-device-id", deviceId)
                         .addHeader("x-device-key", deviceKey)
                         .build()
-                    val response = client.newCall(request).execute()
+                    val response = sharedHttpClient.newCall(request).execute()
                     if (!response.isSuccessful) {
                         throw Exception("Server returned HTTP ${response.code}")
                     }

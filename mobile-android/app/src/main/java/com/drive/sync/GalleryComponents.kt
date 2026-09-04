@@ -106,6 +106,14 @@ fun formatDetailsDate(rawDate: String?): String {
 // ----------------------------------------------------
 // Gallery Operations: Download, Share & Backend APIs
 // ----------------------------------------------------
+// Shared HTTP client singleton for efficient connection and thread pooling
+val sharedHttpClient: OkHttpClient by lazy {
+    OkHttpClient.Builder()
+        .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+        .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+        .build()
+}
+
 suspend fun downloadMediaToGallery(
     context: Context,
     item: CloudMedia,
@@ -116,8 +124,7 @@ suspend fun downloadMediaToGallery(
     try {
         val streamUrl = "${serverUrl.trimEnd('/')}/api/v1/files/${item.id}/stream?deviceId=$deviceId&deviceKey=$deviceKey"
         val req = Request.Builder().url(streamUrl).build()
-        val client = OkHttpClient()
-        val res = client.newCall(req).execute()
+        val res = sharedHttpClient.newCall(req).execute()
         if (!res.isSuccessful) return@withContext false
         val bytes = res.body?.bytes() ?: return@withContext false
 
@@ -183,8 +190,7 @@ suspend fun apiToggleFavorite(
             .addHeader("x-device-key", deviceKey)
             .patch(body)
             .build()
-        val res = OkHttpClient().newCall(req).execute()
-        res.isSuccessful
+        sharedHttpClient.newCall(req).execute().use { it.isSuccessful }
     } catch (e: Exception) {
         e.printStackTrace()
         false
@@ -207,8 +213,7 @@ suspend fun apiRenameFile(
             .addHeader("x-device-key", deviceKey)
             .patch(body)
             .build()
-        val res = OkHttpClient().newCall(req).execute()
-        res.isSuccessful
+        sharedHttpClient.newCall(req).execute().use { it.isSuccessful }
     } catch (e: Exception) {
         e.printStackTrace()
         false
@@ -231,8 +236,7 @@ suspend fun apiMoveFile(
             .addHeader("x-device-key", deviceKey)
             .patch(body)
             .build()
-        val res = OkHttpClient().newCall(req).execute()
-        res.isSuccessful
+        sharedHttpClient.newCall(req).execute().use { it.isSuccessful }
     } catch (e: Exception) {
         e.printStackTrace()
         false
@@ -253,8 +257,7 @@ suspend fun apiTrashFile(
             .addHeader("x-device-key", deviceKey)
             .post(body)
             .build()
-        val res = OkHttpClient().newCall(req).execute()
-        res.isSuccessful
+        sharedHttpClient.newCall(req).execute().use { it.isSuccessful }
     } catch (e: Exception) {
         e.printStackTrace()
         false
@@ -282,8 +285,50 @@ suspend fun apiBulkAction(
             .addHeader("x-device-key", deviceKey)
             .post(body)
             .build()
-        val res = OkHttpClient().newCall(req).execute()
-        res.isSuccessful
+        sharedHttpClient.newCall(req).execute().use { it.isSuccessful }
+    } catch (e: Exception) {
+        e.printStackTrace()
+        false
+    }
+}
+
+suspend fun apiRenameFolder(
+    serverUrl: String,
+    deviceId: String,
+    deviceKey: String,
+    folderId: String,
+    newName: String
+): Boolean = withContext(Dispatchers.IO) {
+    try {
+        val json = JSONObject().apply { put("name", newName) }
+        val body = json.toString().toRequestBody("application/json".toMediaType())
+        val req = Request.Builder()
+            .url("${serverUrl.trimEnd('/')}/api/v1/files/folders/$folderId/rename")
+            .addHeader("x-device-id", deviceId)
+            .addHeader("x-device-key", deviceKey)
+            .patch(body)
+            .build()
+        sharedHttpClient.newCall(req).execute().use { it.isSuccessful }
+    } catch (e: Exception) {
+        e.printStackTrace()
+        false
+    }
+}
+
+suspend fun apiDeleteFolder(
+    serverUrl: String,
+    deviceId: String,
+    deviceKey: String,
+    folderId: String
+): Boolean = withContext(Dispatchers.IO) {
+    try {
+        val req = Request.Builder()
+            .url("${serverUrl.trimEnd('/')}/api/v1/files/folders/$folderId")
+            .addHeader("x-device-id", deviceId)
+            .addHeader("x-device-key", deviceKey)
+            .delete()
+            .build()
+        sharedHttpClient.newCall(req).execute().use { it.isSuccessful }
     } catch (e: Exception) {
         e.printStackTrace()
         false
