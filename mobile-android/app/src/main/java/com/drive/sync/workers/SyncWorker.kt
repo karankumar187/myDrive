@@ -142,7 +142,7 @@ class SyncWorker(
             val mimeColumn = it.getColumnIndexOrThrow(MediaStore.MediaColumns.MIME_TYPE)
             val sizeColumn = it.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE)
 
-            while (it.moveToNext() && processedCount < 15) {
+            while (it.moveToNext() && processedCount < 100) {
                 val id = it.getLong(idColumn)
                 val filename = it.getString(nameColumn) ?: "${namePrefix}_$id"
                 val mimeType = it.getString(mimeColumn) ?: defaultMime

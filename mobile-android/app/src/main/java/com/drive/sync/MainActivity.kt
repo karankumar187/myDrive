@@ -7,8 +7,14 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.Environment
 import android.widget.Toast
+import android.provider.OpenableColumns
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
+import com.drive.sync.crypto.VaultCrypto
+import java.io.ByteArrayOutputStream
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -766,6 +772,158 @@ fun MainAppScreen(
         )
     }
 
+    var isManualUploading by remember { mutableStateOf(false) }
+    var uploadStatusText by remember { mutableStateOf("") }
+    var showManualUploadDialog by remember { mutableStateOf(false) }
+
+    val performManualUpload: (List<Uri>) -> Unit = { uris ->
+        if (uris.isNotEmpty() && serverUrl.isNotBlank() && deviceId.isNotBlank() && deviceKey.isNotBlank()) {
+            scope.launch(Dispatchers.IO) {
+                isManualUploading = true
+                val total = uris.size
+                var successCount = 0
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(context, "Uploading $total item(s) to $targetFolderName...", Toast.LENGTH_SHORT).show()
+                }
+
+                uris.forEachIndexed { idx, uri ->
+                    try {
+                        withContext(Dispatchers.Main) {
+                            uploadStatusText = "Uploading ${idx + 1}/$total..."
+                        }
+
+                        var filename = "upload_${System.currentTimeMillis()}"
+                        var sizeBytes = 0L
+                        val mimeType = context.contentResolver.getType(uri) ?: "application/octet-stream"
+
+                        val cursor = context.contentResolver.query(uri, null, null, null, null)
+                        cursor?.use { c ->
+                            val nameIdx = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                            val sizeIdx = c.getColumnIndex(OpenableColumns.SIZE)
+                            if (c.moveToFirst()) {
+                                if (nameIdx != -1) filename = c.getString(nameIdx) ?: filename
+                                if (sizeIdx != -1) sizeBytes = c.getLong(sizeIdx)
+                            }
+                        }
+
+                        val bytes = context.contentResolver.openInputStream(uri)?.use { stream ->
+                            val buffer = ByteArrayOutputStream()
+                            stream.copyTo(buffer)
+                            buffer.toByteArray()
+                        } ?: return@forEachIndexed
+
+                        if (sizeBytes <= 0) sizeBytes = bytes.size.toLong()
+
+                        val contentHash = VaultCrypto.calculateSha256(bytes.inputStream())
+                        val baseUrl = serverUrl.trimEnd('/')
+
+                        val initJson = JSONObject().apply {
+                            put("filename", filename)
+                            put("mimeType", mimeType)
+                            put("sizeBytes", sizeBytes)
+                            put("contentHash", contentHash)
+                            if (targetFolderId.isNotBlank()) {
+                                put("folderId", targetFolderId)
+                            }
+                        }
+
+                        val initReq = Request.Builder()
+                            .url("$baseUrl/api/v1/files/upload/initiate")
+                            .addHeader("x-device-id", deviceId)
+                            .addHeader("x-device-key", deviceKey)
+                            .post(initJson.toString().toRequestBody("application/json".toMediaType()))
+                            .build()
+
+                        val initRes = httpClient.newCall(initReq).execute()
+                        if (initRes.isSuccessful) {
+                            val initResult = JSONObject(initRes.body?.string() ?: "{}")
+                            val isDuplicate = initResult.optBoolean("isDuplicate", false)
+
+                            if (!isDuplicate) {
+                                val uploadUrl = initResult.getString("uploadSessionUrl")
+                                val storageAccountId = initResult.getString("storageAccountId")
+
+                                val putReq = Request.Builder()
+                                    .url(uploadUrl)
+                                    .put(bytes.toRequestBody(mimeType.toMediaType()))
+                                    .build()
+
+                                val putRes = httpClient.newCall(putReq).execute()
+                                if (putRes.isSuccessful || putRes.code == 200 || putRes.code == 201) {
+                                    val compJson = JSONObject().apply {
+                                        put("filename", filename)
+                                        put("mimeType", mimeType)
+                                        put("sizeBytes", sizeBytes)
+                                        put("contentHash", contentHash)
+                                        put("storageAccountId", storageAccountId)
+                                        if (targetFolderId.isNotBlank()) {
+                                            put("folderId", targetFolderId)
+                                        }
+                                    }
+                                    val compReq = Request.Builder()
+                                        .url("$baseUrl/api/v1/files/upload/complete")
+                                        .addHeader("x-device-id", deviceId)
+                                        .addHeader("x-device-key", deviceKey)
+                                        .post(compJson.toString().toRequestBody("application/json".toMediaType()))
+                                        .build()
+                                    httpClient.newCall(compReq).execute()
+                                    successCount++
+                                }
+                            } else {
+                                successCount++
+                            }
+                        }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                }
+
+                withContext(Dispatchers.Main) {
+                    isManualUploading = false
+                    uploadStatusText = ""
+                    Toast.makeText(context, "Upload complete: $successCount of $total items saved to $targetFolderName!", Toast.LENGTH_LONG).show()
+                    refreshData()
+                }
+            }
+        }
+    }
+
+    val galleryPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickMultipleVisualMedia()
+    ) { uris: List<Uri> ->
+        if (uris.isNotEmpty()) {
+            performManualUpload(uris)
+        }
+    }
+
+    val documentPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris: List<Uri> ->
+        if (uris.isNotEmpty()) {
+            performManualUpload(uris)
+        }
+    }
+
+    // Manual Upload Options Dialog
+    if (showManualUploadDialog) {
+        ManualUploadDialog(
+            targetFolderName = targetFolderName,
+            onOpenFolderSelector = {
+                showManualUploadDialog = false
+                showFolderDialog = true
+            },
+            onPickGallery = {
+                showManualUploadDialog = false
+                galleryPickerLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))
+            },
+            onPickStorage = {
+                showManualUploadDialog = false
+                documentPickerLauncher.launch(arrayOf("*/*"))
+            },
+            onDismiss = { showManualUploadDialog = false }
+        )
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -867,6 +1025,31 @@ fun MainAppScreen(
                     )
                 )
             }
+        },
+        floatingActionButton = {
+            if (selectedTab != 3) {
+                FloatingActionButton(
+                    onClick = { showManualUploadDialog = true },
+                    containerColor = Color(0xFFA855F7),
+                    contentColor = Color.White,
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        if (isManualUploading) {
+                            CircularProgressIndicator(modifier = Modifier.size(18.dp), color = Color.White, strokeWidth = 2.dp)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(uploadStatusText.ifBlank { "Uploading..." }, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                        } else {
+                            Icon(Icons.Default.CloudUpload, contentDescription = "Manual Upload", modifier = Modifier.size(20.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Upload", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
         }
     ) { padding ->
         Box(
@@ -912,7 +1095,13 @@ fun MainAppScreen(
                     onOpenFile = { file -> previewItem = file },
                     onDownloadToGallery = { item -> downloadInboundItem(item) },
                     onSyncAllToGallery = syncAllToGallery,
-                    onRefresh = refreshData
+                    onRefresh = refreshData,
+                    onTriggerUploadGallery = {
+                        galleryPickerLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))
+                    },
+                    onTriggerUploadFiles = {
+                        documentPickerLauncher.launch(arrayOf("*/*"))
+                    }
                 )
                 3 -> DeviceAndPolicyScreen(
                     serverUrl = serverUrl,
@@ -1381,7 +1570,9 @@ fun TransfersScreen(
     onOpenFile: (CloudFile) -> Unit,
     onDownloadToGallery: (InboundSyncItem) -> Unit,
     onSyncAllToGallery: () -> Unit,
-    onRefresh: () -> Unit
+    onRefresh: () -> Unit,
+    onTriggerUploadGallery: (() -> Unit)? = null,
+    onTriggerUploadFiles: (() -> Unit)? = null
 ) {
     var subTab by remember { mutableIntStateOf(0) } // 0: Uploaded by Device, 1: Synced to Gallery
     var selectedCategory by remember { mutableStateOf("All") }
@@ -1491,6 +1682,38 @@ fun TransfersScreen(
 
         if (subTab == 0) {
             // ---------------- SUBVIEW 0: UPLOADED BY THIS DEVICE ----------------
+            // Quick manual upload action row
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Button(
+                    onClick = { onTriggerUploadGallery?.invoke() },
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF26193E)),
+                    shape = RoundedCornerShape(10.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
+                ) {
+                    Icon(Icons.Default.PhotoLibrary, contentDescription = null, tint = Color(0xFFA855F7), modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Upload Gallery", color = Color(0xFFE9D5FF), fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                }
+
+                Button(
+                    onClick = { onTriggerUploadFiles?.invoke() },
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0F2338)),
+                    shape = RoundedCornerShape(10.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
+                ) {
+                    Icon(Icons.Default.Folder, contentDescription = null, tint = Color(0xFF38BDF8), modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Upload Files", color = Color(0xFFBAE6FD), fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                }
+            }
+
             val filteredUploads = remember(uploadedFiles, selectedCategory) {
                 when (selectedCategory) {
                     "Photos" -> uploadedFiles.filter { it.mimeType.startsWith("image/") }
@@ -1504,15 +1727,41 @@ fun TransfersScreen(
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(32.dp),
+                        .padding(28.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(Icons.Default.CloudUpload, contentDescription = null, tint = Color(0xFF52525B), modifier = Modifier.size(48.dp))
+                        Icon(Icons.Default.CloudUpload, contentDescription = null, tint = Color(0xFFA855F7), modifier = Modifier.size(48.dp))
                         Spacer(modifier = Modifier.height(12.dp))
-                        Text("No uploads found", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                        Text("No uploads found yet", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 15.sp)
                         Spacer(modifier = Modifier.height(4.dp))
-                        Text("Docs & media uploaded by this phone will be listed here.", color = Color(0xFF71717A), fontSize = 12.sp)
+                        Text(
+                            text = "Docs & media uploaded by this phone will appear here.\nTap below to manually upload existing pictures or files:",
+                            color = Color(0xFF71717A),
+                            fontSize = 12.sp,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Button(
+                                onClick = { onTriggerUploadGallery?.invoke() },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFA855F7)),
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                Icon(Icons.Default.PhotoLibrary, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("From Gallery", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            }
+                            Button(
+                                onClick = { onTriggerUploadFiles?.invoke() },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0284C7)),
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                Icon(Icons.Default.Folder, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("From Storage", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
                     }
                 }
             } else {
@@ -2658,6 +2907,132 @@ fun FolderPickerDialog(
                     Icon(Icons.Default.CreateNewFolder, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(6.dp))
                     Text("Create & Set as Destination", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel", color = Color(0xFF94A3B8))
+            }
+        }
+    )
+}
+
+// ----------------------------------------------------
+// Manual Upload Options Dialog (Gallery & Storage)
+// ----------------------------------------------------
+@Composable
+fun ManualUploadDialog(
+    targetFolderName: String,
+    onOpenFolderSelector: () -> Unit,
+    onPickGallery: () -> Unit,
+    onPickStorage: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Color(0xFF14141C),
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.CloudUpload, contentDescription = null, tint = Color(0xFFA855F7), modifier = Modifier.size(24.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Upload to Cloud",
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 18.sp
+                )
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                // Destination Folder Indicator
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = Color(0xFF1C1C28),
+                    border = BorderStroke(1.dp, Color(0xFF2E2E3E))
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Destination Folder", fontSize = 11.sp, color = Color(0xFF71717A))
+                            Text(targetFolderName, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFFC084FC))
+                        }
+                        TextButton(onClick = onOpenFolderSelector) {
+                            Text("Change", color = Color(0xFFA855F7), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+                }
+
+                Text("Choose upload source:", fontSize = 12.sp, color = Color(0xFF94A3B8))
+
+                // Option 1: Gallery (Photos & Videos)
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onPickGallery() },
+                    shape = RoundedCornerShape(14.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF26193E)),
+                    border = BorderStroke(1.dp, Color(0xFF581C87))
+                ) {
+                    Row(
+                        modifier = Modifier.padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(Color(0xFF6B21A8)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(Icons.Default.PhotoLibrary, contentDescription = null, tint = Color.White, modifier = Modifier.size(22.dp))
+                        }
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column {
+                            Text("Photos & Videos", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                            Text("Select multiple media from Gallery", fontSize = 11.sp, color = Color(0xFFD8B4FE))
+                        }
+                    }
+                }
+
+                // Option 2: Storage / Files (Documents & Any file)
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onPickStorage() },
+                    shape = RoundedCornerShape(14.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF0F2338)),
+                    border = BorderStroke(1.dp, Color(0xFF0369A1))
+                ) {
+                    Row(
+                        modifier = Modifier.padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(Color(0xFF0284C7)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(Icons.Default.Folder, contentDescription = null, tint = Color.White, modifier = Modifier.size(22.dp))
+                        }
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column {
+                            Text("Files & Documents", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                            Text("Select PDFs, docs, or files from folders", fontSize = 11.sp, color = Color(0xFF7DD3FC))
+                        }
+                    }
                 }
             }
         },
