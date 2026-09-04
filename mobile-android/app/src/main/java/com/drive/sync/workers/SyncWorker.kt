@@ -2,6 +2,7 @@ package com.drive.sync.workers
 
 import android.content.ContentUris
 import android.content.Context
+import android.net.Uri
 import android.provider.MediaStore
 import android.util.Log
 import androidx.work.CoroutineWorker
@@ -24,133 +25,164 @@ class SyncWorker(
     private val client = OkHttpClient()
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
-        val serverUrl = inputData.getString("server_url") ?: "http://10.0.2.2:5000"
+        val serverUrl = (inputData.getString("server_url") ?: "http://10.0.2.2:5000").trimEnd('/')
         val deviceId = inputData.getString("device_id") ?: return@withContext Result.failure()
         val deviceKey = inputData.getString("device_key") ?: return@withContext Result.failure()
+        val syncVideos = inputData.getBoolean("sync_videos", true)
 
-        Log.d("SyncWorker", "Starting background media sync for device $deviceId")
+        Log.d("SyncWorker", "Starting media sync for device $deviceId (videos=$syncVideos)")
 
         try {
-            // 1. Query Android MediaStore for local images
-            val projection = arrayOf(
-                MediaStore.Images.Media._ID,
-                MediaStore.Images.Media.DISPLAY_NAME,
-                MediaStore.Images.Media.MIME_TYPE,
-                MediaStore.Images.Media.SIZE
+            // 1. Sync Photos
+            val imageCount = syncCollection(
+                collectionUri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                serverUrl = serverUrl,
+                deviceId = deviceId,
+                deviceKey = deviceKey,
+                defaultMime = "image/jpeg",
+                namePrefix = "photo"
             )
 
-            val sortOrder = "${MediaStore.Images.Media.DATE_ADDED} DESC"
-            val cursor = applicationContext.contentResolver.query(
-                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                projection,
-                null,
-                null,
-                sortOrder
-            )
+            // 2. Sync Videos if enabled
+            val videoCount = if (syncVideos) {
+                syncCollection(
+                    collectionUri = MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+                    serverUrl = serverUrl,
+                    deviceId = deviceId,
+                    deviceKey = deviceKey,
+                    defaultMime = "video/mp4",
+                    namePrefix = "video"
+                )
+            } else 0
 
-            cursor?.use {
-                val idColumn = it.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
-                val nameColumn = it.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
-                val mimeColumn = it.getColumnIndexOrThrow(MediaStore.Images.Media.MIME_TYPE)
-                val sizeColumn = it.getColumnIndexOrThrow(MediaStore.Images.Media.SIZE)
-
-                var processedCount = 0
-
-                while (it.moveToNext() && processedCount < 20) { // Batch 20 files per run
-                    val id = it.getLong(idColumn)
-                    val filename = it.getString(nameColumn) ?: "photo_$id.jpg"
-                    val mimeType = it.getString(mimeColumn) ?: "image/jpeg"
-                    val sizeBytes = it.getLong(sizeColumn)
-
-                    if (sizeBytes <= 0) continue
-
-                    val contentUri = ContentUris.withAppendedId(
-                        MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                        id
-                    )
-
-                    // 2. Read bytes and compute raw SHA-256 for instant deduplication
-                    val byteStream = applicationContext.contentResolver.openInputStream(contentUri) ?: continue
-                    val bytes = byteStream.use { input ->
-                        val buffer = ByteArrayOutputStream()
-                        input.copyTo(buffer)
-                        buffer.toByteArray()
-                    }
-
-                    val contentHash = VaultCrypto.calculateSha256(bytes.inputStream())
-
-                    // 3. Initiate Upload request with Backend
-                    val initJson = JSONObject().apply {
-                        put("filename", filename)
-                        put("mimeType", mimeType)
-                        put("sizeBytes", sizeBytes)
-                        put("contentHash", contentHash)
-                    }
-
-                    val initRequest = Request.Builder()
-                        .url("$serverUrl/api/v1/files/upload/initiate")
-                        .addHeader("x-device-id", deviceId)
-                        .addHeader("x-device-key", deviceKey)
-                        .post(initJson.toString().toRequestBody("application/json".toMediaType()))
-                        .build()
-
-                    val initResponse = client.newCall(initRequest).execute()
-                    if (!initResponse.isSuccessful) {
-                        Log.w("SyncWorker", "Failed initiate for $filename: ${initResponse.code}")
-                        continue
-                    }
-
-                    val initResult = JSONObject(initResponse.body?.string() ?: "{}")
-                    val isDuplicate = initResult.optBoolean("isDuplicate", false)
-
-                    if (isDuplicate) {
-                        Log.d("SyncWorker", "Exact duplicate detected for $filename. Upload skipped!")
-                        processedCount++
-                        continue
-                    }
-
-                    // 4. Stream bytes directly to Google Drive Resumable Upload Session
-                    val uploadUrl = initResult.getString("uploadSessionUrl")
-                    val storageAccountId = initResult.getString("storageAccountId")
-
-                    val putRequest = Request.Builder()
-                        .url(uploadUrl)
-                        .put(bytes.toRequestBody(mimeType.toMediaType()))
-                        .build()
-
-                    val putResponse = client.newCall(putRequest).execute()
-                    if (!putResponse.isSuccessful && putResponse.code != 200 && putResponse.code != 201) {
-                        Log.w("SyncWorker", "Google Drive stream failed for $filename: ${putResponse.code}")
-                        continue
-                    }
-
-                    // 5. Finalize upload with backend
-                    val completeJson = JSONObject().apply {
-                        put("filename", filename)
-                        put("mimeType", mimeType)
-                        put("sizeBytes", sizeBytes)
-                        put("contentHash", contentHash)
-                        put("storageAccountId", storageAccountId)
-                        put("deviceAssetId", id.toString())
-                    }
-
-                    val completeRequest = Request.Builder()
-                        .url("$serverUrl/api/v1/files/upload/complete")
-                        .addHeader("x-device-id", deviceId)
-                        .addHeader("x-device-key", deviceKey)
-                        .post(completeJson.toString().toRequestBody("application/json".toMediaType()))
-                        .build()
-
-                    client.newCall(completeRequest).execute()
-                    Log.d("SyncWorker", "Successfully backed up $filename to pooled storage")
-                    processedCount++
-                }
-            }
-
+            Log.d("SyncWorker", "Sync complete: $imageCount images, $videoCount videos processed.")
             Result.success()
         } catch (e: Exception) {
             Log.e("SyncWorker", "Sync worker error: ${e.message}", e)
             Result.retry()
         }
+    }
+
+    private fun syncCollection(
+        collectionUri: Uri,
+        serverUrl: String,
+        deviceId: String,
+        deviceKey: String,
+        defaultMime: String,
+        namePrefix: String
+    ): Int {
+        val projection = arrayOf(
+            MediaStore.MediaColumns._ID,
+            MediaStore.MediaColumns.DISPLAY_NAME,
+            MediaStore.MediaColumns.MIME_TYPE,
+            MediaStore.MediaColumns.SIZE
+        )
+
+        val sortOrder = "${MediaStore.MediaColumns.DATE_ADDED} DESC"
+        val cursor = applicationContext.contentResolver.query(
+            collectionUri,
+            projection,
+            null,
+            null,
+            sortOrder
+        ) ?: return 0
+
+        var processedCount = 0
+
+        cursor.use {
+            val idColumn = it.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
+            val nameColumn = it.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)
+            val mimeColumn = it.getColumnIndexOrThrow(MediaStore.MediaColumns.MIME_TYPE)
+            val sizeColumn = it.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE)
+
+            while (it.moveToNext() && processedCount < 15) {
+                val id = it.getLong(idColumn)
+                val filename = it.getString(nameColumn) ?: "${namePrefix}_$id"
+                val mimeType = it.getString(mimeColumn) ?: defaultMime
+                val sizeBytes = it.getLong(sizeColumn)
+
+                if (sizeBytes <= 0) continue
+
+                val contentUri = ContentUris.withAppendedId(collectionUri, id)
+
+                // Read bytes & compute SHA-256 for instant deduplication
+                val byteStream = applicationContext.contentResolver.openInputStream(contentUri) ?: continue
+                val bytes = byteStream.use { input ->
+                    val buffer = ByteArrayOutputStream()
+                    input.copyTo(buffer)
+                    buffer.toByteArray()
+                }
+
+                val contentHash = VaultCrypto.calculateSha256(bytes.inputStream())
+
+                // 1. Initiate Upload request with Backend
+                val initJson = JSONObject().apply {
+                    put("filename", filename)
+                    put("mimeType", mimeType)
+                    put("sizeBytes", sizeBytes)
+                    put("contentHash", contentHash)
+                }
+
+                val initRequest = Request.Builder()
+                    .url("$serverUrl/api/v1/files/upload/initiate")
+                    .addHeader("x-device-id", deviceId)
+                    .addHeader("x-device-key", deviceKey)
+                    .post(initJson.toString().toRequestBody("application/json".toMediaType()))
+                    .build()
+
+                val initResponse = client.newCall(initRequest).execute()
+                if (!initResponse.isSuccessful) {
+                    Log.w("SyncWorker", "Failed initiate for $filename: ${initResponse.code}")
+                    continue
+                }
+
+                val initResult = JSONObject(initResponse.body?.string() ?: "{}")
+                val isDuplicate = initResult.optBoolean("isDuplicate", false)
+
+                if (isDuplicate) {
+                    Log.d("SyncWorker", "Exact duplicate detected for $filename. Upload skipped!")
+                    processedCount++
+                    continue
+                }
+
+                // 2. Stream bytes directly to Google Drive Resumable Upload Session
+                val uploadUrl = initResult.getString("uploadSessionUrl")
+                val storageAccountId = initResult.getString("storageAccountId")
+
+                val putRequest = Request.Builder()
+                    .url(uploadUrl)
+                    .put(bytes.toRequestBody(mimeType.toMediaType()))
+                    .build()
+
+                val putResponse = client.newCall(putRequest).execute()
+                if (!putResponse.isSuccessful && putResponse.code != 200 && putResponse.code != 201) {
+                    Log.w("SyncWorker", "Google Drive stream failed for $filename: ${putResponse.code}")
+                    continue
+                }
+
+                // 3. Finalize upload with backend
+                val completeJson = JSONObject().apply {
+                    put("filename", filename)
+                    put("mimeType", mimeType)
+                    put("sizeBytes", sizeBytes)
+                    put("contentHash", contentHash)
+                    put("storageAccountId", storageAccountId)
+                    put("deviceAssetId", id.toString())
+                }
+
+                val completeRequest = Request.Builder()
+                    .url("$serverUrl/api/v1/files/upload/complete")
+                    .addHeader("x-device-id", deviceId)
+                    .addHeader("x-device-key", deviceKey)
+                    .post(completeJson.toString().toRequestBody("application/json".toMediaType()))
+                    .build()
+
+                client.newCall(completeRequest).execute()
+                Log.d("SyncWorker", "Successfully backed up $filename to pooled storage")
+                processedCount++
+            }
+        }
+
+        return processedCount
     }
 }
