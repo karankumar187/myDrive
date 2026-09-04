@@ -44,6 +44,25 @@ class MediaBlobCache {
     try {
       const stored = localStorage.getItem(`drive_thumb_${fileId}`);
       if (stored) {
+        if (stored.startsWith('data:image')) {
+          try {
+            const arr = stored.split(',');
+            const mimeMatch = arr[0].match(/:(.*?);/);
+            const mime = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+            const bstr = atob(arr[1]);
+            let n = bstr.length;
+            const u8arr = new Uint8Array(n);
+            while (n--) {
+              u8arr[n] = bstr.charCodeAt(n);
+            }
+            const blobUrl = URL.createObjectURL(new Blob([u8arr], { type: mime }));
+            this.cache.set(`thumb_${fileId}`, blobUrl);
+            return blobUrl;
+          } catch {
+            this.cache.set(`thumb_${fileId}`, stored);
+            return stored;
+          }
+        }
         this.cache.set(`thumb_${fileId}`, stored);
         return stored;
       }
@@ -54,7 +73,26 @@ class MediaBlobCache {
   }
 
   saveThumbnail(fileId: string, dataUrl: string): void {
-    this.set(`thumb_${fileId}`, dataUrl);
+    try {
+      if (dataUrl.startsWith('data:image')) {
+        const arr = dataUrl.split(',');
+        const mimeMatch = arr[0].match(/:(.*?);/);
+        const mime = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+        const bstr = atob(arr[1]);
+        let n = bstr.length;
+        const u8arr = new Uint8Array(n);
+        while (n--) {
+          u8arr[n] = bstr.charCodeAt(n);
+        }
+        const blobUrl = URL.createObjectURL(new Blob([u8arr], { type: mime }));
+        this.set(`thumb_${fileId}`, blobUrl);
+      } else {
+        this.set(`thumb_${fileId}`, dataUrl);
+      }
+    } catch {
+      this.set(`thumb_${fileId}`, dataUrl);
+    }
+
     try {
       localStorage.setItem(`drive_thumb_${fileId}`, dataUrl);
     } catch {

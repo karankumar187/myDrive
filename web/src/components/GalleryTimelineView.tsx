@@ -78,7 +78,7 @@ export const GalleryTimelineView: React.FC<Props> = ({ media, vaultKey, onOpenVa
       ) : (
         Object.entries(groupedMedia).map(([groupTitle, items]) => (
           <div key={groupTitle} className="space-y-3">
-            <h3 className="text-xs font-bold text-zinc-400 uppercase tracking-wider sticky top-0 bg-[#08080a]/90 backdrop-blur py-1.5 z-10 flex items-center space-x-2">
+            <h3 className="text-xs font-bold text-zinc-400 uppercase tracking-wider sticky top-0 bg-[#08080a] py-2 z-10 flex items-center space-x-2 border-b border-[#18181f]">
               <Calendar className="w-3.5 h-3.5 text-purple-400" />
               <span className="text-zinc-200">{groupTitle}</span>
               <span className="text-zinc-600">({items.length})</span>
@@ -359,32 +359,33 @@ const LightboxVideoPlayer: React.FC<{
 };
 
 // Video Thumbnail Component that displays the first frame image
-const VideoThumbnail: React.FC<{ src: string; alt: string }> = ({ src, alt }) => {
+const VideoThumbnail: React.FC<{ src: string; alt: string }> = React.memo(({ src, alt }) => {
   return (
-    <div className="relative w-full h-full bg-[#13131a] overflow-hidden flex items-center justify-center">
+    <div className="relative w-full h-full bg-[#13131a] overflow-hidden flex items-center justify-center [contain:paint]">
       <img
         src={src}
         alt={alt}
-        className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
+        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
         loading="lazy"
+        decoding="async"
       />
 
       {/* Center Play Button Overlay */}
       <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-        <div className="w-10 h-10 rounded-full bg-black/60 backdrop-blur-sm border border-white/20 flex items-center justify-center text-white shadow-lg group-hover:scale-110 group-hover:bg-purple-600/90 group-hover:border-purple-400 transition duration-300">
+        <div className="w-10 h-10 rounded-full bg-black/75 border border-white/25 flex items-center justify-center text-white shadow-md group-hover:scale-110 group-hover:bg-purple-600 transition-transform duration-200">
           <Play className="w-4 h-4 fill-white ml-0.5" />
         </div>
       </div>
     </div>
   );
-};
+});
 
 // Individual Media Card with Client-Side Decryption & Persistent Thumbnail Caching
 const MediaCard: React.FC<{
   item: FileItem;
   vaultKey: CryptoKey | null;
   onSelect: (loaded: LoadedMediaState) => void;
-}> = ({ item, vaultKey, onSelect }) => {
+}> = React.memo(({ item, vaultKey, onSelect }) => {
   const isVideo = item.mimeType.startsWith('video/');
   const [displayUrl, setDisplayUrl] = useState<string | null>(() => {
     if (isVideo) {
@@ -456,17 +457,21 @@ const MediaCard: React.FC<{
               const decrypted = await VaultCryptoService.decryptBuffer(ciphertext, version.iv, vaultKey);
               const blob = new Blob([decrypted], { type: item.mimeType || 'video/mp4' });
               videoBlobUrl = URL.createObjectURL(blob);
-              mediaCache.set(item._id, videoBlobUrl);
             }
 
             const thumbData = await extractFrameFromVideoUrl(videoBlobUrl);
             if (thumbData) {
+              // Revoke heavy video blob immediately to free memory!
+              if (videoBlobUrl.startsWith('blob:')) {
+                URL.revokeObjectURL(videoBlobUrl);
+              }
               mediaCache.saveThumbnail(item._id, thumbData);
               if (active) {
                 setDisplayUrl(thumbData);
                 setNeedsKey(false);
               }
             } else if (active) {
+              mediaCache.set(item._id, videoBlobUrl);
               setDisplayUrl(videoBlobUrl);
             }
           });
@@ -522,7 +527,7 @@ const MediaCard: React.FC<{
   return (
     <div
       onClick={() => onSelect({ item, displayUrl, isEncrypted, needsKey, error })}
-      className="group relative aspect-square bg-[#111114] border border-[#222227] hover:border-purple-500/50 rounded-2xl overflow-hidden cursor-pointer shadow-md transition duration-300"
+      className="group relative aspect-square bg-[#111114] border border-[#222227] hover:border-purple-500/50 rounded-2xl overflow-hidden cursor-pointer transition-colors duration-150 [contain:paint]"
     >
       {loading ? (
         <div className="w-full h-full flex items-center justify-center bg-[#141419] text-zinc-500">
@@ -537,14 +542,15 @@ const MediaCard: React.FC<{
         <VideoThumbnail src={displayUrl} alt={item.filename} />
       ) : isVideo ? (
         <div className="w-full h-full flex items-center justify-center bg-[#13131a] text-zinc-300">
-          <Film className="w-8 h-8 text-purple-400 group-hover:scale-110 transition duration-300" />
+          <Film className="w-8 h-8 text-purple-400 group-hover:scale-110 transition-transform duration-200" />
         </div>
       ) : displayUrl ? (
         <img
           src={displayUrl}
           alt={item.filename}
-          className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
+          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
           loading="lazy"
+          decoding="async"
         />
       ) : (
         <div className="w-full h-full flex items-center justify-center bg-[#141419] text-zinc-500">
@@ -553,7 +559,7 @@ const MediaCard: React.FC<{
       )}
 
       {/* Overlay info */}
-      <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent opacity-0 group-hover:opacity-100 transition p-2.5 flex flex-col justify-end text-white text-[11px]">
+      <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/30 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-150 p-2.5 flex flex-col justify-end text-white text-[11px] pointer-events-none">
         <p className="font-semibold truncate">{item.filename}</p>
         <p className="text-[10px] text-zinc-400">
           {item.sourceDeviceIds.length > 0 ? 'On phone & cloud' : 'Cloud only'}
@@ -563,7 +569,7 @@ const MediaCard: React.FC<{
 
       {/* Video indicator badge */}
       {isVideo && (
-        <div className="absolute top-2 right-2 bg-black/70 border border-white/10 text-white text-[9px] px-1.5 py-0.5 rounded-full flex items-center space-x-1 backdrop-blur-sm">
+        <div className="absolute top-2 right-2 bg-black/80 border border-white/15 text-white text-[9px] px-1.5 py-0.5 rounded-full flex items-center space-x-1">
           <Film className="w-2.5 h-2.5" />
           <span>VIDEO</span>
         </div>
@@ -571,11 +577,11 @@ const MediaCard: React.FC<{
 
       {/* Encrypted indicator badge */}
       {isEncrypted && (
-        <div className="absolute top-2 left-2 bg-purple-950/80 border border-purple-800/60 text-purple-300 text-[9px] px-1.5 py-0.5 rounded-full flex items-center space-x-1 shadow-glow-purple backdrop-blur-sm">
+        <div className="absolute top-2 left-2 bg-purple-950/90 border border-purple-800/70 text-purple-300 text-[9px] px-1.5 py-0.5 rounded-full flex items-center space-x-1">
           <ShieldCheck className="w-2.5 h-2.5 text-purple-400" />
           <span>E2EE</span>
         </div>
       )}
     </div>
   );
-};
+});
