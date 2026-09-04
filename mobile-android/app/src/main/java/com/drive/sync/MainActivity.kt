@@ -32,7 +32,7 @@ class MainActivity : ComponentActivity() {
                     color = MaterialTheme.colorScheme.background
                 ) {
                     SyncDashboardScreen(
-                        initialServerUrl = prefs.getString("server_url", "http://10.0.2.2:5000") ?: "http://10.0.2.2:5000",
+                        initialServerUrl = prefs.getString("server_url", "") ?: "",
                         initialDeviceId = prefs.getString("device_id", "") ?: "",
                         initialDeviceKey = prefs.getString("device_key", "") ?: "",
                         initialWifiOnly = prefs.getBoolean("wifi_only", true),
@@ -256,38 +256,40 @@ fun SyncDashboardScreen(
         }
 
         // Action Buttons
+        val isReady = serverUrl.isNotBlank() && deviceId.isNotBlank() && deviceKey.isNotBlank()
+
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             OutlinedButton(
                 onClick = {
-                    if (deviceId.isBlank() || deviceKey.isBlank()) return@OutlinedButton
-                    onSaveSettings(serverUrl, deviceId, deviceKey, wifiOnly, chargingOnly, syncVideos)
-                    onSyncNow(serverUrl, deviceId, deviceKey, syncVideos)
+                    if (!isReady) return@OutlinedButton
+                    onSaveSettings(serverUrl.trim(), deviceId.trim(), deviceKey.trim(), wifiOnly, chargingOnly, syncVideos)
+                    onSyncNow(serverUrl.trim(), deviceId.trim(), deviceKey.trim(), syncVideos)
                 },
                 modifier = Modifier.weight(1f),
-                enabled = deviceId.isNotBlank() && deviceKey.isNotBlank()
+                enabled = isReady
             ) {
                 Text("Sync Now")
             }
 
             Button(
                 onClick = {
-                    if (deviceId.isBlank() || deviceKey.isBlank()) return@Button
-                    onSaveSettings(serverUrl, deviceId, deviceKey, wifiOnly, chargingOnly, syncVideos)
-                    onScheduleSync(serverUrl, deviceId, deviceKey, wifiOnly, chargingOnly, syncVideos)
+                    if (!isReady) return@Button
+                    onSaveSettings(serverUrl.trim(), deviceId.trim(), deviceKey.trim(), wifiOnly, chargingOnly, syncVideos)
+                    onScheduleSync(serverUrl.trim(), deviceId.trim(), deviceKey.trim(), wifiOnly, chargingOnly, syncVideos)
                 },
                 modifier = Modifier.weight(1f),
-                enabled = deviceId.isNotBlank() && deviceKey.isNotBlank()
+                enabled = isReady
             ) {
                 Text("Save & Auto Sync")
             }
         }
 
-        if (deviceId.isBlank() || deviceKey.isBlank()) {
+        if (!isReady) {
             Text(
-                text = "Please enter Device ID and Device Key to enable sync.",
+                text = "Please enter your Server URL, Device ID, and Device Key to connect.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error
             )
