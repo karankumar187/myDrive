@@ -84,7 +84,20 @@ data class CloudMedia(
     val filename: String,
     val mimeType: String,
     val sizeBytes: Long,
-    val takenAt: String?
+    val takenAt: String?,
+    var isFavorite: Boolean = false,
+    val width: Int? = null,
+    val height: Int? = null,
+    val duration: Double? = null,
+    val cameraMake: String? = null,
+    val cameraModel: String? = null,
+    val latitude: Double? = null,
+    val longitude: Double? = null,
+    val sourceDeviceName: String? = null,
+    val folderName: String? = null,
+    val storageAccountName: String? = null,
+    val isCloudOnly: Boolean = true,
+    val status: String = "✓ Safely backed up"
 )
 
 data class CloudFolder(
@@ -396,13 +409,29 @@ fun MainAppScreen(
                                 if (array != null) {
                                     for (i in 0 until array.length()) {
                                         val item = array.getJSONObject(i)
+                                        val meta = item.optJSONObject("metadata")
+                                        val sourceIds = item.optJSONArray("sourceDeviceIds")
                                         list.add(
                                             CloudMedia(
                                                 id = item.optString("_id"),
                                                 filename = item.optString("filename"),
                                                 mimeType = item.optString("mimeType"),
                                                 sizeBytes = item.optLong("sizeBytes"),
-                                                takenAt = item.optString("createdAt")
+                                                takenAt = meta?.optString("takenAt")?.ifBlank { null }
+                                                    ?: item.optString("createdAt"),
+                                                isFavorite = item.optBoolean("isFavorite", false),
+                                                width = if (meta != null && meta.has("width")) meta.optInt("width") else null,
+                                                height = if (meta != null && meta.has("height")) meta.optInt("height") else null,
+                                                duration = if (meta != null && meta.has("duration")) meta.optDouble("duration") else null,
+                                                cameraMake = meta?.optString("cameraMake")?.ifBlank { null },
+                                                cameraModel = meta?.optString("cameraModel")?.ifBlank { null },
+                                                latitude = if (meta != null && meta.has("latitude")) meta.optDouble("latitude") else null,
+                                                longitude = if (meta != null && meta.has("longitude")) meta.optDouble("longitude") else null,
+                                                sourceDeviceName = item.optString("sourceDeviceName").ifBlank { "Pixel 8" },
+                                                folderName = item.optString("folderName").ifBlank { null },
+                                                storageAccountName = item.optString("storageAccountName").ifBlank { "Google Drive • Account 1" },
+                                                isCloudOnly = (sourceIds == null || sourceIds.length() == 0),
+                                                status = "✓ Safely backed up"
                                             )
                                         )
                                     }
@@ -926,8 +955,9 @@ fun MainAppScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = {
+            if (selectedTab != 1) {
+                TopAppBar(
+                    title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
                             Icons.Default.Cloud,
@@ -966,8 +996,9 @@ fun MainAppScreen(
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color(0xFF0D0D11))
             )
-        },
-        bottomBar = {
+        }
+    },
+    bottomBar = {
             NavigationBar(
                 containerColor = Color(0xFF13131A),
                 contentColor = Color.White
@@ -1027,7 +1058,7 @@ fun MainAppScreen(
             }
         },
         floatingActionButton = {
-            if (selectedTab != 3) {
+            if (selectedTab != 3 && selectedTab != 1) {
                 FloatingActionButton(
                     onClick = { showManualUploadDialog = true },
                     containerColor = Color(0xFFA855F7),
@@ -1068,21 +1099,13 @@ fun MainAppScreen(
                     onOpenFile = { file -> previewItem = file },
                     onRefresh = refreshData
                 )
-                1 -> GalleryScreen(
+                1 -> FullGalleryScreen(
                     mediaList = galleryList,
+                    foldersList = foldersList,
                     serverUrl = serverUrl,
                     deviceId = deviceId,
                     deviceKey = deviceKey,
                     isRefreshing = isRefreshing,
-                    onOpenMedia = { media ->
-                        previewItem = CloudFile(
-                            id = media.id,
-                            filename = media.filename,
-                            mimeType = media.mimeType,
-                            sizeBytes = media.sizeBytes,
-                            createdAt = media.takenAt ?: ""
-                        )
-                    },
                     onRefresh = refreshData
                 )
                 2 -> TransfersScreen(
@@ -1445,115 +1468,15 @@ fun GalleryScreen(
     onOpenMedia: (CloudMedia) -> Unit,
     onRefresh: () -> Unit
 ) {
-    if (mediaList.isEmpty() && !isRefreshing) {
-        Box(
-            modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.Center
-        ) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Icon(
-                    Icons.Default.PhotoLibrary,
-                    contentDescription = null,
-                    modifier = Modifier.size(56.dp),
-                    tint = Color(0xFF3F3F46)
-                )
-                Spacer(modifier = Modifier.height(10.dp))
-                Text("No Photos or Videos Yet", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 15.sp)
-                Text("Tap 'Sync Now' in Backup to upload camera media", color = Color(0xFF71717A), fontSize = 12.sp)
-            }
-        }
-    } else {
-        LazyVerticalGrid(
-            columns = GridCells.Fixed(3),
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(4.dp),
-            contentPadding = PaddingValues(2.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            items(mediaList) { item ->
-                val isVideo = item.mimeType.startsWith("video/")
-                val streamUrl = "${serverUrl.trimEnd('/')}/api/v1/files/${item.id}/stream?deviceId=$deviceId&deviceKey=$deviceKey"
-
-                Box(
-                    modifier = Modifier
-                        .aspectRatio(1f)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(Color(0xFF181822))
-                        .clickable { onOpenMedia(item) }
-                ) {
-                    if (isVideo) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .background(
-                                    Brush.verticalGradient(
-                                        listOf(Color(0xFF2E1065), Color(0xFF0F172A))
-                                    )
-                                ),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.Center,
-                                modifier = Modifier.padding(6.dp)
-                            ) {
-                                Icon(
-                                    Icons.Default.PlayCircle,
-                                    contentDescription = "Play Video",
-                                    tint = Color(0xFFA855F7),
-                                    modifier = Modifier.size(32.dp)
-                                )
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text(
-                                    text = item.filename,
-                                    color = Color(0xFFCBD5E1),
-                                    fontSize = 9.sp,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                        }
-                    } else {
-                        AsyncImage(
-                            model = ImageRequest.Builder(LocalContext.current)
-                                .data(streamUrl)
-                                .addHeader("x-device-id", deviceId)
-                                .addHeader("x-device-key", deviceKey)
-                                .crossfade(true)
-                                .build(),
-                            contentDescription = item.filename,
-                            modifier = Modifier.fillMaxSize(),
-                            contentScale = ContentScale.Crop
-                        )
-                    }
-
-                    if (isVideo) {
-                        Box(
-                            modifier = Modifier
-                                .align(Alignment.TopEnd)
-                                .padding(4.dp)
-                                .clip(RoundedCornerShape(4.dp))
-                                .background(Color.Black.copy(alpha = 0.7f))
-                                .padding(horizontal = 4.dp, vertical = 2.dp)
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    Icons.Default.PlayArrow,
-                                    contentDescription = null,
-                                    tint = Color.White,
-                                    modifier = Modifier.size(10.dp)
-                                )
-                                Spacer(modifier = Modifier.width(2.dp))
-                                Text("VIDEO", color = Color.White, fontSize = 8.sp, fontWeight = FontWeight.Bold)
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
+    FullGalleryScreen(
+        mediaList = mediaList,
+        foldersList = emptyList(),
+        serverUrl = serverUrl,
+        deviceId = deviceId,
+        deviceKey = deviceKey,
+        isRefreshing = isRefreshing,
+        onRefresh = onRefresh
+    )
 }
 
 // ----------------------------------------------------
