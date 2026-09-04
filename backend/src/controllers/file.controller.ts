@@ -137,9 +137,10 @@ export class FileController {
       const folderId = req.query.folderId as string;
       const search = req.query.search as string;
       const isTrash = req.query.isTrash === 'true';
+      const all = req.query.all === 'true';
 
       // Check Redis cache for standard (non-search) directory listings
-      const cacheKey = `cache:user:${userId}:files:${folderId || 'root'}:${isTrash}`;
+      const cacheKey = `cache:user:${userId}:files:${folderId || (all ? 'all' : 'root')}:${isTrash}`;
       if (!search) {
         const cached = await CacheService.get(cacheKey);
         if (cached) {
@@ -155,7 +156,7 @@ export class FileController {
 
       if (folderId && folderId !== 'root') {
         filter.folderId = new Types.ObjectId(folderId);
-      } else if (!search && !isTrash) {
+      } else if (!search && !isTrash && !all) {
         filter.folderId = null; // Root folder
       }
 

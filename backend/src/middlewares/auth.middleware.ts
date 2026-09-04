@@ -63,6 +63,8 @@ export async function requireDeviceAuth(req: Request, res: Response, next: NextF
     const deviceId = (req.headers['x-device-id'] as string) || (req.query.deviceId as string);
     const deviceKey =
       (req.headers['x-device-key'] as string) ||
+      (req.query.deviceKey as string) ||
+      (req.query.token as string) ||
       (req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.split(' ')[1] : null);
 
     if (!deviceId || !deviceKey) {
@@ -74,7 +76,7 @@ export async function requireDeviceAuth(req: Request, res: Response, next: NextF
     const device = await Device.findOne({ deviceId, apiKeyHash: keyHash });
 
     if (!device) {
-      res.status(401).json({ error: 'Device authentication failed. Key revoked or invalid.' });
+      res.status(401).json({ error: 'Invalid device credentials. Device not recognized.' });
       return;
     }
 
@@ -103,9 +105,13 @@ export async function requireDeviceAuth(req: Request, res: Response, next: NextF
  * Useful for shared endpoints like file upload and metadata inspection.
  */
 export async function requireAnyAuth(req: Request, res: Response, next: NextFunction): Promise<void> {
-  const hasDeviceHeader = req.headers['x-device-id'] || req.headers['x-device-key'];
+  const hasDeviceAuth =
+    req.headers['x-device-id'] ||
+    req.headers['x-device-key'] ||
+    req.query.deviceId ||
+    req.query.deviceKey;
 
-  if (hasDeviceHeader) {
+  if (hasDeviceAuth) {
     return requireDeviceAuth(req, res, next);
   }
 

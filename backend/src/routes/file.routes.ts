@@ -20,7 +20,7 @@ router.delete('/:id/permanent', requireUserAuth, FileController.permanentDelete)
 
 // Folders
 router.get('/folders/list', requireAnyAuth, FileController.listFolders);
-router.post('/folders/create', requireUserAuth, FileController.createFolder);
+router.post('/folders/create', requireAnyAuth, FileController.createFolder);
 router.delete('/folders/:id', requireUserAuth, FileController.deleteFolder);
 
 export const fileRoutes = router;
