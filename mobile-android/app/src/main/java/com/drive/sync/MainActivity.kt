@@ -146,10 +146,10 @@ data class PairedDevice(
 data class PairedDeviceRule(
     val sourceDeviceId: String,
     val sourceDeviceName: String,
-    var syncPhotos: Boolean = true,
-    var syncVideos: Boolean = true,
-    var syncDocuments: Boolean = true,
-    var autoDownloadToGallery: Boolean = true
+    val syncPhotos: Boolean = false,
+    val syncVideos: Boolean = false,
+    val syncDocuments: Boolean = false,
+    val autoDownloadToGallery: Boolean = false
 )
 
 data class DeviceUploadItem(
@@ -410,7 +410,32 @@ fun MainAppScreen(
     var uploadedFilesList by remember { mutableStateOf<List<DeviceUploadItem>>(emptyList()) }
     var inboundSyncList by remember { mutableStateOf<List<InboundSyncItem>>(emptyList()) }
     var pairedDevicesList by remember { mutableStateOf<List<PairedDevice>>(emptyList()) }
-    val pairedRulesMap = remember { mutableStateMapOf<String, PairedDeviceRule>() }
+    val pairedRulesMap = remember {
+        val map = mutableStateMapOf<String, PairedDeviceRule>()
+        try {
+            val savedJson = prefs.getString("paired_device_rules_json", null)
+            if (!savedJson.isNullOrBlank()) {
+                val arr = org.json.JSONArray(savedJson)
+                for (i in 0 until arr.length()) {
+                    val r = arr.getJSONObject(i)
+                    val sId = r.optString("sourceDeviceId")
+                    if (sId.isNotBlank()) {
+                        map[sId] = PairedDeviceRule(
+                            sourceDeviceId = sId,
+                            sourceDeviceName = r.optString("sourceDeviceName"),
+                            syncPhotos = r.optBoolean("syncPhotos", false),
+                            syncVideos = r.optBoolean("syncVideos", false),
+                            syncDocuments = r.optBoolean("syncDocuments", false),
+                            autoDownloadToGallery = r.optBoolean("autoDownloadToGallery", false)
+                        )
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        map
+    }
     var isSavingPolicy by remember { mutableStateOf(false) }
     var isSyncingNow by remember { mutableStateOf(false) }
 
@@ -422,6 +447,26 @@ fun MainAppScreen(
     var previewItem by remember { mutableStateOf<CloudFile?>(null) }
 
     val scope = rememberCoroutineScope()
+
+    val savePairedRulesToPrefs = {
+        try {
+            val arr = org.json.JSONArray()
+            pairedRulesMap.values.forEach { r ->
+                val obj = org.json.JSONObject().apply {
+                    put("sourceDeviceId", r.sourceDeviceId)
+                    put("sourceDeviceName", r.sourceDeviceName)
+                    put("syncPhotos", r.syncPhotos)
+                    put("syncVideos", r.syncVideos)
+                    put("syncDocuments", r.syncDocuments)
+                    put("autoDownloadToGallery", r.autoDownloadToGallery)
+                }
+                arr.put(obj)
+            }
+            prefs.edit().putString("paired_device_rules_json", arr.toString()).apply()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
 
     val saveCredentials = {
         prefs.edit().apply {
@@ -735,10 +780,10 @@ fun MainAppScreen(
                                             pairedRulesMap[devId] = PairedDeviceRule(
                                                 sourceDeviceId = devId,
                                                 sourceDeviceName = item.optString("deviceName"),
-                                                syncPhotos = true,
-                                                syncVideos = true,
-                                                syncDocuments = true,
-                                                autoDownloadToGallery = true
+                                                syncPhotos = false,
+                                                syncVideos = false,
+                                                syncDocuments = false,
+                                                autoDownloadToGallery = false
                                             )
                                         }
                                     }
@@ -755,15 +800,16 @@ fun MainAppScreen(
                                                 pairedRulesMap[sId] = PairedDeviceRule(
                                                     sourceDeviceId = sId,
                                                     sourceDeviceName = r.optString("sourceDeviceName"),
-                                                    syncPhotos = r.optBoolean("syncPhotos", true),
-                                                    syncVideos = r.optBoolean("syncVideos", true),
-                                                    syncDocuments = r.optBoolean("syncDocuments", true),
-                                                    autoDownloadToGallery = r.optBoolean("autoDownloadToGallery", true)
+                                                    syncPhotos = r.optBoolean("syncPhotos", false),
+                                                    syncVideos = r.optBoolean("syncVideos", false),
+                                                    syncDocuments = r.optBoolean("syncDocuments", false),
+                                                    autoDownloadToGallery = r.optBoolean("autoDownloadToGallery", false)
                                                 )
                                             }
                                         }
                                     }
                                 }
+                                savePairedRulesToPrefs()
                             }
                         } catch (e: Exception) {
                             e.printStackTrace()
@@ -1366,12 +1412,9 @@ fun MainAppScreen(
                         onSyncPhotosChange = { syncPhotos = it; saveCredentials() },
                         onSyncVideosChange = { syncVideos = it; saveCredentials() },
                         onSyncDocumentsChange = { syncDocuments = it; saveCredentials() },
-                        onUpdatePairedRule = { sId, mutator ->
-                            val existing = pairedRulesMap[sId]
-                            if (existing != null) {
-                                mutator(existing)
-                                pairedRulesMap[sId] = existing.copy()
-                            }
+                        onUpdatePairedRule = { sId, updatedRule ->
+                            pairedRulesMap[sId] = updatedRule
+                            savePairedRulesToPrefs()
                         },
                         onSavePolicy = savePolicyAction,
                         onOpenFolderDialog = { showFolderDialog = true },
@@ -2682,7 +2725,7 @@ fun DeviceAndPolicyScreen(
     onSyncPhotosChange: (Boolean) -> Unit,
     onSyncVideosChange: (Boolean) -> Unit,
     onSyncDocumentsChange: (Boolean) -> Unit,
-    onUpdatePairedRule: (String, (PairedDeviceRule) -> Unit) -> Unit,
+    onUpdatePairedRule: (String, PairedDeviceRule) -> Unit,
     onSavePolicy: () -> Unit,
     onOpenFolderDialog: () -> Unit,
     onSyncNow: () -> Unit,
@@ -2975,10 +3018,10 @@ fun DeviceAndPolicyScreen(
                             ?: PairedDeviceRule(
                                 sourceDeviceId = pDev.deviceId,
                                 sourceDeviceName = pDev.deviceName,
-                                syncPhotos = true,
-                                syncVideos = true,
-                                syncDocuments = true,
-                                autoDownloadToGallery = true
+                                syncPhotos = false,
+                                syncVideos = false,
+                                syncDocuments = false,
+                                autoDownloadToGallery = false
                             )
 
                         Card(
@@ -3034,7 +3077,7 @@ fun DeviceAndPolicyScreen(
                                     Switch(
                                         checked = rule.syncPhotos,
                                         onCheckedChange = { chk ->
-                                            onUpdatePairedRule(pDev.deviceId) { it.syncPhotos = chk }
+                                            onUpdatePairedRule(pDev.deviceId, rule.copy(syncPhotos = chk))
                                         }
                                     )
                                 }
@@ -3048,7 +3091,7 @@ fun DeviceAndPolicyScreen(
                                     Switch(
                                         checked = rule.syncVideos,
                                         onCheckedChange = { chk ->
-                                            onUpdatePairedRule(pDev.deviceId) { it.syncVideos = chk }
+                                            onUpdatePairedRule(pDev.deviceId, rule.copy(syncVideos = chk))
                                         }
                                     )
                                 }
@@ -3062,7 +3105,7 @@ fun DeviceAndPolicyScreen(
                                     Switch(
                                         checked = rule.syncDocuments,
                                         onCheckedChange = { chk ->
-                                            onUpdatePairedRule(pDev.deviceId) { it.syncDocuments = chk }
+                                            onUpdatePairedRule(pDev.deviceId, rule.copy(syncDocuments = chk))
                                         }
                                     )
                                 }
@@ -3076,7 +3119,7 @@ fun DeviceAndPolicyScreen(
                                     Switch(
                                         checked = rule.autoDownloadToGallery,
                                         onCheckedChange = { chk ->
-                                            onUpdatePairedRule(pDev.deviceId) { it.autoDownloadToGallery = chk }
+                                            onUpdatePairedRule(pDev.deviceId, rule.copy(autoDownloadToGallery = chk))
                                         }
                                     )
                                 }
