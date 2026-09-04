@@ -30,6 +30,15 @@ const DeviceFileStateSchema = new Schema<IDeviceFileStateDocument>(
       default: true,
       index: true,
     },
+    forceDownloadRequested: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+    forceDownloadRequestedAt: {
+      type: Date,
+      default: null,
+    },
     lastSeenLocalAt: {
       type: Date,
       default: Date.now,

@@ -148,6 +148,8 @@ export interface IDeviceFileState {
   fileId: Types.ObjectId;
   deviceAssetId?: string; // Platform asset ID (e.g. iOS PHAsset localIdentifier or Android MediaStore ID)
   isLocallyPresent: boolean;
+  forceDownloadRequested?: boolean;
+  forceDownloadRequestedAt?: Date;
   lastSeenLocalAt: Date;
   createdAt: Date;
   updatedAt: Date;

@@ -94,6 +94,7 @@ data class CloudMedia(
     val latitude: Double? = null,
     val longitude: Double? = null,
     val sourceDeviceName: String? = null,
+    val sourceDeviceId: String? = null,
     val folderName: String? = null,
     val storageAccountName: String? = null,
     val isCloudOnly: Boolean = true,
@@ -141,7 +142,8 @@ data class InboundSyncItem(
     val folderName: String?,
     val createdAt: String,
     val sourceDeviceLabel: String,
-    var isDownloadedLocally: Boolean = false
+    var isDownloadedLocally: Boolean = false,
+    val isForceDownload: Boolean = false
 )
 
 class MainActivity : ComponentActivity() {
@@ -323,6 +325,39 @@ fun MainAppScreen(
         }
     }
 
+    val downloadInboundItem: (InboundSyncItem) -> Unit = { item ->
+        val streamUrl = "${serverUrl.trimEnd('/')}/api/v1/files/${item.id}/stream?deviceId=$deviceId&deviceKey=$deviceKey"
+        val isMedia = item.mimeType.startsWith("image/") || item.mimeType.startsWith("video/")
+        downloadFileToDevice(
+            context = context,
+            url = streamUrl,
+            filename = item.filename,
+            deviceId = deviceId,
+            deviceKey = deviceKey,
+            saveToGallery = isMedia,
+            onSuccess = {
+                scope.launch(Dispatchers.IO) {
+                    try {
+                        val baseUrl = serverUrl.trimEnd('/')
+                        val body = JSONObject().apply { put("fileId", item.id) }
+                        val req = Request.Builder()
+                            .url("$baseUrl/api/v1/files/device/$deviceId/mark-synced")
+                            .addHeader("x-device-id", deviceId)
+                            .addHeader("x-device-key", deviceKey)
+                            .post(body.toString().toRequestBody("application/json".toMediaType()))
+                            .build()
+                        httpClient.newCall(req).execute()
+                        withContext(Dispatchers.Main) {
+                            item.isDownloadedLocally = true
+                        }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                }
+            }
+        )
+    }
+
     val refreshData: () -> Unit = {
         if (serverUrl.isNotBlank() && deviceId.isNotBlank() && deviceKey.isNotBlank()) {
             scope.launch {
@@ -428,6 +463,7 @@ fun MainAppScreen(
                                                 latitude = if (meta != null && meta.has("latitude")) meta.optDouble("latitude") else null,
                                                 longitude = if (meta != null && meta.has("longitude")) meta.optDouble("longitude") else null,
                                                 sourceDeviceName = item.optString("sourceDeviceName").ifBlank { "Pixel 8" },
+                                                sourceDeviceId = item.optString("sourceDeviceId").ifBlank { null },
                                                 folderName = item.optString("folderName").ifBlank { null },
                                                 storageAccountName = item.optString("storageAccountName").ifBlank { "Google Drive • Account 1" },
                                                 isCloudOnly = (sourceIds == null || sourceIds.length() == 0),
@@ -531,12 +567,24 @@ fun MainAppScreen(
                                                 folderName = fObj?.optString("name"),
                                                 createdAt = item.optString("createdAt"),
                                                 sourceDeviceLabel = item.optString("sourceDeviceLabel", "Cloud Drive"),
-                                                isDownloadedLocally = item.optBoolean("isDownloadedLocally", false)
+                                                isDownloadedLocally = item.optBoolean("isDownloadedLocally", false),
+                                                isForceDownload = item.optBoolean("isForceDownload", false)
                                             )
                                         )
                                     }
                                 }
                                 inboundSyncList = list
+
+                                // Automatically trigger download for force-download items requested from Web
+                                val forcePending = list.filter { it.isForceDownload && !it.isDownloadedLocally }
+                                if (forcePending.isNotEmpty()) {
+                                    withContext(Dispatchers.Main) {
+                                        Toast.makeText(context, "Force download: saving ${forcePending.size} file(s) to Gallery...", Toast.LENGTH_SHORT).show()
+                                        forcePending.forEach { fItem ->
+                                            downloadInboundItem(fItem)
+                                        }
+                                    }
+                                }
                             }
                         } catch (e: Exception) {
                             e.printStackTrace()
@@ -663,39 +711,6 @@ fun MainAppScreen(
                 }
             }
         }
-    }
-
-    val downloadInboundItem: (InboundSyncItem) -> Unit = { item ->
-        val streamUrl = "${serverUrl.trimEnd('/')}/api/v1/files/${item.id}/stream?deviceId=$deviceId&deviceKey=$deviceKey"
-        val isMedia = item.mimeType.startsWith("image/") || item.mimeType.startsWith("video/")
-        downloadFileToDevice(
-            context = context,
-            url = streamUrl,
-            filename = item.filename,
-            deviceId = deviceId,
-            deviceKey = deviceKey,
-            saveToGallery = isMedia,
-            onSuccess = {
-                scope.launch(Dispatchers.IO) {
-                    try {
-                        val baseUrl = serverUrl.trimEnd('/')
-                        val body = JSONObject().apply { put("fileId", item.id) }
-                        val req = Request.Builder()
-                            .url("$baseUrl/api/v1/files/device/$deviceId/mark-synced")
-                            .addHeader("x-device-id", deviceId)
-                            .addHeader("x-device-key", deviceKey)
-                            .post(body.toString().toRequestBody("application/json".toMediaType()))
-                            .build()
-                        httpClient.newCall(req).execute()
-                        withContext(Dispatchers.Main) {
-                            item.isDownloadedLocally = true
-                        }
-                    } catch (e: Exception) {
-                        e.printStackTrace()
-                    }
-                }
-            }
-        )
     }
 
     val syncAllToGallery: () -> Unit = {
@@ -1102,6 +1117,7 @@ fun MainAppScreen(
                 1 -> FullGalleryScreen(
                     mediaList = galleryList,
                     foldersList = foldersList,
+                    pairedDevices = pairedDevicesList,
                     serverUrl = serverUrl,
                     deviceId = deviceId,
                     deviceKey = deviceKey,
@@ -1471,6 +1487,7 @@ fun GalleryScreen(
     FullGalleryScreen(
         mediaList = mediaList,
         foldersList = emptyList(),
+        pairedDevices = emptyList(),
         serverUrl = serverUrl,
         deviceId = deviceId,
         deviceKey = deviceKey,

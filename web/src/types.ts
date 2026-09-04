@@ -40,6 +40,7 @@ export interface FileItem {
   isTrash: boolean;
   trashedAt?: string;
   sourceDeviceIds: string[];
+  sourceDeviceId?: string;
   isFavorite?: boolean;
   sourceDeviceName?: string;
   folderName?: string | null;

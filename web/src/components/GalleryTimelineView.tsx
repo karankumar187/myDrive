@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { FileItem, FolderItem } from '../types.js';
+import { FileItem, FolderItem, DeviceItem } from '../types.js';
 import {
   Film,
   Calendar,
@@ -28,6 +28,8 @@ import {
   Cloud,
   ChevronDown,
   Check,
+  Smartphone,
+  Send,
 } from 'lucide-react';
 import { VaultCryptoService } from '../services/vault-crypto.js';
 import { mediaCache, mediaQueue } from '../services/media-cache.js';
@@ -55,6 +57,18 @@ export const GalleryTimelineView: React.FC<Props> = ({ media, vaultKey, onOpenVa
   const [isFilterDropdownOpen, setIsFilterDropdownOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
 
+  // Device Filter State
+  const [devices, setDevices] = useState<DeviceItem[]>([]);
+  const [selectedDeviceFilters, setSelectedDeviceFilters] = useState<Set<string>>(new Set());
+  const [isDeviceDropdownOpen, setIsDeviceDropdownOpen] = useState(false);
+
+  // Force Download to Paired Device State
+  const [isForceDownloadOpen, setIsForceDownloadOpen] = useState(false);
+  const [forceDownloadTargetIds, setForceDownloadTargetIds] = useState<string[]>([]);
+  const [selectedTargetDeviceId, setSelectedTargetDeviceId] = useState<string>('');
+  const [isSendingForceDownload, setIsSendingForceDownload] = useState(false);
+  const [forceDownloadStatusMsg, setForceDownloadStatusMsg] = useState<string | null>(null);
+
   // Selection Mode
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -78,7 +92,17 @@ export const GalleryTimelineView: React.FC<Props> = ({ media, vaultKey, onOpenVa
     setLocalMediaList(media);
   }, [media]);
 
-  // Filtered media based on filterType and searchQuery
+  useEffect(() => {
+    api.listDevices().then((res) => {
+      const devList = res.devices || [];
+      setDevices(devList);
+      if (devList.length > 0) {
+        setSelectedTargetDeviceId(devList[0].deviceId);
+      }
+    }).catch((err) => console.error('Failed to load devices for gallery filter:', err));
+  }, []);
+
+  // Filtered media based on filterType, selectedDeviceFilters, and searchQuery
   const filteredMedia = useMemo(() => {
     return localMediaList.filter((item) => {
       const isVideo = item.mimeType.startsWith('video/');
@@ -88,6 +112,14 @@ export const GalleryTimelineView: React.FC<Props> = ({ media, vaultKey, onOpenVa
       if (filterType === 'videos' && !isVideo) return false;
       if (filterType === 'photos' && !isPhoto) return false;
 
+      // Filter by uploaded devices (checkbox selection)
+      if (selectedDeviceFilters.size > 0) {
+        const itemDevId = item.sourceDeviceId || (item.sourceDeviceIds && item.sourceDeviceIds[0]) || 'web';
+        const isWeb = !item.sourceDeviceIds || item.sourceDeviceIds.length === 0 || itemDevId === 'web' || (item.sourceDeviceName || '').toLowerCase().includes('web') || (item.sourceDeviceName || '').toLowerCase().includes('unified');
+        const matches = selectedDeviceFilters.has(itemDevId) || (isWeb && selectedDeviceFilters.has('web'));
+        if (!matches) return false;
+      }
+
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase().trim();
         const matchName = item.filename.toLowerCase().includes(q);
@@ -96,7 +128,7 @@ export const GalleryTimelineView: React.FC<Props> = ({ media, vaultKey, onOpenVa
       }
       return true;
     });
-  }, [localMediaList, filterType, searchQuery]);
+  }, [localMediaList, filterType, selectedDeviceFilters, searchQuery]);
 
   // Group media by Month & Year
   const groupedMedia = useMemo(() => {
@@ -120,6 +152,7 @@ export const GalleryTimelineView: React.FC<Props> = ({ media, vaultKey, onOpenVa
       }
       return next;
     });
+    setIsSelectionMode(true);
   };
 
   const selectAll = () => {
@@ -347,6 +380,101 @@ export const GalleryTimelineView: React.FC<Props> = ({ media, vaultKey, onOpenVa
               </div>
             )}
           </div>
+
+          {/* Device Filter Dropdown with Checkboxes */}
+          <div className="relative">
+            <button
+              onClick={() => setIsDeviceDropdownOpen(!isDeviceDropdownOpen)}
+              className={`inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-full text-xs font-semibold border transition active:scale-95 ${
+                selectedDeviceFilters.size > 0
+                  ? 'bg-purple-950/50 text-purple-300 border-purple-600/60 shadow-glow-purple'
+                  : 'bg-[#181822] hover:bg-[#222230] text-zinc-200 border-[#2d2d3d]'
+              }`}
+            >
+              <Smartphone className="w-3.5 h-3.5 text-purple-400" />
+              <span>
+                {selectedDeviceFilters.size === 0
+                  ? 'All Devices'
+                  : `${selectedDeviceFilters.size} Device${selectedDeviceFilters.size > 1 ? 's' : ''}`}
+              </span>
+              <ChevronDown className="w-3.5 h-3.5 text-zinc-400" />
+            </button>
+
+            {isDeviceDropdownOpen && (
+              <div
+                className="absolute left-0 mt-2 w-60 bg-[#181822] border border-[#2d2d3d] rounded-2xl shadow-2xl z-40 p-2 space-y-1 animate-in fade-in"
+              >
+                <div className="px-2 py-1 text-[11px] font-bold text-zinc-400 uppercase tracking-wider flex items-center justify-between border-b border-[#2d2d3d] pb-1.5 mb-1">
+                  <span>Filter by Upload Source</span>
+                  {selectedDeviceFilters.size > 0 && (
+                    <button
+                      onClick={() => setSelectedDeviceFilters(new Set())}
+                      className="text-purple-400 hover:text-purple-300 normal-case font-semibold text-[10px]"
+                    >
+                      Reset
+                    </button>
+                  )}
+                </div>
+
+                {/* All Devices checkbox */}
+                <label className="flex items-center space-x-2.5 px-2.5 py-1.5 rounded-xl hover:bg-[#232330] cursor-pointer text-xs text-white">
+                  <input
+                    type="checkbox"
+                    checked={selectedDeviceFilters.size === 0}
+                    onChange={() => setSelectedDeviceFilters(new Set())}
+                    className="w-4 h-4 rounded text-purple-600 focus:ring-purple-500 bg-[#121218] border-zinc-700"
+                  />
+                  <span className="font-semibold">All Devices</span>
+                </label>
+
+                {/* Paired devices checkboxes */}
+                {devices.map((dev) => {
+                  const isChecked = selectedDeviceFilters.has(dev.deviceId);
+                  return (
+                    <label
+                      key={dev.deviceId}
+                      className="flex items-center space-x-2.5 px-2.5 py-1.5 rounded-xl hover:bg-[#232330] cursor-pointer text-xs text-zinc-200"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        onChange={() => {
+                          setSelectedDeviceFilters((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(dev.deviceId)) next.delete(dev.deviceId);
+                            else next.add(dev.deviceId);
+                            return next;
+                          });
+                        }}
+                        className="w-4 h-4 rounded text-purple-600 focus:ring-purple-500 bg-[#121218] border-zinc-700"
+                      />
+                      <span className="truncate flex-1 font-medium">{dev.deviceName}</span>
+                      <span className="text-[10px] text-zinc-500 uppercase">{dev.deviceType}</span>
+                    </label>
+                  );
+                })}
+
+                {/* Web / Unified Drive checkbox */}
+                <label className="flex items-center space-x-2.5 px-2.5 py-1.5 rounded-xl hover:bg-[#232330] cursor-pointer text-xs text-zinc-200">
+                  <input
+                    type="checkbox"
+                    checked={selectedDeviceFilters.has('web')}
+                    onChange={() => {
+                      setSelectedDeviceFilters((prev) => {
+                        const next = new Set(prev);
+                        if (next.has('web')) next.delete('web');
+                        else next.add('web');
+                        return next;
+                      });
+                    }}
+                    className="w-4 h-4 rounded text-purple-600 focus:ring-purple-500 bg-[#121218] border-zinc-700"
+                  />
+                  <span className="truncate flex-1 font-medium">Unified Drive (Web)</span>
+                  <Cloud className="w-3.5 h-3.5 text-zinc-500" />
+                </label>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Center: Live Search Bar */}
@@ -411,57 +539,86 @@ export const GalleryTimelineView: React.FC<Props> = ({ media, vaultKey, onOpenVa
         </div>
       </div>
 
-      {/* Floating Selection Action Bar */}
-      {isSelectionMode && (
-        <div className="sticky top-4 z-40 bg-[#14141c]/95 backdrop-blur-md border border-purple-500/40 rounded-2xl p-3 shadow-2xl flex items-center justify-between animate-in fade-in slide-in-from-top-2">
+      {/* Floating Selection Action Bar — Anchored at bottom with rich actions */}
+      {(selectedIds.size > 0 || isSelectionMode) && (
+        <div className="fixed bottom-6 inset-x-0 mx-auto w-[94%] max-w-3xl z-50 bg-[#13131c]/95 backdrop-blur-2xl border border-purple-500/50 rounded-2xl px-4 py-3 shadow-2xl flex flex-wrap sm:flex-nowrap items-center justify-between gap-3 animate-in fade-in slide-in-from-bottom-4">
           <div className="flex items-center space-x-3">
-            <span className="text-xs font-bold text-white pl-2">
-              {selectedIds.size} selected
-            </span>
+            <div className="bg-purple-600/20 border border-purple-500/40 px-2.5 py-1 rounded-lg">
+              <span className="text-xs font-bold text-purple-300">
+                {selectedIds.size} selected
+              </span>
+            </div>
             <button
               onClick={selectedIds.size === filteredMedia.length ? deselectAll : selectAll}
-              className="text-xs text-purple-400 hover:text-purple-300 font-medium transition"
+              className="text-xs text-purple-400 hover:text-purple-300 font-semibold transition"
             >
               {selectedIds.size === filteredMedia.length ? 'Deselect All' : 'Select All'}
             </button>
           </div>
 
-          <div className="flex items-center space-x-1.5">
+          <div className="flex items-center space-x-2 overflow-x-auto py-0.5">
+            {/* Force Download to Paired Device */}
+            <button
+              disabled={selectedIds.size === 0}
+              onClick={() => {
+                setForceDownloadTargetIds(Array.from(selectedIds));
+                setIsForceDownloadOpen(true);
+              }}
+              className="px-3 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-semibold text-xs border border-purple-400/40 shadow-glow-purple disabled:opacity-40 transition flex items-center space-x-1.5 active:scale-95"
+              title="Force Download to Paired Device"
+            >
+              <Smartphone className="w-3.5 h-3.5" />
+              <span>Send to Device</span>
+            </button>
+
+            {/* Favorite */}
             <button
               disabled={selectedIds.size === 0}
               onClick={() => handleBulkFavorite(true)}
-              className="p-2 rounded-xl bg-[#1e1e28] hover:bg-purple-950/60 text-zinc-300 hover:text-red-400 border border-[#2d2d3d] disabled:opacity-40 transition"
+              className="px-2.5 py-1.5 rounded-xl bg-[#1e1e28] hover:bg-purple-950/60 text-zinc-300 hover:text-red-400 border border-[#2d2d3d] disabled:opacity-40 transition flex items-center space-x-1 text-xs active:scale-95"
               title="Favorite Selected"
             >
-              <Heart className="w-4 h-4" />
+              <Heart className="w-3.5 h-3.5 text-red-400" />
+              <span className="hidden md:inline">Favorite</span>
             </button>
+
+            {/* Download */}
             <button
               disabled={selectedIds.size === 0}
               onClick={handleBulkDownload}
-              className="p-2 rounded-xl bg-[#1e1e28] hover:bg-[#282836] text-zinc-300 hover:text-white border border-[#2d2d3d] disabled:opacity-40 transition"
-              title="Download Selected"
+              className="px-2.5 py-1.5 rounded-xl bg-[#1e1e28] hover:bg-[#282836] text-zinc-300 hover:text-white border border-[#2d2d3d] disabled:opacity-40 transition flex items-center space-x-1 text-xs active:scale-95"
+              title="Download to PC"
             >
-              <Download className="w-4 h-4" />
+              <Download className="w-3.5 h-3.5" />
+              <span className="hidden md:inline">Download</span>
             </button>
+
+            {/* Move to Folder */}
             <button
               disabled={selectedIds.size === 0}
               onClick={handleOpenMove}
-              className="p-2 rounded-xl bg-[#1e1e28] hover:bg-[#282836] text-zinc-300 hover:text-white border border-[#2d2d3d] disabled:opacity-40 transition"
-              title="Move Selected to Folder"
+              className="px-2.5 py-1.5 rounded-xl bg-[#1e1e28] hover:bg-[#282836] text-zinc-300 hover:text-white border border-[#2d2d3d] disabled:opacity-40 transition flex items-center space-x-1 text-xs active:scale-95"
+              title="Move to Folder"
             >
-              <FolderInput className="w-4 h-4" />
+              <FolderInput className="w-3.5 h-3.5" />
+              <span className="hidden md:inline">Move</span>
             </button>
+
+            {/* Move to Trash */}
             <button
               disabled={selectedIds.size === 0}
               onClick={handleBulkTrash}
-              className="p-2 rounded-xl bg-red-950/40 hover:bg-red-900/60 text-red-400 border border-red-800/40 disabled:opacity-40 transition"
+              className="px-2.5 py-1.5 rounded-xl bg-red-950/40 hover:bg-red-900/60 text-red-400 border border-red-800/40 disabled:opacity-40 transition flex items-center space-x-1 text-xs active:scale-95"
               title="Move to Trash"
             >
-              <Trash2 className="w-4 h-4" />
+              <Trash2 className="w-3.5 h-3.5" />
+              <span className="hidden md:inline">Delete</span>
             </button>
+
+            {/* Cancel Selection */}
             <button
               onClick={deselectAll}
-              className="p-2 rounded-xl text-zinc-400 hover:text-white transition"
+              className="p-1.5 rounded-xl text-zinc-400 hover:text-white hover:bg-zinc-800 transition active:scale-95"
               title="Cancel Selection"
             >
               <X className="w-4 h-4" />
@@ -557,6 +714,10 @@ export const GalleryTimelineView: React.FC<Props> = ({ media, vaultKey, onOpenVa
             setIsRenameOpen(true);
           }}
           onOpenMove={handleOpenMove}
+          onOpenForceDownload={() => {
+            setForceDownloadTargetIds([currentMedia._id]);
+            setIsForceDownloadOpen(true);
+          }}
         />
       )}
 
@@ -647,6 +808,120 @@ export const GalleryTimelineView: React.FC<Props> = ({ media, vaultKey, onOpenVa
                 className="px-4 py-1.5 text-xs font-semibold text-white bg-purple-600 hover:bg-purple-500 rounded-lg shadow-glow-purple disabled:opacity-50 transition"
               >
                 {isMoving ? 'Moving...' : 'Move Here'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Force Download to Paired Device Modal */}
+      {isForceDownloadOpen && (
+        <div className="fixed inset-0 bg-black/85 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
+          <div className="bg-[#15151e] border border-purple-500/50 rounded-3xl max-w-md w-full p-6 space-y-5 shadow-2xl">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-3">
+                <div className="p-2.5 rounded-2xl bg-purple-600/20 border border-purple-500/40 text-purple-400 shadow-glow-purple">
+                  <Smartphone className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white">Force Download to Device</h3>
+                  <p className="text-xs text-zinc-400">
+                    Push {forceDownloadTargetIds.length} item(s) to automatically save locally
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setIsForceDownloadOpen(false);
+                  setForceDownloadStatusMsg(null);
+                }}
+                className="p-1.5 text-zinc-400 hover:text-white rounded-lg hover:bg-zinc-800 transition"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {devices.length === 0 ? (
+              <div className="p-5 rounded-2xl bg-[#101016] border border-[#242434] text-center space-y-2">
+                <p className="text-xs text-zinc-200 font-semibold">No paired devices found</p>
+                <p className="text-[11px] text-zinc-500 leading-relaxed">
+                  Pair an Android phone, iPhone, or Mac in Device Manager to force download files directly to it.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+                <p className="text-xs font-semibold text-zinc-300">Choose destination device:</p>
+                {devices.map((dev) => {
+                  const isSelected = selectedTargetDeviceId === dev.deviceId;
+                  return (
+                    <div
+                      key={dev.deviceId}
+                      onClick={() => setSelectedTargetDeviceId(dev.deviceId)}
+                      className={`p-3.5 rounded-2xl border cursor-pointer transition flex items-center justify-between ${
+                        isSelected
+                          ? 'bg-purple-950/50 border-purple-500 text-white shadow-glow-purple'
+                          : 'bg-[#101016] border-[#222230] text-zinc-300 hover:bg-[#181822]'
+                      }`}
+                    >
+                      <div className="flex items-center space-x-3">
+                        <Smartphone className={`w-5 h-5 ${isSelected ? 'text-purple-400' : 'text-zinc-500'}`} />
+                        <div>
+                          <p className="text-xs font-bold text-white">{dev.deviceName}</p>
+                          <p className="text-[10px] text-zinc-400 uppercase tracking-wider">
+                            {dev.deviceType} • {dev.status === 'online' ? '🟢 Online' : '⚪ Standby'}
+                          </p>
+                        </div>
+                      </div>
+                      <div className={`w-4 h-4 rounded-full border flex items-center justify-center ${
+                        isSelected ? 'border-purple-500 bg-purple-600' : 'border-zinc-600'
+                      }`}>
+                        {isSelected && <Check className="w-2.5 h-2.5 text-white" />}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {forceDownloadStatusMsg && (
+              <p className="text-xs text-emerald-400 bg-emerald-950/40 border border-emerald-800/40 p-2.5 rounded-xl font-medium">
+                {forceDownloadStatusMsg}
+              </p>
+            )}
+
+            <div className="flex justify-end space-x-2 pt-2 border-t border-[#252535]">
+              <button
+                onClick={() => {
+                  setIsForceDownloadOpen(false);
+                  setForceDownloadStatusMsg(null);
+                }}
+                className="px-4 py-2 text-xs text-zinc-400 hover:text-white rounded-xl hover:bg-zinc-800 transition"
+              >
+                Cancel
+              </button>
+              <button
+                disabled={!selectedTargetDeviceId || devices.length === 0 || isSendingForceDownload}
+                onClick={async () => {
+                  setIsSendingForceDownload(true);
+                  try {
+                    const targetDev = devices.find((d) => d.deviceId === selectedTargetDeviceId);
+                    await api.forceDownloadToDevice(selectedTargetDeviceId, forceDownloadTargetIds);
+                    setForceDownloadStatusMsg(`✓ Queued force download of ${forceDownloadTargetIds.length} item(s) to ${targetDev?.deviceName || 'device'}!`);
+                    setTimeout(() => {
+                      setIsForceDownloadOpen(false);
+                      setForceDownloadStatusMsg(null);
+                      deselectAll();
+                    }, 1400);
+                  } catch (err: any) {
+                    alert(err.message || 'Failed to dispatch force download');
+                  } finally {
+                    setIsSendingForceDownload(false);
+                  }
+                }}
+                className="px-5 py-2 text-xs font-bold text-white bg-purple-600 hover:bg-purple-500 rounded-xl shadow-glow-purple disabled:opacity-40 transition flex items-center space-x-1.5 active:scale-95"
+              >
+                <Send className="w-3.5 h-3.5" />
+                <span>{isSendingForceDownload ? 'Dispatching...' : 'Send & Force Download'}</span>
               </button>
             </div>
           </div>
@@ -837,6 +1112,7 @@ const FullScreenViewer: React.FC<{
   onOpenDetails: () => void;
   onOpenRename: () => void;
   onOpenMove: () => void;
+  onOpenForceDownload?: () => void;
 }> = ({
   mediaList,
   currentIndex,
@@ -848,6 +1124,7 @@ const FullScreenViewer: React.FC<{
   onOpenDetails,
   onOpenRename,
   onOpenMove,
+  onOpenForceDownload,
 }) => {
   const item = mediaList[currentIndex];
   const isVideo = item.mimeType.startsWith('video/');
@@ -1078,6 +1355,15 @@ const FullScreenViewer: React.FC<{
                   <Share2 className="w-4 h-4 text-zinc-400" />
                   <span>Share</span>
                 </button>
+                {onOpenForceDownload && (
+                  <button
+                    onClick={onOpenForceDownload}
+                    className="w-full px-4 py-2.5 text-left flex items-center space-x-2 hover:bg-purple-950/40 hover:text-white"
+                  >
+                    <Smartphone className="w-4 h-4 text-purple-400" />
+                    <span>Send to Device</span>
+                  </button>
+                )}
                 <button
                   onClick={onDelete}
                   className="w-full px-4 py-2.5 text-left flex items-center space-x-2 hover:bg-red-950/40 text-red-400"
@@ -1196,6 +1482,20 @@ const FullScreenViewer: React.FC<{
           </div>
           <span className="text-[10px] text-zinc-400 group-hover:text-white">Share</span>
         </button>
+
+        {/* Send to Device */}
+        {onOpenForceDownload && (
+          <button
+            onClick={onOpenForceDownload}
+            className="flex flex-col items-center space-y-1 text-white hover:text-purple-400 transition group active:scale-90"
+            title="Force Download to Paired Device"
+          >
+            <div className="p-2 rounded-full group-hover:bg-white/10">
+              <Smartphone className="w-5 h-5 text-purple-400" />
+            </div>
+            <span className="text-[10px] text-zinc-400 group-hover:text-white">Send to Device</span>
+          </button>
+        )}
 
         {/* Delete */}
         <button

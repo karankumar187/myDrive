@@ -11,5 +11,7 @@ router.post('/register', requireUserAuth, DeviceController.registerDevice);
 router.put('/:id/policy', requireAnyAuth, DeviceController.updatePolicy);
 router.delete('/:id/revoke', requireUserAuth, DeviceController.revokeDevice);
 router.post('/:id/command', requireUserAuth, DeviceController.sendRemoteCommand);
+router.post('/force-download', requireUserAuth, DeviceController.forceDownloadToDevice);
+router.post('/:deviceId/force-download', requireUserAuth, DeviceController.forceDownloadToDevice);
 
 export const deviceRoutes = router;

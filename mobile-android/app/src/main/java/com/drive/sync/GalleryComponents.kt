@@ -294,6 +294,7 @@ suspend fun apiBulkAction(
 fun FullGalleryScreen(
     mediaList: List<CloudMedia>,
     foldersList: List<CloudFolder>,
+    pairedDevices: List<PairedDevice> = emptyList(),
     serverUrl: String,
     deviceId: String,
     deviceKey: String,
@@ -318,6 +319,8 @@ fun FullGalleryScreen(
 
     var filterType by remember { mutableStateOf("All Photos") } // "All Photos", "Favorites", "Videos", "Photos"
     var isFilterMenuOpen by remember { mutableStateOf(false) }
+    var isDeviceFilterMenuOpen by remember { mutableStateOf(false) }
+    val selectedDeviceFilters = remember { mutableStateListOf<String>() } // device IDs, or "web"
     var isSearchActive by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
     var isMoreMenuOpen by remember { mutableStateOf(false) }
@@ -335,7 +338,7 @@ fun FullGalleryScreen(
     var isMoveDialogOpen by remember { mutableStateOf(false) }
 
     // Filter media
-    val filteredList = remember(localList, filterType, searchQuery) {
+    val filteredList = remember(localList, filterType, searchQuery, selectedDeviceFilters.toList()) {
         localList.filter { item ->
             val isVideo = item.mimeType.startsWith("video/")
             val isPhoto = item.mimeType.startsWith("image/")
@@ -343,6 +346,18 @@ fun FullGalleryScreen(
             if (filterType == "Favorites" && !item.isFavorite) return@filter false
             if (filterType == "Videos" && !isVideo) return@filter false
             if (filterType == "Photos" && !isPhoto) return@filter false
+
+            // Multi-select device filter
+            if (selectedDeviceFilters.isNotEmpty()) {
+                val hasMatch = selectedDeviceFilters.any { devId ->
+                    if (devId == "web") {
+                        item.sourceDeviceId == null || item.isCloudOnly
+                    } else {
+                        item.sourceDeviceId == devId || (item.sourceDeviceName != null && pairedDevices.any { it.deviceId == devId && it.deviceName == item.sourceDeviceName })
+                    }
+                }
+                if (!hasMatch) return@filter false
+            }
 
             if (searchQuery.isNotBlank()) {
                 val q = searchQuery.trim().lowercase()
@@ -472,53 +487,218 @@ fun FullGalleryScreen(
                     }
                 }
 
-                // Filter Pill: All Photos ▼
+                // Filter Pills: All Photos ▼ and Devices ▼
                 if (!isSearchActive) {
                     Spacer(modifier = Modifier.height(4.dp))
-                    Box {
-                        Surface(
-                            shape = RoundedCornerShape(20.dp),
-                            color = Color(0xFF1E1E2C),
-                            border = BorderStroke(1.dp, Color(0xFF323247)),
-                            modifier = Modifier.clickable { isFilterMenuOpen = true }
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // 1. Media Type Filter Pill
+                        Box {
+                            Surface(
+                                shape = RoundedCornerShape(20.dp),
+                                color = Color(0xFF1E1E2C),
+                                border = BorderStroke(1.dp, Color(0xFF323247)),
+                                modifier = Modifier.clickable { isFilterMenuOpen = true }
                             ) {
-                                Text(
-                                    text = filterType,
-                                    color = Color(0xFFF1F5F9),
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Icon(
-                                    Icons.Default.ArrowDropDown,
-                                    contentDescription = null,
-                                    tint = Color(0xFF94A3B8),
-                                    modifier = Modifier.size(16.dp)
-                                )
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = filterType,
+                                        color = Color(0xFFF1F5F9),
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Icon(
+                                        Icons.Default.ArrowDropDown,
+                                        contentDescription = null,
+                                        tint = Color(0xFF94A3B8),
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            }
+
+                            DropdownMenu(
+                                expanded = isFilterMenuOpen,
+                                onDismissRequest = { isFilterMenuOpen = false },
+                                modifier = Modifier.background(Color(0xFF1B1B26))
+                            ) {
+                                listOf("All Photos", "Favorites", "Videos", "Photos").forEach { opt ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                text = opt,
+                                                color = if (filterType == opt) Color(0xFFA855F7) else Color.White,
+                                                fontWeight = if (filterType == opt) FontWeight.Bold else FontWeight.Normal
+                                            )
+                                        },
+                                        onClick = {
+                                            filterType = opt
+                                            isFilterMenuOpen = false
+                                        }
+                                    )
+                                }
                             }
                         }
 
-                        DropdownMenu(
-                            expanded = isFilterMenuOpen,
-                            onDismissRequest = { isFilterMenuOpen = false },
-                            modifier = Modifier.background(Color(0xFF1B1B26))
-                        ) {
-                            listOf("All Photos", "Favorites", "Videos", "Photos").forEach { opt ->
+                        // 2. Uploaded Devices Multi-Select Filter Pill
+                        Box {
+                            Surface(
+                                shape = RoundedCornerShape(20.dp),
+                                color = if (selectedDeviceFilters.isNotEmpty()) Color(0xFF2E1A47) else Color(0xFF1E1E2C),
+                                border = BorderStroke(1.dp, if (selectedDeviceFilters.isNotEmpty()) Color(0xFFA855F7) else Color(0xFF323247)),
+                                modifier = Modifier.clickable { isDeviceFilterMenuOpen = true }
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        Icons.Default.PhoneAndroid,
+                                        contentDescription = null,
+                                        tint = if (selectedDeviceFilters.isNotEmpty()) Color(0xFFA855F7) else Color(0xFF94A3B8),
+                                        modifier = Modifier.size(13.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = if (selectedDeviceFilters.isEmpty()) "All Devices" else "Devices (${selectedDeviceFilters.size})",
+                                        color = Color(0xFFF1F5F9),
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Icon(
+                                        Icons.Default.ArrowDropDown,
+                                        contentDescription = null,
+                                        tint = Color(0xFF94A3B8),
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            }
+
+                            DropdownMenu(
+                                expanded = isDeviceFilterMenuOpen,
+                                onDismissRequest = { isDeviceFilterMenuOpen = false },
+                                modifier = Modifier
+                                    .background(Color(0xFF1B1B26))
+                                    .width(250.dp)
+                            ) {
+                                // "All Devices" checkbox
+                                val isAllDevices = selectedDeviceFilters.isEmpty()
                                 DropdownMenuItem(
                                     text = {
-                                        Text(
-                                            text = opt,
-                                            color = if (filterType == opt) Color(0xFFA855F7) else Color.White,
-                                            fontWeight = if (filterType == opt) FontWeight.Bold else FontWeight.Normal
-                                        )
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            Checkbox(
+                                                checked = isAllDevices,
+                                                onCheckedChange = { selectedDeviceFilters.clear() },
+                                                colors = CheckboxDefaults.colors(
+                                                    checkedColor = Color(0xFFA855F7),
+                                                    uncheckedColor = Color.Gray
+                                                )
+                                            )
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text(
+                                                "All Devices",
+                                                color = Color.White,
+                                                fontWeight = if (isAllDevices) FontWeight.Bold else FontWeight.Normal,
+                                                fontSize = 13.sp
+                                            )
+                                        }
+                                    },
+                                    onClick = { selectedDeviceFilters.clear() }
+                                )
+
+                                HorizontalDivider(color = Color(0xFF28283C))
+
+                                // Paired Devices
+                                pairedDevices.forEach { dev ->
+                                    val isChecked = selectedDeviceFilters.contains(dev.deviceId)
+                                    DropdownMenuItem(
+                                        text = {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                modifier = Modifier.fillMaxWidth()
+                                            ) {
+                                                Checkbox(
+                                                    checked = isChecked,
+                                                    onCheckedChange = { chk ->
+                                                        if (chk) selectedDeviceFilters.add(dev.deviceId)
+                                                        else selectedDeviceFilters.remove(dev.deviceId)
+                                                    },
+                                                    colors = CheckboxDefaults.colors(
+                                                        checkedColor = Color(0xFFA855F7),
+                                                        uncheckedColor = Color.Gray
+                                                    )
+                                                )
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                Column(modifier = Modifier.weight(1f)) {
+                                                    Text(
+                                                        dev.deviceName,
+                                                        color = Color.White,
+                                                        fontSize = 12.sp,
+                                                        fontWeight = FontWeight.Medium,
+                                                        maxLines = 1
+                                                    )
+                                                    Text(
+                                                        dev.deviceType.uppercase(),
+                                                        color = Color(0xFF94A3B8),
+                                                        fontSize = 10.sp
+                                                    )
+                                                }
+                                            }
+                                        },
+                                        onClick = {
+                                            if (isChecked) selectedDeviceFilters.remove(dev.deviceId)
+                                            else selectedDeviceFilters.add(dev.deviceId)
+                                        }
+                                    )
+                                }
+
+                                // Web / Cloud only
+                                val isWebChecked = selectedDeviceFilters.contains("web")
+                                DropdownMenuItem(
+                                    text = {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            Checkbox(
+                                                checked = isWebChecked,
+                                                onCheckedChange = { chk ->
+                                                    if (chk) selectedDeviceFilters.add("web")
+                                                    else selectedDeviceFilters.remove("web")
+                                                },
+                                                colors = CheckboxDefaults.colors(
+                                                    checkedColor = Color(0xFFA855F7),
+                                                    uncheckedColor = Color.Gray
+                                                )
+                                            )
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    "Unified Drive (Web)",
+                                                    color = Color.White,
+                                                    fontSize = 12.sp,
+                                                    fontWeight = FontWeight.Medium
+                                                )
+                                                Text(
+                                                    "Cloud only",
+                                                    color = Color(0xFF94A3B8),
+                                                    fontSize = 10.sp
+                                                )
+                                            }
+                                        }
                                     },
                                     onClick = {
-                                        filterType = opt
-                                        isFilterMenuOpen = false
+                                        if (isWebChecked) selectedDeviceFilters.remove("web")
+                                        else selectedDeviceFilters.add("web")
                                     }
                                 )
                             }
@@ -529,15 +709,15 @@ fun FullGalleryScreen(
         }
 
         // Floating Selection Action Bar
-        AnimatedVisibility(visible = isSelectionMode) {
+        AnimatedVisibility(visible = (isSelectionMode || selectedIds.isNotEmpty())) {
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
                 shape = RoundedCornerShape(16.dp),
-                color = Color(0xFF1E1E2C),
+                color = Color(0xFF1A1A28),
                 border = BorderStroke(1.dp, Color(0xFFA855F7)),
-                shadowElevation = 8.dp
+                shadowElevation = 10.dp
             ) {
                 Row(
                     modifier = Modifier
@@ -546,14 +726,55 @@ fun FullGalleryScreen(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = "${selectedIds.size} selected",
-                        color = Color.White,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold
-                    )
+                    Column {
+                        Text(
+                            text = "${selectedIds.size} selected",
+                            color = Color.White,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = if (selectedIds.size == filteredList.size) "Deselect All" else "Select All",
+                            color = Color(0xFFA855F7),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.clickable {
+                                if (selectedIds.size == filteredList.size) {
+                                    selectedIds.clear()
+                                } else {
+                                    selectedIds.clear()
+                                    selectedIds.addAll(filteredList.map { it.id })
+                                }
+                            }
+                        )
+                    }
 
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(2.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Bulk Download to Phone Gallery
+                        IconButton(
+                            onClick = {
+                                val ids = selectedIds.toList()
+                                val itemsToDownload = localList.filter { ids.contains(it.id) }
+                                coroutineScope.launch {
+                                    Toast.makeText(context, "Saving ${itemsToDownload.size} item(s) to Gallery...", Toast.LENGTH_SHORT).show()
+                                    var count = 0
+                                    for (m in itemsToDownload) {
+                                        val ok = downloadMediaToGallery(context, m, serverUrl, deviceId, deviceKey)
+                                        if (ok) count++
+                                    }
+                                    Toast.makeText(context, "Saved $count/${itemsToDownload.size} items to Phone Gallery!", Toast.LENGTH_SHORT).show()
+                                    selectedIds.clear()
+                                    isSelectionMode = false
+                                }
+                            },
+                            enabled = selectedIds.isNotEmpty()
+                        ) {
+                            Icon(Icons.Default.Download, contentDescription = "Download to Gallery", tint = Color(0xFFA855F7))
+                        }
+
                         // Bulk Favorite
                         IconButton(
                             onClick = {
@@ -569,6 +790,20 @@ fun FullGalleryScreen(
                             enabled = selectedIds.isNotEmpty()
                         ) {
                             Icon(Icons.Default.Favorite, contentDescription = "Favorite", tint = Color(0xFFEF4444))
+                        }
+
+                        // Bulk Share
+                        IconButton(
+                            onClick = {
+                                val ids = selectedIds.toList()
+                                val firstItem = localList.firstOrNull { ids.contains(it.id) }
+                                if (firstItem != null) {
+                                    shareMedia(context, firstItem, serverUrl, deviceId, deviceKey)
+                                }
+                            },
+                            enabled = selectedIds.isNotEmpty()
+                        ) {
+                            Icon(Icons.Default.Share, contentDescription = "Share", tint = Color.White)
                         }
 
                         // Bulk Move
@@ -601,7 +836,7 @@ fun FullGalleryScreen(
                             selectedIds.clear()
                             isSelectionMode = false
                         }) {
-                            Icon(Icons.Default.Close, contentDescription = "Cancel", tint = Color.White)
+                            Icon(Icons.Default.Close, contentDescription = "Cancel", tint = Color.LightGray)
                         }
                     }
                 }

@@ -259,4 +259,17 @@ export const api = {
     if (!res.ok) throw new Error('Failed to fetch device uploads');
     return res.json();
   },
+
+  async forceDownloadToDevice(targetDeviceId: string, fileIds: string[]): Promise<any> {
+    const res = await fetch(`${API_BASE}/devices/force-download`, {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify({ targetDeviceId, fileIds }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Failed to dispatch force download command' }));
+      throw new Error(err.error || 'Failed to dispatch force download command');
+    }
+    return res.json();
+  },
 };

@@ -228,7 +228,7 @@ export class FileController {
           'metadata.takenAt': -1,
           createdAt: -1,
         }).limit(500),
-        Device.find({ userId }).select('deviceId deviceName'),
+        Device.find({ userId }).select('deviceId deviceName deviceType status'),
         Folder.find({ userId }).select('_id name'),
         StorageAccount.find({ userId }).select('_id accountName accountEmail'),
       ]);
@@ -245,9 +245,10 @@ export class FileController {
       const enrichedMedia = mediaFiles.map((file) => {
         const obj: any = file.toObject();
         obj.isFavorite = file.isFavorite || false;
+        obj.sourceDeviceId = file.sourceDeviceIds?.length ? file.sourceDeviceIds[0] : 'web';
         obj.sourceDeviceName = file.sourceDeviceIds?.length && deviceMap.has(file.sourceDeviceIds[0])
           ? deviceMap.get(file.sourceDeviceIds[0])
-          : 'Unified Drive';
+          : 'Unified Drive (Web)';
         obj.folderName = file.folderId && folderMap.has(file.folderId.toString())
           ? folderMap.get(file.folderId.toString())
           : null;
@@ -259,7 +260,15 @@ export class FileController {
         return obj;
       });
 
-      const payload = { media: enrichedMedia };
+      const payload = {
+        media: enrichedMedia,
+        devices: devices.map((d) => ({
+          deviceId: d.deviceId,
+          deviceName: d.deviceName,
+          deviceType: d.deviceType || 'android',
+          status: d.status || 'offline',
+        })),
+      };
       await CacheService.set(cacheKey, payload, 60);
 
       res.json(payload);
@@ -782,15 +791,43 @@ export class FileController {
         .sort({ createdAt: -1 })
         .limit(200);
 
-      // Fetch DeviceFileState records for this device to determine local sync status
+      // Fetch DeviceFileState records for this device to determine local sync and force-download status
       const localStates = await DeviceFileState.find({ userId, deviceId });
       const localStateMap = new Map<string, boolean>();
+      const forceDownloadMap = new Map<string, boolean>();
       localStates.forEach((s) => {
         localStateMap.set(s.fileId.toString(), s.isLocallyPresent);
+        if (s.forceDownloadRequested) {
+          forceDownloadMap.set(s.fileId.toString(), true);
+        }
       });
 
+      // Find any files that have force download requested that might not be in candidateFiles
+      const forceFileIds = Array.from(forceDownloadMap.keys());
+      let extraForceFiles: any[] = [];
+      if (forceFileIds.length > 0) {
+        extraForceFiles = await File.find({
+          _id: { $in: forceFileIds },
+          userId,
+          isTrash: false,
+        }).populate('folderId', 'name path');
+      }
+
+      const combinedCandidates = [...candidateFiles];
+      for (const ef of extraForceFiles) {
+        if (!combinedCandidates.some((c) => c._id.toString() === ef._id.toString())) {
+          combinedCandidates.unshift(ef);
+        }
+      }
+
       // Filter candidate files based on pairedDeviceRules or default policy
-      const resultFiles = candidateFiles.filter((file) => {
+      const resultFiles = combinedCandidates.filter((file) => {
+        const fileIdStr = file._id.toString();
+        // If force download requested from web, always include regardless of policy!
+        if (forceDownloadMap.get(fileIdStr)) {
+          return true;
+        }
+
         const isFromThisDeviceOnly =
           file.sourceDeviceIds.length === 1 && file.sourceDeviceIds[0] === deviceId;
         if (isFromThisDeviceOnly) {
@@ -824,7 +861,9 @@ export class FileController {
 
       const formatted = resultFiles.map((f: any) => {
         const fileObj = f.toObject();
-        fileObj.isDownloadedLocally = localStateMap.get(f._id.toString()) || false;
+        const fileIdStr = f._id.toString();
+        fileObj.isDownloadedLocally = localStateMap.get(fileIdStr) || false;
+        fileObj.isForceDownload = forceDownloadMap.get(fileIdStr) || false;
         const otherSources = f.sourceDeviceIds.filter((id: string) => id !== deviceId);
         fileObj.sourceDeviceLabel = otherSources.length > 0 ? otherSources[0] : 'Cloud Drive';
         return fileObj;
@@ -860,6 +899,7 @@ export class FileController {
         {
           deviceAssetId: deviceAssetId || null,
           isLocallyPresent: true,
+          forceDownloadRequested: false, // Reset force download request!
           lastSeenLocalAt: new Date(),
         },
         { upsert: true, new: true }

@@ -1,5 +1,8 @@
 import { Request, Response } from 'express';
+import { Types } from 'mongoose';
 import { Device } from '../models/Device.js';
+import { DeviceFileState } from '../models/DeviceFileState.js';
+import { File } from '../models/File.js';
 import { CryptoService } from '../services/crypto.service.js';
 import { getSocketIoInstance } from '../server.js';
 
@@ -203,6 +206,82 @@ export class DeviceController {
       }
 
       res.json({ success: true, message: `Command '${command}' dispatched to ${device.deviceName}` });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+
+  /**
+   * Forces download of specific files to a paired device from the Web dashboard.
+   */
+  static async forceDownloadToDevice(req: Request, res: Response): Promise<void> {
+    try {
+      const userId = req.user!._id;
+      const targetDeviceId = req.params.deviceId || req.body.targetDeviceId;
+      const { fileIds } = req.body;
+
+      if (!targetDeviceId || !fileIds || !Array.isArray(fileIds) || fileIds.length === 0) {
+        res.status(400).json({ error: 'targetDeviceId and non-empty fileIds array are required' });
+        return;
+      }
+
+      // Verify target device belongs to this user
+      const isObjectId = Types.ObjectId.isValid(targetDeviceId);
+      const query: any = { userId };
+      if (isObjectId && targetDeviceId.length === 24) {
+        query.$or = [{ deviceId: targetDeviceId }, { _id: new Types.ObjectId(targetDeviceId) }];
+      } else {
+        query.deviceId = targetDeviceId;
+      }
+
+      const device = await Device.findOne(query);
+      if (!device) {
+        res.status(404).json({ error: 'Target device not found or access denied' });
+        return;
+      }
+
+      // Verify files belong to user
+      const objectIds = fileIds
+        .filter((id: string) => Types.ObjectId.isValid(id))
+        .map((id: string) => new Types.ObjectId(id));
+
+      const validFiles = await File.find({ _id: { $in: objectIds }, userId, isTrash: false }).select('_id filename mimeType sizeBytes');
+      if (validFiles.length === 0) {
+        res.status(404).json({ error: 'No valid files found for download' });
+        return;
+      }
+
+      // Queue force download in DeviceFileState
+      for (const file of validFiles) {
+        await DeviceFileState.findOneAndUpdate(
+          { userId, deviceId: device.deviceId, fileId: file._id },
+          {
+            forceDownloadRequested: true,
+            forceDownloadRequestedAt: new Date(),
+            isLocallyPresent: false,
+          },
+          { upsert: true, new: true }
+        );
+      }
+
+      // Realtime notification via Socket.IO if available
+      const io = getSocketIoInstance();
+      if (io) {
+        io.to(`device:${device.deviceId}`).emit('remote:force-download', {
+          targetDeviceId: device.deviceId,
+          fileIds: validFiles.map((f) => f._id.toString()),
+          files: validFiles.map((f) => ({ id: f._id, filename: f.filename, mimeType: f.mimeType, sizeBytes: f.sizeBytes })),
+          timestamp: Date.now(),
+        });
+      }
+
+      res.json({
+        success: true,
+        message: `Direct download of ${validFiles.length} file(s) queued for ${device.deviceName}`,
+        count: validFiles.length,
+        targetDeviceId: device.deviceId,
+        targetDeviceName: device.deviceName,
+      });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }

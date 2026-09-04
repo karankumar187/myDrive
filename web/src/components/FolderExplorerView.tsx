@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { FileItem, FolderItem, BreadcrumbItem } from '../types.js';
+import { FileItem, FolderItem, BreadcrumbItem, DeviceItem } from '../types.js';
 import {
   Folder,
   File,
@@ -17,6 +17,9 @@ import {
   X,
   Loader2,
   Lock,
+  Smartphone,
+  Send,
+  Check,
 } from 'lucide-react';
 import { api } from '../services/api.js';
 import { VaultCryptoService } from '../services/vault-crypto.js';
@@ -61,6 +64,37 @@ export const FolderExplorerView: React.FC<Props> = ({
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
+
+  // Force Download to Device state
+  const [forceDownloadFile, setForceDownloadFile] = useState<FileItem | null>(null);
+  const [devices, setDevices] = useState<DeviceItem[]>([]);
+  const [selectedTargetDeviceId, setSelectedTargetDeviceId] = useState<string>('');
+  const [sendingForceDownload, setSendingForceDownload] = useState(false);
+
+  useEffect(() => {
+    api.listDevices().then((res) => {
+      if (res.devices) {
+        setDevices(res.devices);
+        if (res.devices.length > 0 && !selectedTargetDeviceId) {
+          setSelectedTargetDeviceId(res.devices[0].deviceId);
+        }
+      }
+    }).catch(() => {});
+  }, []);
+
+  const handleExecuteForceDownload = async () => {
+    if (!forceDownloadFile || !selectedTargetDeviceId) return;
+    setSendingForceDownload(true);
+    try {
+      await api.forceDownloadToDevice(selectedTargetDeviceId, [forceDownloadFile._id]);
+      alert(`Force download dispatched! Device will automatically download "${forceDownloadFile.filename}".`);
+      setForceDownloadFile(null);
+    } catch (err: any) {
+      alert(err.message || 'Failed to dispatch force download');
+    } finally {
+      setSendingForceDownload(false);
+    }
+  };
 
   const getFileIcon = (mimeType: string) => {
     if (mimeType.startsWith('image/')) return <ImageIcon className="w-4 h-4 text-purple-400" />;
@@ -432,6 +466,16 @@ export const FolderExplorerView: React.FC<Props> = ({
         <button
           onClick={(e) => {
             e.stopPropagation();
+            setForceDownloadFile(file);
+          }}
+          className="inline-p-1 text-zinc-500 hover:text-purple-400 transition"
+          title="Send / Force Download to Paired Device"
+        >
+          <Smartphone className="w-4 h-4 inline" />
+        </button>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
             handleTrashFile(file._id, file.filename);
           }}
           className="inline-p-1 text-zinc-500 hover:text-red-400 transition"
@@ -786,6 +830,96 @@ export const FolderExplorerView: React.FC<Props> = ({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Force Download to Device Modal */}
+      {forceDownloadFile && (
+        <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
+          <div className="bg-[#15151e] border border-[#2d2d3e] rounded-2xl max-w-md w-full p-6 space-y-5 shadow-2xl">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2.5">
+                <div className="p-2 rounded-xl bg-purple-600/20 text-purple-400 border border-purple-500/30">
+                  <Smartphone className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white">Send to Paired Device</h3>
+                  <p className="text-[11px] text-zinc-400">Trigger automatic download on device</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setForceDownloadFile(null)}
+                className="p-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800 transition"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="bg-[#101017] p-3 rounded-xl border border-[#20202d] text-xs text-zinc-300">
+              <span className="text-zinc-500">File: </span>
+              <span className="font-semibold text-purple-300">{forceDownloadFile.filename}</span>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-xs font-semibold text-zinc-300">Select Target Device:</label>
+              {devices.length === 0 ? (
+                <p className="text-xs text-amber-400 bg-amber-950/20 p-3 rounded-xl border border-amber-800/30">
+                  No paired devices found. Pair an Android or mobile device first.
+                </p>
+              ) : (
+                <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                  {devices.map((dev) => (
+                    <div
+                      key={dev.deviceId}
+                      onClick={() => setSelectedTargetDeviceId(dev.deviceId)}
+                      className={`p-3 rounded-xl border cursor-pointer flex items-center justify-between transition ${
+                        selectedTargetDeviceId === dev.deviceId
+                          ? 'bg-purple-950/40 border-purple-500 text-white'
+                          : 'bg-[#121219] border-[#222230] text-zinc-300 hover:border-zinc-700'
+                      }`}
+                    >
+                      <div className="flex items-center space-x-3">
+                        <Smartphone className="w-4 h-4 text-purple-400" />
+                        <div>
+                          <p className="text-xs font-semibold">{dev.deviceName}</p>
+                          <p className="text-[10px] text-zinc-500 uppercase">{dev.deviceType} • {dev.status === 'online' ? 'Online' : 'Offline'}</p>
+                        </div>
+                      </div>
+                      {selectedTargetDeviceId === dev.deviceId && (
+                        <Check className="w-4 h-4 text-purple-400" />
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end space-x-3 pt-2">
+              <button
+                onClick={() => setForceDownloadFile(null)}
+                className="px-4 py-2 text-xs font-semibold text-zinc-400 hover:text-white rounded-xl hover:bg-zinc-800 transition"
+              >
+                Cancel
+              </button>
+              <button
+                disabled={devices.length === 0 || !selectedTargetDeviceId || sendingForceDownload}
+                onClick={handleExecuteForceDownload}
+                className="px-4 py-2 text-xs font-semibold rounded-xl bg-purple-600 hover:bg-purple-500 text-white border border-purple-400/40 shadow-glow-purple disabled:opacity-40 transition flex items-center space-x-1.5 active:scale-95"
+              >
+                {sendingForceDownload ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Dispatching...</span>
+                  </>
+                ) : (
+                  <>
+                    <Send className="w-3.5 h-3.5" />
+                    <span>Send Download Signal</span>
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </div>
       )}
