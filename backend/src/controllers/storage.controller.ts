@@ -3,6 +3,7 @@ import { StorageAccount } from '../models/StorageAccount.js';
 import { StorageEngineService } from '../services/storage-engine.service.js';
 import { GoogleDriveService } from '../services/gdrive.service.js';
 import { CryptoService } from '../services/crypto.service.js';
+import { CacheService } from '../services/cache.service.js';
 
 export class StorageController {
   /**
@@ -15,7 +16,15 @@ export class StorageController {
         return;
       }
 
+      const cacheKey = `cache:user:${req.user._id}:summary`;
+      const cached = await CacheService.get(cacheKey);
+      if (cached) {
+        res.json(cached);
+        return;
+      }
+
       const summary = await StorageEngineService.getPoolSummary(req.user._id);
+      await CacheService.set(cacheKey, summary, 60);
       res.json(summary);
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -153,6 +162,7 @@ export class StorageController {
       }
 
       const quota = await GoogleDriveService.syncAccountQuota(account);
+      await CacheService.invalidateUser(req.user._id.toString());
       res.json({ success: true, quota });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -179,6 +189,7 @@ export class StorageController {
         return;
       }
 
+      await CacheService.invalidateUser(req.user._id.toString());
       res.json({ success: true, message: `Account ${account.accountEmail} unlinked successfully` });
     } catch (error: any) {
       res.status(500).json({ error: error.message });

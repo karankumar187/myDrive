@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { api } from '../services/api.js';
 import { VaultCryptoService } from '../services/vault-crypto.js';
+import { mediaCache } from '../services/media-cache.js';
 
 interface Props {
   files: FileItem[];
@@ -93,9 +94,18 @@ export const FolderExplorerView: React.FC<Props> = ({
     }
 
     setPreviewFile(file);
+    setPreviewError(null);
+
+    // 1. Instant in-memory cache hit (0ms)
+    const cachedUrl = mediaCache.get(file._id);
+    if (cachedUrl) {
+      setPreviewUrl(cachedUrl);
+      setPreviewLoading(false);
+      return;
+    }
+
     setPreviewLoading(true);
     setPreviewUrl(null);
-    setPreviewError(null);
 
     const isEncrypted = file.versions && file.versions.length > 0 && file.versions[0].isEncrypted;
 
@@ -112,18 +122,20 @@ export const FolderExplorerView: React.FC<Props> = ({
         throw new Error(errJson?.error || `Server returned ${response.status}`);
       }
 
+      let url: string;
       if (isEncrypted && vaultKey) {
         const encryptedBuffer = await response.arrayBuffer();
         const ivHex = file.versions![0].iv || '';
         const decryptedBuffer = await VaultCryptoService.decryptBuffer(encryptedBuffer, ivHex, vaultKey);
         const blob = new Blob([decryptedBuffer], { type: file.mimeType });
-        const url = URL.createObjectURL(blob);
-        setPreviewUrl(url);
+        url = URL.createObjectURL(blob);
       } else {
         const blob = await response.blob();
-        const url = URL.createObjectURL(blob);
-        setPreviewUrl(url);
+        url = URL.createObjectURL(blob);
       }
+
+      mediaCache.set(file._id, url);
+      setPreviewUrl(url);
     } catch (err: any) {
       console.error('File load failed:', err);
       setPreviewError(err.message || 'Failed to load file preview');
@@ -132,15 +144,12 @@ export const FolderExplorerView: React.FC<Props> = ({
     }
   }, [vaultKey]);
 
-  // Cleanup object URL on close
+  // Cleanup on close
   const closePreview = useCallback(() => {
-    if (previewUrl && previewUrl.startsWith('blob:')) {
-      URL.revokeObjectURL(previewUrl);
-    }
     setPreviewFile(null);
     setPreviewUrl(null);
     setPreviewError(null);
-  }, [previewUrl]);
+  }, []);
 
   // Close preview on Escape key
   useEffect(() => {

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { FileItem } from '../types.js';
 import { Film, Calendar, Download, ShieldCheck, Lock, X, Loader2, Image as ImageIcon, Play } from 'lucide-react';
 import { VaultCryptoService } from '../services/vault-crypto.js';
+import { mediaCache } from '../services/media-cache.js';
 
 interface Props {
   media: FileItem[];
@@ -267,9 +268,16 @@ const MediaCard: React.FC<{
 
   useEffect(() => {
     let active = true;
-    let objectUrl: string | null = null;
 
     const load = async () => {
+      // 1. Instant in-memory cache hit (0ms)
+      const cachedUrl = mediaCache.get(item._id);
+      if (cachedUrl) {
+        setDisplayUrl(cachedUrl);
+        setLoading(false);
+        return;
+      }
+
       const version = item.versions?.[item.versions.length - 1];
       const encrypted = !!version?.isEncrypted;
       setIsEncrypted(encrypted);
@@ -285,12 +293,14 @@ const MediaCard: React.FC<{
         const res = await fetch(streamUrl);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
+        let objectUrl: string;
         if (encrypted && vaultKey) {
           const ciphertext = await res.arrayBuffer();
           if (version?.iv) {
             const decrypted = await VaultCryptoService.decryptBuffer(ciphertext, version.iv, vaultKey);
             if (active) {
               objectUrl = URL.createObjectURL(new Blob([decrypted], { type: item.mimeType }));
+              mediaCache.set(item._id, objectUrl);
               setDisplayUrl(objectUrl);
               setNeedsKey(false);
             }
@@ -300,6 +310,7 @@ const MediaCard: React.FC<{
           const blob = await res.blob();
           if (active) {
             objectUrl = URL.createObjectURL(blob);
+            mediaCache.set(item._id, objectUrl);
             setDisplayUrl(objectUrl);
           }
         }
@@ -317,7 +328,6 @@ const MediaCard: React.FC<{
 
     return () => {
       active = false;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
   }, [item._id, item.versions, item.mimeType, vaultKey]);
 

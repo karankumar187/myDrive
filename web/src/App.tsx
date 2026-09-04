@@ -30,14 +30,39 @@ type Tab = 'dashboard' | 'folders' | 'gallery' | 'devices' | 'trash';
 export const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [activeTab, setActiveTab] = useState<Tab>('dashboard');
-  const [summary, setSummary] = useState<StorageSummary | null>(null);
-  const [files, setFiles] = useState<FileItem[]>([]);
-  const [recentFiles, setRecentFiles] = useState<FileItem[]>([]);
-  const [folders, setFolders] = useState<FolderItem[]>([]);
+  const [summary, setSummary] = useState<StorageSummary | null>(() => {
+    try {
+      const saved = localStorage.getItem('drive_cache_summary');
+      return saved ? JSON.parse(saved) : null;
+    } catch { return null; }
+  });
+  const [files, setFiles] = useState<FileItem[]>(() => {
+    try {
+      const saved = localStorage.getItem('drive_cache_files_root');
+      return saved ? JSON.parse(saved) : [];
+    } catch { return []; }
+  });
+  const [recentFiles, setRecentFiles] = useState<FileItem[]>(() => {
+    try {
+      const saved = localStorage.getItem('drive_cache_recent');
+      return saved ? JSON.parse(saved) : [];
+    } catch { return []; }
+  });
+  const [folders, setFolders] = useState<FolderItem[]>(() => {
+    try {
+      const saved = localStorage.getItem('drive_cache_folders_root');
+      return saved ? JSON.parse(saved) : [];
+    } catch { return []; }
+  });
   const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
   const [currentFolder, setCurrentFolder] = useState<FolderItem | null>(null);
   const [breadcrumbs, setBreadcrumbs] = useState<BreadcrumbItem[]>([{ id: null, name: 'My Drive' }]);
-  const [media, setMedia] = useState<FileItem[]>([]);
+  const [media, setMedia] = useState<FileItem[]>(() => {
+    try {
+      const saved = localStorage.getItem('drive_cache_gallery');
+      return saved ? JSON.parse(saved) : [];
+    } catch { return []; }
+  });
   const [devices, setDevices] = useState<DeviceItem[]>([]);
   const [trashedFiles, setTrashedFiles] = useState<FileItem[]>([]);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -129,7 +154,7 @@ export const App: React.FC = () => {
     if (!currentUser) return;
     const cacheKey = folderId || 'root';
 
-    // 1. Instant cache hit: render immediately (0ms delay)
+    // 1. Instant memory cache hit (0ms delay)
     if (folderCache.current.has(cacheKey)) {
       const cached = folderCache.current.get(cacheKey)!;
       setFiles(cached.files);
@@ -137,6 +162,18 @@ export const App: React.FC = () => {
       setFolders(cached.folders);
       setBreadcrumbs(cached.breadcrumbs);
       setCurrentFolder(cached.currentFolder);
+    } else {
+      // Check localStorage for offline/fast load
+      try {
+        const localFiles = localStorage.getItem(`drive_cache_files_${cacheKey}`);
+        const localFolders = localStorage.getItem(`drive_cache_folders_${cacheKey}`);
+        if (localFiles && localFolders) {
+          setFiles(JSON.parse(localFiles));
+          setFolders(JSON.parse(localFolders));
+        }
+      } catch {
+        // ignore
+      }
     }
 
     // 2. Fast background revalidation: only query files and folders for this folder
@@ -152,7 +189,7 @@ export const App: React.FC = () => {
       if (foldersRes.breadcrumbs) setBreadcrumbs(foldersRes.breadcrumbs);
       setCurrentFolder(foldersRes.currentFolder || null);
 
-      // Update cache
+      // Update in-memory cache
       folderCache.current.set(cacheKey, {
         files: filesRes.files,
         recentFiles: filesRes.recentFiles || [],
@@ -160,6 +197,17 @@ export const App: React.FC = () => {
         breadcrumbs: foldersRes.breadcrumbs || [{ id: null, name: 'My Drive' }],
         currentFolder: foldersRes.currentFolder || null,
       });
+
+      // Update localStorage cache
+      try {
+        localStorage.setItem(`drive_cache_files_${cacheKey}`, JSON.stringify(filesRes.files));
+        localStorage.setItem(`drive_cache_folders_${cacheKey}`, JSON.stringify(foldersRes.folders));
+        if (cacheKey === 'root') {
+          localStorage.setItem('drive_cache_recent', JSON.stringify(filesRes.recentFiles || []));
+        }
+      } catch {
+        // ignore quota exceeded
+      }
     } catch (err) {
       console.error('Error loading folder:', err);
     }
@@ -180,8 +228,12 @@ export const App: React.FC = () => {
         api.listFiles(null, undefined, true).catch(() => ({ files: [], recentFiles: [] })),
       ]);
 
-      if (storageRes) setSummary(storageRes);
+      if (storageRes) {
+        setSummary(storageRes);
+        try { localStorage.setItem('drive_cache_summary', JSON.stringify(storageRes)); } catch {}
+      }
       setMedia(galleryRes.media);
+      try { localStorage.setItem('drive_cache_gallery', JSON.stringify(galleryRes.media)); } catch {}
       setDevices(devicesRes.devices);
       setTrashedFiles(trashRes.files);
 

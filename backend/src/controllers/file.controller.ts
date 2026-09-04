@@ -8,6 +8,7 @@ import { StorageAccount } from '../models/StorageAccount.js';
 import { StorageEngineService } from '../services/storage-engine.service.js';
 import { GoogleDriveService } from '../services/gdrive.service.js';
 import { getSocketIoInstance } from '../server.js';
+import { CacheService } from '../services/cache.service.js';
 
 const UPLOAD_DIR = path.resolve(process.cwd(), 'uploads');
 if (!fs.existsSync(UPLOAD_DIR)) {
@@ -139,6 +140,9 @@ export class FileController {
         });
       }
 
+      // Invalidate user cache on new upload
+      await CacheService.invalidateUser(req.user._id.toString());
+
       res.json({ success: true, file, isDuplicate });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -158,6 +162,16 @@ export class FileController {
       const folderId = req.query.folderId as string;
       const search = req.query.search as string;
       const isTrash = req.query.isTrash === 'true';
+
+      // Check Redis cache for standard (non-search) directory listings
+      const cacheKey = `cache:user:${req.user._id}:files:${folderId || 'root'}:${isTrash}`;
+      if (!search) {
+        const cached = await CacheService.get(cacheKey);
+        if (cached) {
+          res.json(cached);
+          return;
+        }
+      }
 
       const filter: any = {
         userId: req.user._id, // Strict IDOR protection
@@ -183,7 +197,12 @@ export class FileController {
           .limit(20);
       }
 
-      res.json({ files, recentFiles });
+      const responsePayload = { files, recentFiles };
+      if (!search) {
+        await CacheService.set(cacheKey, responsePayload, 120);
+      }
+
+      res.json(responsePayload);
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
@@ -199,6 +218,13 @@ export class FileController {
         return;
       }
 
+      const cacheKey = `cache:user:${req.user._id}:gallery`;
+      const cached = await CacheService.get(cacheKey);
+      if (cached) {
+        res.json(cached);
+        return;
+      }
+
       const mediaFilter = {
         userId: req.user._id,
         isTrash: false,
@@ -210,7 +236,10 @@ export class FileController {
         createdAt: -1,
       }).limit(500);
 
-      res.json({ media: mediaFiles });
+      const payload = { media: mediaFiles };
+      await CacheService.set(cacheKey, payload, 120);
+
+      res.json(payload);
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
@@ -300,6 +329,7 @@ export class FileController {
         return;
       }
 
+      await CacheService.invalidateUser(req.user._id.toString());
       res.json({ success: true, message: 'Moved to Trash' });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -327,6 +357,7 @@ export class FileController {
         return;
       }
 
+      await CacheService.invalidateUser(req.user._id.toString());
       res.json({ success: true, message: 'Restored from Trash' });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -383,6 +414,7 @@ export class FileController {
       }
 
       await File.findByIdAndDelete(file._id);
+      await CacheService.invalidateUser(req.user._id.toString());
 
       res.json({ success: true, message: 'Permanently purged from cloud storage' });
     } catch (error: any) {
@@ -421,6 +453,7 @@ export class FileController {
         path,
       });
 
+      await CacheService.invalidateUser(req.user._id.toString());
       res.json({ success: true, folder });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -468,6 +501,7 @@ export class FileController {
         { isTrash: true, trashedAt: new Date() }
       );
 
+      await CacheService.invalidateUser(req.user._id.toString());
       res.json({ success: true, message: `Folder "${folder.name}" and contents moved to Trash` });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -485,6 +519,15 @@ export class FileController {
       }
 
       const parentFolderId = req.query.parentFolderId as string;
+
+      // Check Redis cache for folder tree
+      const cacheKey = `cache:user:${req.user._id}:folders:${parentFolderId || 'root'}`;
+      const cached = await CacheService.get(cacheKey);
+      if (cached) {
+        res.json(cached);
+        return;
+      }
+
       const filter: any = {
         userId: req.user._id,
         isTrash: false,
@@ -516,7 +559,10 @@ export class FileController {
       }
 
       const folders = await Folder.find(filter).sort({ name: 1 });
-      res.json({ folders, currentFolder, breadcrumbs });
+      const responsePayload = { folders, currentFolder, breadcrumbs };
+      await CacheService.set(cacheKey, responsePayload, 180);
+
+      res.json(responsePayload);
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
