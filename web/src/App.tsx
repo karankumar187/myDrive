@@ -27,6 +27,14 @@ import { VaultCryptoService } from './services/vault-crypto.js';
 
 type Tab = 'dashboard' | 'folders' | 'gallery' | 'devices' | 'trash';
 
+const TABS: Array<{ id: Tab; label: string; icon: React.ComponentType<{ className?: string }> }> = [
+  { id: 'dashboard', label: 'Dashboard', icon: HardDrive },
+  { id: 'folders', label: 'Files', icon: Folder },
+  { id: 'gallery', label: 'Gallery', icon: ImageIcon },
+  { id: 'devices', label: 'Devices', icon: Smartphone },
+  { id: 'trash', label: 'Trash', icon: Trash2 },
+];
+
 export const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [activeTab, setActiveTab] = useState<Tab>('dashboard');
@@ -371,61 +379,22 @@ export const App: React.FC = () => {
 
           {/* Center Pill Navbar (Desktop) */}
           <nav className="hidden md:flex items-center bg-[#131317]/90 border border-[#222229] p-1 rounded-full shadow-lg">
-            <button
-              onClick={() => setActiveTab('dashboard')}
-              className={`px-4 py-1.5 rounded-full text-xs font-semibold transition ${
-                activeTab === 'dashboard'
-                  ? 'bg-white text-zinc-950 shadow-sm'
-                  : 'text-zinc-400 hover:text-white'
-              }`}
-            >
-              Dashboard
-            </button>
-            <button
-              onClick={() => setActiveTab('folders')}
-              className={`px-4 py-1.5 rounded-full text-xs font-semibold transition ${
-                activeTab === 'folders'
-                  ? 'bg-white text-zinc-950 shadow-sm'
-                  : 'text-zinc-400 hover:text-white'
-              }`}
-            >
-              Files
-            </button>
-            <button
-              onClick={() => setActiveTab('gallery')}
-              className={`px-4 py-1.5 rounded-full text-xs font-semibold transition ${
-                activeTab === 'gallery'
-                  ? 'bg-white text-zinc-950 shadow-sm'
-                  : 'text-zinc-400 hover:text-white'
-              }`}
-            >
-              Gallery
-            </button>
-            <button
-              onClick={() => setActiveTab('devices')}
-              className={`px-4 py-1.5 rounded-full text-xs font-semibold transition ${
-                activeTab === 'devices'
-                  ? 'bg-white text-zinc-950 shadow-sm'
-                  : 'text-zinc-400 hover:text-white'
-              }`}
-            >
-              Devices
-            </button>
-            <button
-              onClick={() => setActiveTab('trash')}
-              className={`px-4 py-1.5 rounded-full text-xs font-semibold transition flex items-center space-x-1 ${
-                activeTab === 'trash'
-                  ? 'bg-white text-zinc-950 shadow-sm'
-                  : 'text-zinc-400 hover:text-white'
-              }`}
-            >
-              <span>Trash</span>
-              {trashedFiles.length > 0 && (
-                <span className="ml-1 px-1.5 py-0.2 bg-purple-500 text-white rounded-full text-[10px]">
-                  {trashedFiles.length}
-                </span>
-              )}
-            </button>
+            {TABS.map(({ id, label }) => (
+              <button
+                key={id}
+                onClick={() => setActiveTab(id)}
+                className={`px-4 py-1.5 rounded-full text-xs font-semibold transition flex items-center space-x-1 ${
+                  activeTab === id ? 'bg-white text-zinc-950 shadow-sm' : 'text-zinc-400 hover:text-white'
+                }`}
+              >
+                <span>{label}</span>
+                {id === 'trash' && trashedFiles.length > 0 && (
+                  <span className="ml-1 px-1.5 py-0.2 bg-purple-500 text-white rounded-full text-[10px]">
+                    {trashedFiles.length}
+                  </span>
+                )}
+              </button>
+            ))}
           </nav>
 
           {/* Right Action Controls */}
@@ -563,65 +532,18 @@ export const App: React.FC = () => {
 
       {/* MOBILE / APP / SHORTCUT FLOATING BOTTOM NAVBAR */}
       <nav className="md:hidden fixed bottom-4 left-1/2 -translate-x-1/2 z-50 bg-[#121217]/95 border border-[#272733] shadow-2xl backdrop-blur-xl rounded-full px-3 py-2 flex items-center space-x-2">
-        <button
-          onClick={() => setActiveTab('dashboard')}
-          className={`p-2.5 rounded-full text-xs flex items-center justify-center transition ${
-            activeTab === 'dashboard'
-              ? 'bg-white text-zinc-950 shadow-md'
-              : 'text-zinc-400 hover:text-white'
-          }`}
-          title="Dashboard"
-        >
-          <HardDrive className="w-4 h-4" />
-        </button>
-
-        <button
-          onClick={() => setActiveTab('folders')}
-          className={`p-2.5 rounded-full text-xs flex items-center justify-center transition ${
-            activeTab === 'folders'
-              ? 'bg-white text-zinc-950 shadow-md'
-              : 'text-zinc-400 hover:text-white'
-          }`}
-          title="Files"
-        >
-          <Folder className="w-4 h-4" />
-        </button>
-
-        <button
-          onClick={() => setActiveTab('gallery')}
-          className={`p-2.5 rounded-full text-xs flex items-center justify-center transition ${
-            activeTab === 'gallery'
-              ? 'bg-white text-zinc-950 shadow-md'
-              : 'text-zinc-400 hover:text-white'
-          }`}
-          title="Gallery"
-        >
-          <ImageIcon className="w-4 h-4" />
-        </button>
-
-        <button
-          onClick={() => setActiveTab('devices')}
-          className={`p-2.5 rounded-full text-xs flex items-center justify-center transition ${
-            activeTab === 'devices'
-              ? 'bg-white text-zinc-950 shadow-md'
-              : 'text-zinc-400 hover:text-white'
-          }`}
-          title="Devices"
-        >
-          <Smartphone className="w-4 h-4" />
-        </button>
-
-        <button
-          onClick={() => setActiveTab('trash')}
-          className={`p-2.5 rounded-full text-xs flex items-center justify-center transition ${
-            activeTab === 'trash'
-              ? 'bg-white text-zinc-950 shadow-md'
-              : 'text-zinc-400 hover:text-white'
-          }`}
-          title="Trash"
-        >
-          <Trash2 className="w-4 h-4" />
-        </button>
+        {TABS.map(({ id, label, icon: Icon }) => (
+          <button
+            key={id}
+            onClick={() => setActiveTab(id)}
+            className={`p-2.5 rounded-full text-xs flex items-center justify-center transition ${
+              activeTab === id ? 'bg-white text-zinc-950 shadow-md' : 'text-zinc-400 hover:text-white'
+            }`}
+            title={label}
+          >
+            <Icon className="w-4 h-4" />
+          </button>
+        ))}
       </nav>
 
       {/* Modals */}

@@ -3,6 +3,7 @@ import { FileItem } from '../types.js';
 import { Film, Calendar, Download, ShieldCheck, Lock, X, Loader2, Image as ImageIcon, Play } from 'lucide-react';
 import { VaultCryptoService } from '../services/vault-crypto.js';
 import { mediaCache, mediaQueue } from '../services/media-cache.js';
+import { getStreamUrl } from '../utils/format.js';
 
 interface Props {
   media: FileItem[];
@@ -17,12 +18,6 @@ interface LoadedMediaState {
   needsKey: boolean;
   error?: string | null;
 }
-
-const getStreamUrl = (fileId: string) => {
-  const token = localStorage.getItem('drive_token') || '';
-  const rawApiUrl = (import.meta.env.VITE_API_URL || '').replace(/\/+$/, '');
-  return `${rawApiUrl}/api/v1/files/${fileId}/stream?token=${encodeURIComponent(token)}`;
-};
 
 export const GalleryTimelineView: React.FC<Props> = ({ media, vaultKey, onOpenVault }) => {
   const [selectedMedia, setSelectedMedia] = useState<LoadedMediaState | null>(null);

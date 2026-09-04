@@ -22,11 +22,7 @@ export class FileController {
    */
   static async initiateUpload(req: Request, res: Response): Promise<void> {
     try {
-      if (!req.user) {
-        res.status(401).json({ error: 'Not authenticated' });
-        return;
-      }
-
+      const userId = req.user!._id;
       const { filename, mimeType, sizeBytes, contentHash, folderId, isEncrypted } = req.body;
 
       if (!filename || !mimeType || !sizeBytes || !contentHash) {
@@ -35,7 +31,7 @@ export class FileController {
       }
 
       // Check for exact content duplicate (Zero-Knowledge Deduplication)
-      const existingDuplicate = await StorageEngineService.findExistingDuplicate(req.user._id, contentHash);
+      const existingDuplicate = await StorageEngineService.findExistingDuplicate(userId, contentHash);
       if (existingDuplicate) {
         // Instant deduplication: No bytes need to be uploaded to Google Drive!
         res.json({
@@ -47,7 +43,7 @@ export class FileController {
       }
 
       // Select target Google Drive account with sufficient room
-      const targetAccount = await StorageEngineService.selectTargetAccount(req.user._id, sizeBytes);
+      const targetAccount = await StorageEngineService.selectTargetAccount(userId, sizeBytes);
 
       // Unique opaque filename for Google Drive (opaque for Zero-Knowledge privacy)
       const driveOpaqueName = isEncrypted
@@ -79,11 +75,7 @@ export class FileController {
    */
   static async completeUpload(req: Request, res: Response): Promise<void> {
     try {
-      if (!req.user) {
-        res.status(401).json({ error: 'Not authenticated' });
-        return;
-      }
-
+      const userId = req.user!._id;
       const {
         filename,
         mimeType,
@@ -101,7 +93,7 @@ export class FileController {
       const deviceId = req.device?.deviceId || (req.headers['x-device-id'] as string) || undefined;
 
       const { file, isDuplicate } = await StorageEngineService.finalizeUpload({
-        userId: req.user._id,
+        userId,
         folderId: folderId ? new Types.ObjectId(folderId) : null,
         filename,
         mimeType,
@@ -119,7 +111,7 @@ export class FileController {
       // Emit real-time notification over Socket.io
       const io = getSocketIoInstance();
       if (io) {
-        io.to(`user:${req.user._id}`).emit('file:uploaded', {
+        io.to(`user:${userId}`).emit('file:uploaded', {
           fileId: file._id,
           filename: file.filename,
           sizeBytes: file.sizeBytes,
@@ -128,7 +120,7 @@ export class FileController {
       }
 
       // Invalidate user cache on new upload
-      await CacheService.invalidateUser(req.user._id.toString());
+      await CacheService.invalidateUser(userId.toString());
 
       res.json({ success: true, file, isDuplicate });
     } catch (error: any) {
@@ -141,17 +133,13 @@ export class FileController {
    */
   static async listFiles(req: Request, res: Response): Promise<void> {
     try {
-      if (!req.user) {
-        res.status(401).json({ error: 'Not authenticated' });
-        return;
-      }
-
+      const userId = req.user!._id;
       const folderId = req.query.folderId as string;
       const search = req.query.search as string;
       const isTrash = req.query.isTrash === 'true';
 
       // Check Redis cache for standard (non-search) directory listings
-      const cacheKey = `cache:user:${req.user._id}:files:${folderId || 'root'}:${isTrash}`;
+      const cacheKey = `cache:user:${userId}:files:${folderId || 'root'}:${isTrash}`;
       if (!search) {
         const cached = await CacheService.get(cacheKey);
         if (cached) {
@@ -161,7 +149,7 @@ export class FileController {
       }
 
       const filter: any = {
-        userId: req.user._id, // Strict IDOR protection
+        userId, // Strict IDOR protection
         isTrash,
       };
 
@@ -179,7 +167,7 @@ export class FileController {
 
       let recentFiles: any[] = [];
       if ((!folderId || folderId === 'root') && !search && !isTrash) {
-        recentFiles = await File.find({ userId: req.user._id, isTrash: false })
+        recentFiles = await File.find({ userId, isTrash: false })
           .sort({ createdAt: -1 })
           .limit(20);
       }
@@ -200,12 +188,8 @@ export class FileController {
    */
   static async getGallery(req: Request, res: Response): Promise<void> {
     try {
-      if (!req.user) {
-        res.status(401).json({ error: 'Not authenticated' });
-        return;
-      }
-
-      const cacheKey = `cache:user:${req.user._id}:gallery`;
+      const userId = req.user!._id;
+      const cacheKey = `cache:user:${userId}:gallery`;
       const cached = await CacheService.get(cacheKey);
       if (cached) {
         res.json(cached);
@@ -213,7 +197,7 @@ export class FileController {
       }
 
       const mediaFilter = {
-        userId: req.user._id,
+        userId,
         isTrash: false,
         $or: [{ mimeType: { $regex: '^image/' } }, { mimeType: { $regex: '^video/' } }],
       };
@@ -237,14 +221,10 @@ export class FileController {
    */
   static async streamFile(req: Request, res: Response): Promise<void> {
     try {
-      if (!req.user) {
-        res.status(401).json({ error: 'Not authenticated' });
-        return;
-      }
-
+      const userId = req.user!._id;
       const file = await File.findOne({
         _id: req.params.id,
-        userId: req.user._id, // Strict IDOR check
+        userId, // Strict IDOR check
       });
 
       if (!file) {
@@ -260,7 +240,7 @@ export class FileController {
 
       const account = await StorageAccount.findOne({
         _id: latestVersion.storageAccountId,
-        userId: req.user._id,
+        userId,
       });
 
       if (!account) {
@@ -283,13 +263,9 @@ export class FileController {
    */
   static async moveToTrash(req: Request, res: Response): Promise<void> {
     try {
-      if (!req.user) {
-        res.status(401).json({ error: 'Not authenticated' });
-        return;
-      }
-
+      const userId = req.user!._id;
       const file = await File.findOneAndUpdate(
-        { _id: req.params.id, userId: req.user._id },
+        { _id: req.params.id, userId },
         { isTrash: true, trashedAt: new Date(), trashedByDeviceId: req.device?.deviceId || 'web' },
         { new: true }
       );
@@ -299,7 +275,7 @@ export class FileController {
         return;
       }
 
-      await CacheService.invalidateUser(req.user._id.toString());
+      await CacheService.invalidateUser(userId.toString());
       res.json({ success: true, message: 'Moved to Trash' });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -311,13 +287,9 @@ export class FileController {
    */
   static async restoreFromTrash(req: Request, res: Response): Promise<void> {
     try {
-      if (!req.user) {
-        res.status(401).json({ error: 'Not authenticated' });
-        return;
-      }
-
+      const userId = req.user!._id;
       const file = await File.findOneAndUpdate(
-        { _id: req.params.id, userId: req.user._id },
+        { _id: req.params.id, userId },
         { isTrash: false, trashedAt: null },
         { new: true }
       );
@@ -327,7 +299,7 @@ export class FileController {
         return;
       }
 
-      await CacheService.invalidateUser(req.user._id.toString());
+      await CacheService.invalidateUser(userId.toString());
       res.json({ success: true, message: 'Restored from Trash' });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -339,14 +311,10 @@ export class FileController {
    */
   static async permanentDelete(req: Request, res: Response): Promise<void> {
     try {
-      if (!req.user) {
-        res.status(401).json({ error: 'Not authenticated' });
-        return;
-      }
-
+      const userId = req.user!._id;
       const file = await File.findOne({
         _id: req.params.id,
-        userId: req.user._id,
+        userId,
       });
 
       if (!file) {
@@ -360,9 +328,6 @@ export class FileController {
           const account = await StorageAccount.findById(version.storageAccountId);
           if (account) {
             await GoogleDriveService.deleteFile(account, version.providerFileId);
-          }
-
-          if (account) {
             await StorageAccount.findByIdAndUpdate(account._id, {
               $inc: { usedStorageBytes: -version.sizeBytes },
             });
@@ -373,7 +338,7 @@ export class FileController {
       }
 
       await File.findByIdAndDelete(file._id);
-      await CacheService.invalidateUser(req.user._id.toString());
+      await CacheService.invalidateUser(userId.toString());
 
       res.json({ success: true, message: 'Permanently purged from cloud storage' });
     } catch (error: any) {
@@ -386,11 +351,7 @@ export class FileController {
    */
   static async createFolder(req: Request, res: Response): Promise<void> {
     try {
-      if (!req.user) {
-        res.status(401).json({ error: 'Not authenticated' });
-        return;
-      }
-
+      const userId = req.user!._id;
       const { name, parentFolderId } = req.body;
       if (!name) {
         res.status(400).json({ error: 'Folder name is required' });
@@ -399,20 +360,20 @@ export class FileController {
 
       let path = `/${name}/`;
       if (parentFolderId) {
-        const parent = await Folder.findOne({ _id: parentFolderId, userId: req.user._id });
+        const parent = await Folder.findOne({ _id: parentFolderId, userId });
         if (parent) {
           path = `${parent.path}${name}/`;
         }
       }
 
       const folder = await Folder.create({
-        userId: req.user._id,
+        userId,
         parentFolderId: parentFolderId ? new Types.ObjectId(parentFolderId) : null,
         name,
         path,
       });
 
-      await CacheService.invalidateUser(req.user._id.toString());
+      await CacheService.invalidateUser(userId.toString());
       res.json({ success: true, folder });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -424,12 +385,7 @@ export class FileController {
    */
   static async deleteFolder(req: Request, res: Response): Promise<void> {
     try {
-      if (!req.user) {
-        res.status(401).json({ error: 'Not authenticated' });
-        return;
-      }
-
-      const userId = req.user._id;
+      const userId = req.user!._id;
       const folderId = new Types.ObjectId(req.params.id);
       const folder = await Folder.findOne({ _id: folderId, userId });
       if (!folder) {
@@ -460,7 +416,7 @@ export class FileController {
         { isTrash: true, trashedAt: new Date() }
       );
 
-      await CacheService.invalidateUser(req.user._id.toString());
+      await CacheService.invalidateUser(userId.toString());
       res.json({ success: true, message: `Folder "${folder.name}" and contents moved to Trash` });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -472,15 +428,11 @@ export class FileController {
    */
   static async listFolders(req: Request, res: Response): Promise<void> {
     try {
-      if (!req.user) {
-        res.status(401).json({ error: 'Not authenticated' });
-        return;
-      }
-
+      const userId = req.user!._id;
       const parentFolderId = req.query.parentFolderId as string;
 
       // Check Redis cache for folder tree
-      const cacheKey = `cache:user:${req.user._id}:folders:${parentFolderId || 'root'}`;
+      const cacheKey = `cache:user:${userId}:folders:${parentFolderId || 'root'}`;
       const cached = await CacheService.get(cacheKey);
       if (cached) {
         res.json(cached);
@@ -488,7 +440,7 @@ export class FileController {
       }
 
       const filter: any = {
-        userId: req.user._id,
+        userId,
         isTrash: false,
       };
 
@@ -499,7 +451,7 @@ export class FileController {
 
       if (parentFolderId && parentFolderId !== 'root' && Types.ObjectId.isValid(parentFolderId)) {
         filter.parentFolderId = new Types.ObjectId(parentFolderId);
-        currentFolder = await Folder.findOne({ _id: parentFolderId, userId: req.user._id });
+        currentFolder = await Folder.findOne({ _id: parentFolderId, userId });
 
         // Trace breadcrumbs upwards
         const trail: Array<{ id: string; name: string }> = [];
@@ -507,7 +459,7 @@ export class FileController {
         while (curr) {
           trail.unshift({ id: curr._id.toString(), name: curr.name });
           if (curr.parentFolderId) {
-            curr = await Folder.findOne({ _id: curr.parentFolderId, userId: req.user._id });
+            curr = await Folder.findOne({ _id: curr.parentFolderId, userId });
           } else {
             break;
           }

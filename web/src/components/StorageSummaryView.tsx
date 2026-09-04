@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { StorageSummary } from '../types.js';
 import { HardDrive, Plus, RefreshCw, AlertCircle, CheckCircle, ShieldCheck, Database, Layers } from 'lucide-react';
 import { api } from '../services/api.js';
+import { formatBytes } from '../utils/format.js';
 
 interface Props {
   summary: StorageSummary | null;
@@ -10,12 +11,6 @@ interface Props {
 
 export const StorageSummaryView: React.FC<Props> = ({ summary, onRefresh }) => {
   const [loading, setLoading] = useState(false);
-
-  const formatBytes = (bytes: number) => {
-    if (bytes === 0) return '0 GB';
-    const gb = bytes / (1024 * 1024 * 1024);
-    return gb.toFixed(1) + ' GB';
-  };
 
   const handleConnectDrive = async () => {
     try {

@@ -23,30 +23,13 @@ export const DeviceManagerView: React.FC<Props> = ({ devices, onRefresh, onOpenI
     }
   };
 
-  const handleToggleWifi = async (device: DeviceItem) => {
+  const handleTogglePolicy = async (device: DeviceItem, key: 'wifiOnly' | 'chargingOnly') => {
     try {
       setLoadingId(device._id);
-      const updatedPolicy = {
+      await api.updateDevicePolicy(device._id, {
         ...device.policy,
-        wifiOnly: !device.policy.wifiOnly,
-      };
-      await api.updateDevicePolicy(device._id, updatedPolicy);
-      onRefresh();
-    } catch (err: any) {
-      alert(err.message);
-    } finally {
-      setLoadingId(null);
-    }
-  };
-
-  const handleToggleCharging = async (device: DeviceItem) => {
-    try {
-      setLoadingId(device._id);
-      const updatedPolicy = {
-        ...device.policy,
-        chargingOnly: !device.policy.chargingOnly,
-      };
-      await api.updateDevicePolicy(device._id, updatedPolicy);
+        [key]: !device.policy[key],
+      });
       onRefresh();
     } catch (err: any) {
       alert(err.message);
@@ -168,7 +151,7 @@ export const DeviceManagerView: React.FC<Props> = ({ devices, onRefresh, onOpenI
                     Wi-Fi Only Uploads
                   </span>
                   <button
-                    onClick={() => handleToggleWifi(device)}
+                    onClick={() => handleTogglePolicy(device, 'wifiOnly')}
                     disabled={loadingId === device._id}
                     className={`px-3 py-1 rounded-full text-[10px] font-bold tracking-wider transition ${
                       device.policy?.wifiOnly
@@ -186,7 +169,7 @@ export const DeviceManagerView: React.FC<Props> = ({ devices, onRefresh, onOpenI
                     Charging Only Uploads
                   </span>
                   <button
-                    onClick={() => handleToggleCharging(device)}
+                    onClick={() => handleTogglePolicy(device, 'chargingOnly')}
                     disabled={loadingId === device._id}
                     className={`px-3 py-1 rounded-full text-[10px] font-bold tracking-wider transition ${
                       device.policy?.chargingOnly

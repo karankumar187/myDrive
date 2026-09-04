@@ -2,6 +2,7 @@ import React from 'react';
 import { FileItem } from '../types.js';
 import { Trash2, RotateCcw, AlertTriangle } from 'lucide-react';
 import { api } from '../services/api.js';
+import { formatBytes } from '../utils/format.js';
 
 interface Props {
   trashedFiles: FileItem[];
@@ -9,12 +10,6 @@ interface Props {
 }
 
 export const TrashBinView: React.FC<Props> = ({ trashedFiles, onRefresh }) => {
-  const formatBytes = (bytes: number) => {
-    if (bytes < 1024) return bytes + ' B';
-    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
-  };
-
   const handleRestore = async (id: string) => {
     try {
       await api.restoreFromTrash(id);

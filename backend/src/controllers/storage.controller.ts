@@ -11,14 +11,11 @@ export class StorageController {
    */
   static async getPoolSummary(req: Request, res: Response): Promise<void> {
     try {
-      if (!req.user) {
-        res.status(401).json({ error: 'Not authenticated' });
-        return;
-      }
+      const userId = req.user!._id;
 
       // Purge any legacy mock accounts so only real Google Drive accounts exist
       await StorageAccount.deleteMany({
-        userId: req.user._id,
+        userId,
         $or: [
           { googleDriveAccountId: { $regex: '^sub_mock_' } },
           { accountEmail: { $regex: 'mock\\.drive' } },
@@ -26,14 +23,14 @@ export class StorageController {
         ],
       });
 
-      const cacheKey = `cache:user:${req.user._id}:summary`;
+      const cacheKey = `cache:user:${userId}:summary`;
       const cached = await CacheService.get(cacheKey);
       if (cached) {
         res.json(cached);
         return;
       }
 
-      const summary = await StorageEngineService.getPoolSummary(req.user._id);
+      const summary = await StorageEngineService.getPoolSummary(userId);
       await CacheService.set(cacheKey, summary, 60);
       res.json(summary);
     } catch (error: any) {
@@ -46,14 +43,9 @@ export class StorageController {
    */
   static async getConnectUrl(req: Request, res: Response): Promise<void> {
     try {
-      if (!req.user) {
-        res.status(401).json({ error: 'Not authenticated' });
-        return;
-      }
-
       // Encode user ID into encrypted state token to prevent CSRF
       const statePayload = CryptoService.encrypt(
-        JSON.stringify({ userId: req.user._id.toString(), timestamp: Date.now() })
+        JSON.stringify({ userId: req.user!._id.toString(), timestamp: Date.now() })
       );
       const state = Buffer.from(JSON.stringify(statePayload)).toString('base64url');
 
@@ -136,12 +128,7 @@ export class StorageController {
    */
   static async listAccounts(req: Request, res: Response): Promise<void> {
     try {
-      if (!req.user) {
-        res.status(401).json({ error: 'Not authenticated' });
-        return;
-      }
-
-      const accounts = await StorageAccount.find({ userId: req.user._id }).select(
+      const accounts = await StorageAccount.find({ userId: req.user!._id }).select(
         '-encryptedRefreshToken -refreshTokenIv -refreshTokenAuthTag'
       );
 
@@ -156,14 +143,10 @@ export class StorageController {
    */
   static async syncAccount(req: Request, res: Response): Promise<void> {
     try {
-      if (!req.user) {
-        res.status(401).json({ error: 'Not authenticated' });
-        return;
-      }
-
+      const userId = req.user!._id;
       const account = await StorageAccount.findOne({
         _id: req.params.id,
-        userId: req.user._id, // Strict IDOR protection
+        userId, // Strict IDOR protection
       });
 
       if (!account) {
@@ -172,7 +155,7 @@ export class StorageController {
       }
 
       const quota = await GoogleDriveService.syncAccountQuota(account);
-      await CacheService.invalidateUser(req.user._id.toString());
+      await CacheService.invalidateUser(userId.toString());
       res.json({ success: true, quota });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -184,14 +167,10 @@ export class StorageController {
    */
   static async removeAccount(req: Request, res: Response): Promise<void> {
     try {
-      if (!req.user) {
-        res.status(401).json({ error: 'Not authenticated' });
-        return;
-      }
-
+      const userId = req.user!._id;
       const account = await StorageAccount.findOneAndDelete({
         _id: req.params.id,
-        userId: req.user._id, // Strict IDOR protection
+        userId, // Strict IDOR protection
       });
 
       if (!account) {
@@ -199,7 +178,7 @@ export class StorageController {
         return;
       }
 
-      await CacheService.invalidateUser(req.user._id.toString());
+      await CacheService.invalidateUser(userId.toString());
       res.json({ success: true, message: `Account ${account.accountEmail} unlinked successfully` });
     } catch (error: any) {
       res.status(500).json({ error: error.message });

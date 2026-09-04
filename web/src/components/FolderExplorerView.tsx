@@ -21,6 +21,7 @@ import {
 import { api } from '../services/api.js';
 import { VaultCryptoService } from '../services/vault-crypto.js';
 import { mediaCache, generateThumbnailFromVideoFile } from '../services/media-cache.js';
+import { formatBytes, getStreamUrl } from '../utils/format.js';
 
 interface Props {
   files: FileItem[];
@@ -61,12 +62,6 @@ export const FolderExplorerView: React.FC<Props> = ({
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
 
-  const formatBytes = (bytes: number) => {
-    if (bytes < 1024) return bytes + ' B';
-    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
-  };
-
   const getFileIcon = (mimeType: string) => {
     if (mimeType.startsWith('image/')) return <ImageIcon className="w-4 h-4 text-purple-400" />;
     if (mimeType.startsWith('video/')) return <Film className="w-4 h-4 text-red-400" />;
@@ -77,12 +72,6 @@ export const FolderExplorerView: React.FC<Props> = ({
 
   const isPreviewable = (mimeType: string) => {
     return mimeType.startsWith('image/') || mimeType.startsWith('video/');
-  };
-
-  const getStreamUrl = (fileId: string) => {
-    const token = localStorage.getItem('drive_token') || '';
-    const rawApiUrl = (import.meta.env.VITE_API_URL || '').replace(/\/+$/, '');
-    return `${rawApiUrl}/api/v1/files/${fileId}/stream?token=${encodeURIComponent(token)}`;
   };
 
   // Open file preview - fetch, decrypt if needed, and display

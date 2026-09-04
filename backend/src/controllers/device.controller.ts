@@ -9,12 +9,7 @@ export class DeviceController {
    */
   static async listDevices(req: Request, res: Response): Promise<void> {
     try {
-      if (!req.user) {
-        res.status(401).json({ error: 'Not authenticated' });
-        return;
-      }
-
-      const devices = await Device.find({ userId: req.user._id })
+      const devices = await Device.find({ userId: req.user!._id })
         .select('-apiKeyHash')
         .sort({ lastSeenAt: -1 });
 
@@ -30,11 +25,6 @@ export class DeviceController {
    */
   static async registerDevice(req: Request, res: Response): Promise<void> {
     try {
-      if (!req.user) {
-        res.status(401).json({ error: 'Not authenticated' });
-        return;
-      }
-
       const { deviceName, deviceType, osVersion, appVersion } = req.body;
 
       if (!deviceName || !deviceType) {
@@ -46,7 +36,7 @@ export class DeviceController {
       const { key, hash, prefix } = CryptoService.generateDeviceKey(`dkey_${deviceType}`);
 
       const device = await Device.create({
-        userId: req.user._id,
+        userId: req.user!._id,
         deviceId,
         apiKeyHash: hash,
         apiKeyPrefix: prefix,
@@ -88,13 +78,8 @@ export class DeviceController {
    */
   static async updatePolicy(req: Request, res: Response): Promise<void> {
     try {
-      if (!req.user) {
-        res.status(401).json({ error: 'Not authenticated' });
-        return;
-      }
-
       const device = await Device.findOneAndUpdate(
-        { _id: req.params.id, userId: req.user._id }, // Strict IDOR protection
+        { _id: req.params.id, userId: req.user!._id }, // Strict IDOR protection
         { policy: req.body.policy },
         { new: true }
       ).select('-apiKeyHash');
@@ -115,14 +100,9 @@ export class DeviceController {
    */
   static async revokeDevice(req: Request, res: Response): Promise<void> {
     try {
-      if (!req.user) {
-        res.status(401).json({ error: 'Not authenticated' });
-        return;
-      }
-
       const device = await Device.findOneAndDelete({
         _id: req.params.id,
-        userId: req.user._id, // Strict IDOR protection
+        userId: req.user!._id, // Strict IDOR protection
       });
 
       if (!device) {
@@ -141,13 +121,8 @@ export class DeviceController {
    */
   static async sendRemoteCommand(req: Request, res: Response): Promise<void> {
     try {
-      if (!req.user) {
-        res.status(401).json({ error: 'Not authenticated' });
-        return;
-      }
-
       const { command, payload } = req.body;
-      const device = await Device.findOne({ _id: req.params.id, userId: req.user._id });
+      const device = await Device.findOne({ _id: req.params.id, userId: req.user!._id });
 
       if (!device) {
         res.status(404).json({ error: 'Device not found or access denied' });
