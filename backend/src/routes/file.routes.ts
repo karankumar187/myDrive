@@ -9,8 +9,8 @@ router.post('/upload/initiate', requireAnyAuth, FileController.initiateUpload);
 router.post('/upload/complete', requireAnyAuth, FileController.completeUpload);
 
 // Virtual files & Gallery
-router.get('/', requireUserAuth, FileController.listFiles);
-router.get('/gallery', requireUserAuth, FileController.getGallery);
+router.get('/', requireAnyAuth, FileController.listFiles);
+router.get('/gallery', requireAnyAuth, FileController.getGallery);
 router.get('/:id/stream', requireAnyAuth, FileController.streamFile);
 
 // Soft delete / Recycle bin
@@ -19,7 +19,7 @@ router.post('/:id/restore', requireUserAuth, FileController.restoreFromTrash);
 router.delete('/:id/permanent', requireUserAuth, FileController.permanentDelete);
 
 // Folders
-router.get('/folders/list', requireUserAuth, FileController.listFolders);
+router.get('/folders/list', requireAnyAuth, FileController.listFolders);
 router.post('/folders/create', requireUserAuth, FileController.createFolder);
 router.delete('/folders/:id', requireUserAuth, FileController.deleteFolder);
 
