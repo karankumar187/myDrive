@@ -72,7 +72,11 @@ import coil.Coil
 import coil.ImageLoader
 import coil.compose.AsyncImage
 import coil.decode.SvgDecoder
+import coil.disk.DiskCache
+import coil.memory.MemoryCache
 import coil.request.ImageRequest
+import coil.size.Precision
+import coil.size.Size
 import com.drive.sync.workers.SyncWorker
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -177,10 +181,24 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         val imageLoader = ImageLoader.Builder(this)
+            .okHttpClient(sharedHttpClient)
+            .memoryCache {
+                MemoryCache.Builder(this)
+                    .maxSizePercent(0.25)
+                    .strongReferencesEnabled(true)
+                    .build()
+            }
+            .diskCache {
+                DiskCache.Builder()
+                    .directory(cacheDir.resolve("image_cache"))
+                    .maxSizeBytes(150L * 1024 * 1024)
+                    .build()
+            }
             .components {
                 add(SvgDecoder.Factory())
             }
-            .crossfade(true)
+            .crossfade(false)
+            .respectCacheHeaders(false)
             .build()
         Coil.setImageLoader(imageLoader)
 
@@ -2370,7 +2388,7 @@ fun TransfersScreen(
                     items(filteredUploads) { item ->
                         val isImage = item.mimeType.startsWith("image/")
                         val isVideo = item.mimeType.startsWith("video/")
-                        val streamUrl = "${serverUrl.trimEnd('/')}/api/v1/files/${item.id}/stream?deviceId=$deviceId&deviceKey=$deviceKey"
+                        val thumbUrl = "${serverUrl.trimEnd('/')}/api/v1/files/${item.id}/thumbnail?deviceId=$deviceId&deviceKey=$deviceKey"
 
                         Card(
                             modifier = Modifier
@@ -2405,10 +2423,14 @@ fun TransfersScreen(
                                     if (isImage) {
                                         AsyncImage(
                                             model = ImageRequest.Builder(LocalContext.current)
-                                                .data(streamUrl)
+                                                .data(thumbUrl)
                                                 .addHeader("x-device-id", deviceId)
                                                 .addHeader("x-device-key", deviceKey)
-                                                .crossfade(true)
+                                                .size(Size(120, 120))
+                                                .precision(Precision.INEXACT)
+                                                .memoryCacheKey("thumb_${item.id}")
+                                                .diskCacheKey("thumb_${item.id}")
+                                                .crossfade(false)
                                                 .build(),
                                             contentDescription = item.filename,
                                             modifier = Modifier.fillMaxSize(),
@@ -2523,7 +2545,7 @@ fun TransfersScreen(
                     items(filteredInbound) { item ->
                         val isImage = item.mimeType.startsWith("image/")
                         val isVideo = item.mimeType.startsWith("video/")
-                        val streamUrl = "${serverUrl.trimEnd('/')}/api/v1/files/${item.id}/stream?deviceId=$deviceId&deviceKey=$deviceKey"
+                        val thumbUrl = "${serverUrl.trimEnd('/')}/api/v1/files/${item.id}/thumbnail?deviceId=$deviceId&deviceKey=$deviceKey"
 
                         Card(
                             modifier = Modifier
@@ -2558,10 +2580,14 @@ fun TransfersScreen(
                                     if (isImage) {
                                         AsyncImage(
                                             model = ImageRequest.Builder(LocalContext.current)
-                                                .data(streamUrl)
+                                                .data(thumbUrl)
                                                 .addHeader("x-device-id", deviceId)
                                                 .addHeader("x-device-key", deviceKey)
-                                                .crossfade(true)
+                                                .size(Size(120, 120))
+                                                .precision(Precision.INEXACT)
+                                                .memoryCacheKey("thumb_${item.id}")
+                                                .diskCacheKey("thumb_${item.id}")
+                                                .crossfade(false)
                                                 .build(),
                                             contentDescription = item.filename,
                                             modifier = Modifier.fillMaxSize(),

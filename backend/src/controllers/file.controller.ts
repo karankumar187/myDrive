@@ -356,7 +356,8 @@ export class FileController {
       // If file has a direct thumbnail link stored (URL or base64 data URI)
       if (file.metadata?.thumbnail) {
         if (file.metadata.thumbnail.startsWith('http')) {
-          res.redirect(file.metadata.thumbnail);
+          res.setHeader('Cache-Control', 'public, max-age=604800, immutable');
+          res.redirect(301, file.metadata.thumbnail);
           return;
         } else if (file.metadata.thumbnail.startsWith('data:image/')) {
           const matches = file.metadata.thumbnail.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
@@ -420,8 +421,9 @@ export class FileController {
             }
           }
           if (thumbRes.ok) {
+            File.updateOne({ _id: file._id }, { $set: { 'metadata.thumbnail': meta.data.thumbnailLink } }).exec();
             res.setHeader('Content-Type', thumbRes.headers.get('content-type') || 'image/jpeg');
-            res.setHeader('Cache-Control', 'public, max-age=86400');
+            res.setHeader('Cache-Control', 'public, max-age=604800, immutable');
             const buffer = Buffer.from(await thumbRes.arrayBuffer());
             res.send(buffer);
             return;

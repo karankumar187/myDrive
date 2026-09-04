@@ -48,6 +48,8 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import coil.size.Precision
+import coil.size.Size
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -110,7 +112,13 @@ fun formatDetailsDate(rawDate: String?): String {
 // ----------------------------------------------------
 // Shared HTTP client singleton for efficient connection and thread pooling
 val sharedHttpClient: OkHttpClient by lazy {
+    val dispatcher = Dispatcher().apply {
+        maxRequests = 64
+        maxRequestsPerHost = 20
+    }
     OkHttpClient.Builder()
+        .dispatcher(dispatcher)
+        .connectionPool(ConnectionPool(16, 5, java.util.concurrent.TimeUnit.MINUTES))
         .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
         .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
         .build()
@@ -334,6 +342,166 @@ suspend fun apiDeleteFolder(
     } catch (e: Exception) {
         e.printStackTrace()
         false
+    }
+}
+
+// ----------------------------------------------------
+// Gallery Item Tile (Fast, skippable Compose component)
+// ----------------------------------------------------
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun GalleryMediaTile(
+    item: CloudMedia,
+    isSelected: Boolean,
+    isSelectionMode: Boolean,
+    serverUrl: String,
+    deviceId: String,
+    deviceKey: String,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit
+) {
+    val context = LocalContext.current
+    val isVideo = item.mimeType.startsWith("video/")
+    val thumbUrl = remember(item.id, serverUrl, deviceId, deviceKey) {
+        "${serverUrl.trimEnd('/')}/api/v1/files/${item.id}/thumbnail?deviceId=$deviceId&deviceKey=$deviceKey"
+    }
+
+    val imageRequest = remember(item.id, thumbUrl) {
+        ImageRequest.Builder(context)
+            .data(thumbUrl)
+            .addHeader("x-device-id", deviceId)
+            .addHeader("x-device-key", deviceKey)
+            .size(Size(240, 240))
+            .precision(Precision.INEXACT)
+            .memoryCacheKey("thumb_${item.id}")
+            .diskCacheKey("thumb_${item.id}")
+            .crossfade(false)
+            .build()
+    }
+
+    Box(
+        modifier = Modifier
+            .aspectRatio(1f)
+            .clip(RoundedCornerShape(4.dp))
+            .background(Color(0xFF14141D))
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onLongClick
+            )
+    ) {
+        if (isVideo) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(Color(0xFF261044), Color(0xFF101018))
+                        )
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Default.PlayArrow,
+                    contentDescription = null,
+                    tint = Color(0xFFA855F7).copy(alpha = 0.75f),
+                    modifier = Modifier.size(34.dp)
+                )
+            }
+        }
+
+        // Thumbnail image
+        AsyncImage(
+            model = imageRequest,
+            contentDescription = item.filename,
+            modifier = Modifier.fillMaxSize(),
+            contentScale = ContentScale.Crop
+        )
+
+        // Video Indicator
+        if (isVideo) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(3.dp)
+                    .background(Color.Black.copy(alpha = 0.7f), RoundedCornerShape(3.dp))
+                    .padding(horizontal = 4.dp, vertical = 2.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Default.PlayArrow,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(10.dp)
+                    )
+                    if (item.duration != null && item.duration > 0) {
+                        Spacer(modifier = Modifier.width(2.dp))
+                        Text(
+                            text = "${item.duration.toInt()}s",
+                            color = Color.White,
+                            fontSize = 8.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+        }
+
+        // Cloud-Only Indicator
+        if (item.isCloudOnly) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(3.dp)
+                    .background(Color.Black.copy(alpha = 0.6f), CircleShape)
+                    .padding(2.dp)
+            ) {
+                Icon(
+                    Icons.Default.Cloud,
+                    contentDescription = "Cloud only",
+                    tint = Color(0xFFA855F7),
+                    modifier = Modifier.size(10.dp)
+                )
+            }
+        }
+
+        // Favorite Indicator
+        if (item.isFavorite) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(3.dp)
+                    .background(Color.Black.copy(alpha = 0.6f), CircleShape)
+                    .padding(2.dp)
+            ) {
+                Icon(
+                    Icons.Default.Favorite,
+                    contentDescription = "Favorite",
+                    tint = Color(0xFFEF4444),
+                    modifier = Modifier.size(10.dp)
+                )
+            }
+        }
+
+        // Selection Checkbox
+        if (isSelectionMode) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(3.dp)
+                    .background(
+                        if (isSelected) Color(0xFFA855F7) else Color.Black.copy(alpha = 0.5f),
+                        CircleShape
+                    )
+                    .padding(2.dp)
+            ) {
+                Icon(
+                    if (isSelected) Icons.Default.Check else Icons.Default.RadioButtonUnchecked,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(12.dp)
+                )
+            }
+        }
     }
 }
 
@@ -947,7 +1115,11 @@ fun FullGalleryScreen(
             ) {
                 groupedMedia.forEach { (monthYear, itemsInGroup) ->
                     // Date Group Header
-                    item(span = { GridItemSpan(4) }) {
+                    item(
+                        key = "header_$monthYear",
+                        span = { GridItemSpan(4) },
+                        contentType = "header"
+                    ) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -972,151 +1144,32 @@ fun FullGalleryScreen(
                     }
 
                     // Grid Items
-                    items(itemsInGroup, key = { it.id }) { item ->
+                    items(
+                        itemsInGroup,
+                        key = { it.id },
+                        contentType = { "media_tile" }
+                    ) { item ->
                         val isSelected = selectedIds.contains(item.id)
-                        val isVideo = item.mimeType.startsWith("video/")
-                        // Fast thumbnail endpoint
-                        val thumbUrl = "${serverUrl.trimEnd('/')}/api/v1/files/${item.id}/thumbnail?deviceId=$deviceId&deviceKey=$deviceKey"
-
-                        Box(
-                            modifier = Modifier
-                                .aspectRatio(1f)
-                                .clip(RoundedCornerShape(4.dp))
-                                .background(Color(0xFF14141D))
-                                .combinedClickable(
-                                    onClick = {
-                                        if (isSelectionMode) {
-                                            if (isSelected) selectedIds.remove(item.id) else selectedIds.add(item.id)
-                                        } else {
-                                            val idx = filteredList.indexOfFirst { it.id == item.id }
-                                            if (idx != -1) viewerIndex = idx
-                                        }
-                                    },
-                                    onLongClick = {
-                                        isSelectionMode = true
-                                        if (isSelected) selectedIds.remove(item.id) else selectedIds.add(item.id)
-                                    }
-                                )
-                        ) {
-                            if (isVideo) {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .background(
-                                            Brush.verticalGradient(
-                                                listOf(Color(0xFF261044), Color(0xFF101018))
-                                            )
-                                        ),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        Icons.Default.PlayArrow,
-                                        contentDescription = null,
-                                        tint = Color(0xFFA855F7).copy(alpha = 0.75f),
-                                        modifier = Modifier.size(34.dp)
-                                    )
+                        GalleryMediaTile(
+                            item = item,
+                            isSelected = isSelected,
+                            isSelectionMode = isSelectionMode,
+                            serverUrl = serverUrl,
+                            deviceId = deviceId,
+                            deviceKey = deviceKey,
+                            onClick = {
+                                if (isSelectionMode) {
+                                    if (isSelected) selectedIds.remove(item.id) else selectedIds.add(item.id)
+                                } else {
+                                    val idx = filteredList.indexOfFirst { it.id == item.id }
+                                    if (idx != -1) viewerIndex = idx
                                 }
+                            },
+                            onLongClick = {
+                                isSelectionMode = true
+                                if (isSelected) selectedIds.remove(item.id) else selectedIds.add(item.id)
                             }
-
-                            // Thumbnail image
-                            AsyncImage(
-                                model = ImageRequest.Builder(LocalContext.current)
-                                    .data(thumbUrl)
-                                    .addHeader("x-device-id", deviceId)
-                                    .addHeader("x-device-key", deviceKey)
-                                    .crossfade(true)
-                                    .build(),
-                                contentDescription = item.filename,
-                                modifier = Modifier.fillMaxSize(),
-                                contentScale = ContentScale.Crop
-                            )
-
-                            // Video Indicator
-                            if (isVideo) {
-                                Box(
-                                    modifier = Modifier
-                                        .align(Alignment.BottomStart)
-                                        .padding(3.dp)
-                                        .background(Color.Black.copy(alpha = 0.7f), RoundedCornerShape(3.dp))
-                                        .padding(horizontal = 4.dp, vertical = 2.dp)
-                                ) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Icon(
-                                            Icons.Default.PlayArrow,
-                                            contentDescription = null,
-                                            tint = Color.White,
-                                            modifier = Modifier.size(10.dp)
-                                        )
-                                        if (item.duration != null && item.duration > 0) {
-                                            Spacer(modifier = Modifier.width(2.dp))
-                                            Text(
-                                                text = "${item.duration.toInt()}s",
-                                                color = Color.White,
-                                                fontSize = 8.sp,
-                                                fontWeight = FontWeight.Bold
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-
-                            // Cloud-Only Indicator
-                            if (item.isCloudOnly) {
-                                Box(
-                                    modifier = Modifier
-                                        .align(Alignment.BottomEnd)
-                                        .padding(3.dp)
-                                        .background(Color.Black.copy(alpha = 0.6f), CircleShape)
-                                        .padding(2.dp)
-                                ) {
-                                    Icon(
-                                        Icons.Default.Cloud,
-                                        contentDescription = "Cloud only",
-                                        tint = Color(0xFFA855F7),
-                                        modifier = Modifier.size(10.dp)
-                                    )
-                                }
-                            }
-
-                            // Favorite Indicator
-                            if (item.isFavorite) {
-                                Box(
-                                    modifier = Modifier
-                                        .align(Alignment.TopEnd)
-                                        .padding(3.dp)
-                                        .background(Color.Black.copy(alpha = 0.6f), CircleShape)
-                                        .padding(2.dp)
-                                ) {
-                                    Icon(
-                                        Icons.Default.Favorite,
-                                        contentDescription = "Favorite",
-                                        tint = Color(0xFFEF4444),
-                                        modifier = Modifier.size(10.dp)
-                                    )
-                                }
-                            }
-
-                            // Selection Checkbox
-                            if (isSelectionMode) {
-                                Box(
-                                    modifier = Modifier
-                                        .align(Alignment.TopStart)
-                                        .padding(3.dp)
-                                        .background(
-                                            if (isSelected) Color(0xFFA855F7) else Color.Black.copy(alpha = 0.5f),
-                                            CircleShape
-                                        )
-                                        .padding(2.dp)
-                                ) {
-                                    Icon(
-                                        if (isSelected) Icons.Default.Check else Icons.Default.RadioButtonUnchecked,
-                                        contentDescription = null,
-                                        tint = Color.White,
-                                        modifier = Modifier.size(12.dp)
-                                    )
-                                }
-                            }
-                        }
+                        )
                     }
                 }
             }
