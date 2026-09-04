@@ -30,7 +30,10 @@ class SyncWorker(
         val deviceKey = inputData.getString("device_key") ?: return@withContext Result.failure()
         val syncVideos = inputData.getBoolean("sync_videos", true)
 
-        Log.d("SyncWorker", "Starting media sync for device $deviceId (videos=$syncVideos)")
+        val prefs = applicationContext.getSharedPreferences("drive_prefs", Context.MODE_PRIVATE)
+        val targetFolderId = inputData.getString("target_folder_id") ?: prefs.getString("target_folder_id", null)
+
+        Log.d("SyncWorker", "Starting media sync for device $deviceId (videos=$syncVideos, targetFolderId=$targetFolderId)")
 
         try {
             // 1. Sync Photos
@@ -39,6 +42,7 @@ class SyncWorker(
                 serverUrl = serverUrl,
                 deviceId = deviceId,
                 deviceKey = deviceKey,
+                targetFolderId = targetFolderId,
                 defaultMime = "image/jpeg",
                 namePrefix = "photo"
             )
@@ -50,15 +54,34 @@ class SyncWorker(
                     serverUrl = serverUrl,
                     deviceId = deviceId,
                     deviceKey = deviceKey,
+                    targetFolderId = targetFolderId,
                     defaultMime = "video/mp4",
                     namePrefix = "video"
                 )
             } else 0
 
             Log.d("SyncWorker", "Sync complete: $imageCount images, $videoCount videos processed.")
+
+            val prefs = applicationContext.getSharedPreferences("drive_prefs", Context.MODE_PRIVATE)
+            val prevTotal = prefs.getInt("total_synced_count", 0)
+            val newTotal = prevTotal + imageCount + videoCount
+            prefs.edit().apply {
+                putLong("last_sync_timestamp", System.currentTimeMillis())
+                putInt("last_sync_count", imageCount + videoCount)
+                putInt("total_synced_count", newTotal)
+                putString("last_sync_status", "Synced $imageCount photos, $videoCount videos")
+                apply()
+            }
+
             Result.success()
         } catch (e: Exception) {
             Log.e("SyncWorker", "Sync worker error: ${e.message}", e)
+            val prefs = applicationContext.getSharedPreferences("drive_prefs", Context.MODE_PRIVATE)
+            prefs.edit().apply {
+                putLong("last_sync_timestamp", System.currentTimeMillis())
+                putString("last_sync_status", "Sync notice: ${e.localizedMessage ?: "Network error"}")
+                apply()
+            }
             Result.retry()
         }
     }
@@ -68,6 +91,7 @@ class SyncWorker(
         serverUrl: String,
         deviceId: String,
         deviceKey: String,
+        targetFolderId: String?,
         defaultMime: String,
         namePrefix: String
     ): Int {
@@ -168,6 +192,9 @@ class SyncWorker(
                     put("contentHash", contentHash)
                     put("storageAccountId", storageAccountId)
                     put("deviceAssetId", id.toString())
+                    if (!targetFolderId.isNullOrBlank()) {
+                        put("folderId", targetFolderId)
+                    }
                 }
 
                 val completeRequest = Request.Builder()

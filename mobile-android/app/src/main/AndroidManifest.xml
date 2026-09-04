@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="com.drive.sync">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <!-- Network permissions for API requests & Google Drive direct streaming -->
     <uses-permission android:name="android.permission.INTERNET" />
@@ -19,9 +18,10 @@
     <application
         android:allowBackup="true"
         android:icon="@android:drawable/sym_def_app_icon"
-        android:label="Unified Cloud"
+        android:label="myDrive"
         android:roundIcon="@android:drawable/sym_def_app_icon"
         android:supportsRtl="true"
+        android:usesCleartextTraffic="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
 
         <activity
