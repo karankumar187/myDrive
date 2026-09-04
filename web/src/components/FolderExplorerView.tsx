@@ -48,6 +48,8 @@ export const FolderExplorerView: React.FC<Props> = ({
   const [newFolderName, setNewFolderName] = useState('');
   const [showFolderModal, setShowFolderModal] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const dragCounter = useRef(0);
 
   // File Preview state
   const [previewFile, setPreviewFile] = useState<FileItem | null>(null);
@@ -148,8 +150,27 @@ export const FolderExplorerView: React.FC<Props> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [previewFile, closePreview]);
 
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const selectedFiles = e.target.files;
+  // Prevent browser default file drop navigation (fixes Safari NSURLErrorDomain:-3,001)
+  useEffect(() => {
+    const handleWindowDragOver = (e: DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    const handleWindowDrop = (e: DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+    };
+
+    window.addEventListener('dragover', handleWindowDragOver);
+    window.addEventListener('drop', handleWindowDrop);
+
+    return () => {
+      window.removeEventListener('dragover', handleWindowDragOver);
+      window.removeEventListener('drop', handleWindowDrop);
+    };
+  }, []);
+
+  const uploadFiles = async (selectedFiles: FileList | File[]) => {
     if (!selectedFiles || selectedFiles.length === 0) return;
 
     setUploading(true);
@@ -245,6 +266,47 @@ export const FolderExplorerView: React.FC<Props> = ({
     setUploading(false);
     onRefresh();
     if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      uploadFiles(e.target.files);
+    }
+  };
+
+  const handleDragEnter = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounter.current += 1;
+    if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
+      setIsDragging(true);
+    }
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounter.current -= 1;
+    if (dragCounter.current <= 0) {
+      setIsDragging(false);
+      dragCounter.current = 0;
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+    dragCounter.current = 0;
+
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      uploadFiles(e.dataTransfer.files);
+    }
   };
 
   const handleCreateFolder = async (e: React.FormEvent) => {
@@ -350,7 +412,26 @@ export const FolderExplorerView: React.FC<Props> = ({
   );
 
   return (
-    <div className="space-y-5">
+    <div
+      className="space-y-5 relative min-h-[400px]"
+      onDragEnter={handleDragEnter}
+      onDragLeave={handleDragLeave}
+      onDragOver={handleDragOver}
+      onDrop={handleDrop}
+    >
+      {/* Full Drag & Drop Overlay */}
+      {isDragging && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex flex-col items-center justify-center p-8 border-4 border-dashed border-purple-500 rounded-3xl m-4 pointer-events-none shadow-glow-purple">
+          <div className="w-20 h-20 rounded-full bg-purple-900/80 border border-purple-500/50 flex items-center justify-center text-purple-400 mb-4 animate-bounce">
+            <Upload className="w-10 h-10" />
+          </div>
+          <h3 className="text-xl font-bold text-white">Drop files or videos to upload</h3>
+          <p className="text-sm text-zinc-300 mt-2">
+            Uploading directly to <span className="text-purple-400 font-semibold">{currentFolder ? currentFolder.name : 'My Drive'}</span>
+          </p>
+        </div>
+      )}
+
       {/* Top Action & Navigation Bar */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-[#111114] p-4 rounded-2xl border border-[#222227] shadow-lg">
         {/* Small full rounded < up button & Accurate Breadcrumb Trail */}
@@ -418,7 +499,7 @@ export const FolderExplorerView: React.FC<Props> = ({
             type="file"
             multiple
             className="hidden"
-            onChange={handleFileUpload}
+            onChange={handleFileInputChange}
           />
         </div>
       </div>
