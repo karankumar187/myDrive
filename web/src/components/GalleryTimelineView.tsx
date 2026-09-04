@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { FileItem } from '../types.js';
-import { Film, Calendar, Download, ShieldCheck, Lock, X, Loader2, Image as ImageIcon } from 'lucide-react';
+import { Film, Calendar, Download, ShieldCheck, Lock, X, Loader2, Image as ImageIcon, Play } from 'lucide-react';
 import { VaultCryptoService } from '../services/vault-crypto.js';
 
 interface Props {
@@ -185,6 +185,74 @@ export const GalleryTimelineView: React.FC<Props> = ({ media, vaultKey, onOpenVa
   );
 };
 
+// Video Thumbnail Component that captures and renders the first video frame
+const VideoThumbnail: React.FC<{ src: string; alt: string }> = ({ src, alt }) => {
+  const [thumbUrl, setThumbUrl] = useState<string | null>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  const handleLoadedData = () => {
+    const video = videoRef.current;
+    if (!video) return;
+    try {
+      // Seek slightly into the video to avoid a blank/black frame
+      video.currentTime = Math.min(0.2, (video.duration || 1) / 2);
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleSeeked = () => {
+    const video = videoRef.current;
+    if (!video) return;
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth || 320;
+      canvas.height = video.videoHeight || 240;
+      const ctx = canvas.getContext('2d');
+      if (ctx && canvas.width > 0 && canvas.height > 0) {
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+        if (dataUrl && dataUrl.length > 100) {
+          setThumbUrl(dataUrl);
+        }
+      }
+    } catch {
+      // ignore (e.g. cross-origin if not blob)
+    }
+  };
+
+  return (
+    <div className="relative w-full h-full bg-[#13131a] overflow-hidden flex items-center justify-center">
+      {thumbUrl ? (
+        <img
+          src={thumbUrl}
+          alt={alt}
+          className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
+          loading="lazy"
+        />
+      ) : (
+        <video
+          ref={videoRef}
+          src={`${src}#t=0.2`}
+          preload="metadata"
+          muted
+          playsInline
+          onLoadedData={handleLoadedData}
+          onSeeked={handleSeeked}
+          className="w-full h-full object-cover group-hover:scale-105 transition duration-300 pointer-events-none"
+        />
+      )}
+
+      {/* Center Play Button Overlay */}
+      <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+        <div className="w-10 h-10 rounded-full bg-black/60 backdrop-blur-sm border border-white/20 flex items-center justify-center text-white shadow-lg group-hover:scale-110 group-hover:bg-purple-600/90 group-hover:border-purple-400 transition duration-300">
+          <Play className="w-4 h-4 fill-white ml-0.5" />
+        </div>
+      </div>
+    </div>
+  );
+};
+
 // Individual Media Card with Client-Side Decryption & Blob caching
 const MediaCard: React.FC<{
   item: FileItem;
@@ -269,6 +337,8 @@ const MediaCard: React.FC<{
           <Lock className="w-6 h-6" />
           <span className="text-[10px] text-zinc-400 font-medium">Locked E2EE</span>
         </div>
+      ) : isVideo && displayUrl ? (
+        <VideoThumbnail src={displayUrl} alt={item.filename} />
       ) : isVideo ? (
         <div className="w-full h-full flex items-center justify-center bg-[#13131a] text-zinc-300">
           <Film className="w-8 h-8 text-purple-400 group-hover:scale-110 transition duration-300" />
