@@ -279,7 +279,7 @@ export const FolderExplorerView: React.FC<Props> = ({
             realProviderFileId = putJson.id;
           }
         } catch {
-          // If response body is empty or non-JSON (e.g. dev mock), keep opaque name
+          // If response body is empty or non-JSON, keep opaque name
         }
 
         // 5. Finalize upload

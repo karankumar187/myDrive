@@ -260,17 +260,6 @@ export const App: React.FC = () => {
     }
   }, [currentUser, currentFolderId, loadFolderData]);
 
-  const handleDevLogin = async () => {
-    try {
-      const email = prompt('Enter login email:', 'karan.personal@gmail.com') || 'karan.personal@gmail.com';
-      const name = prompt('Enter your name:', 'Karan Kumar') || 'Karan Kumar';
-      const res = await api.devLogin(email, name);
-      setCurrentUser(res.user);
-    } catch (err: any) {
-      alert(err.message);
-    }
-  };
-
   const handleGoogleLogin = () => {
     const apiBase = import.meta.env.VITE_API_URL || '';
     window.location.href = `${apiBase}/api/v1/auth/google`;
@@ -348,13 +337,6 @@ export const App: React.FC = () => {
                 />
               </svg>
               <span>Continue with Google</span>
-            </button>
-
-            <button
-              onClick={handleDevLogin}
-              className="w-full py-2.5 px-4 bg-[#18181c] hover:bg-[#202025] text-zinc-300 font-medium rounded-2xl text-xs border border-[#27273a] transition active:scale-[0.99]"
-            >
-              Developer Instant Access (No API Setup Required)
             </button>
           </div>
 

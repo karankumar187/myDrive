@@ -16,6 +16,16 @@ export class StorageController {
         return;
       }
 
+      // Purge any legacy mock accounts so only real Google Drive accounts exist
+      await StorageAccount.deleteMany({
+        userId: req.user._id,
+        $or: [
+          { googleDriveAccountId: { $regex: '^sub_mock_' } },
+          { accountEmail: { $regex: 'mock\\.drive' } },
+          { encryptedRefreshToken: 'mock_refresh_token_dev' },
+        ],
+      });
+
       const cacheKey = `cache:user:${req.user._id}:summary`;
       const cached = await CacheService.get(cacheKey);
       if (cached) {
@@ -191,38 +201,6 @@ export class StorageController {
 
       await CacheService.invalidateUser(req.user._id.toString());
       res.json({ success: true, message: `Account ${account.accountEmail} unlinked successfully` });
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
-    }
-  }
-
-  /**
-   * Dev helper: Simulates adding a mock 15 GB Google Drive storage account for testing.
-   */
-  static async devAddAccount(req: Request, res: Response): Promise<void> {
-    try {
-      if (!req.user) {
-        res.status(401).json({ error: 'Not authenticated' });
-        return;
-      }
-
-      const email = req.body.email || `mock.drive.${Date.now()}@gmail.com`;
-      const dummyEncrypted = CryptoService.encrypt('mock_refresh_token_dev');
-
-      const account = await StorageAccount.create({
-        userId: req.user._id,
-        accountEmail: email,
-        accountName: req.body.name || 'Mock 15GB Google Drive',
-        googleDriveAccountId: `sub_mock_${Date.now()}`,
-        encryptedRefreshToken: dummyEncrypted.ciphertext,
-        refreshTokenIv: dummyEncrypted.iv,
-        refreshTokenAuthTag: dummyEncrypted.authTag,
-        totalStorageBytes: 15 * 1024 * 1024 * 1024,
-        usedStorageBytes: Math.floor(Math.random() * 2 * 1024 * 1024 * 1024), // Random 0-2GB used
-        status: 'healthy',
-      });
-
-      res.json({ success: true, account });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }

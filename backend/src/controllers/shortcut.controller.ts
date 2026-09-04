@@ -86,34 +86,24 @@ export class ShortcutController {
       // Select target Google Drive account
       const targetAccount = await StorageEngineService.selectTargetAccount(req.user._id, sizeBytes);
 
-      let providerFileId = `shortcut_${Date.now()}`;
+      // Upload to Google Drive
+      const oauth2Client = GoogleDriveService.getOAuth2Client(targetAccount);
+      const { google } = await import('googleapis');
+      const drive = google.drive({ version: 'v3', auth: oauth2Client });
+      const { Readable } = await import('stream');
 
-      const isMock =
-        targetAccount.googleDriveAccountId.startsWith('sub_mock_') ||
-        targetAccount.accountEmail.includes('mock.drive') ||
-        targetAccount.encryptedRefreshToken === 'mock_refresh_token_dev' ||
-        process.env.GDRIVE_CLIENT_ID === 'mock_gdrive_client_id';
+      const driveResponse = await drive.files.create({
+        requestBody: {
+          name: originalName,
+          mimeType,
+        },
+        media: {
+          mimeType,
+          body: Readable.from(file.buffer),
+        },
+      });
 
-      // If real account, upload to Google Drive
-      if (!isMock) {
-        const oauth2Client = GoogleDriveService.getOAuth2Client(targetAccount);
-        const { google } = await import('googleapis');
-        const drive = google.drive({ version: 'v3', auth: oauth2Client });
-        const { Readable } = await import('stream');
-
-        const driveResponse = await drive.files.create({
-          requestBody: {
-            name: originalName,
-            mimeType,
-          },
-          media: {
-            mimeType,
-            body: Readable.from(file.buffer),
-          },
-        });
-
-        providerFileId = driveResponse.data.id || providerFileId;
-      }
+      const providerFileId = driveResponse.data.id || `file_${Date.now()}`;
 
       // Record in unified cloud library
       const { file: savedFile } = await StorageEngineService.finalizeUpload({

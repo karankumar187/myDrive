@@ -22,18 +22,6 @@ export const api = {
     return res.json();
   },
 
-  async devLogin(email: string, name: string): Promise<{ token: string; user: User }> {
-    const res = await fetch(`${API_BASE}/auth/dev-login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, name }),
-    });
-    if (!res.ok) throw new Error('Login failed');
-    const data = await res.json();
-    localStorage.setItem('drive_token', data.token);
-    return data;
-  },
-
   logout(): void {
     localStorage.removeItem('drive_token');
     window.location.reload();
@@ -49,16 +37,6 @@ export const api = {
   async getConnectUrl(): Promise<{ url: string }> {
     const res = await fetch(`${API_BASE}/storage/connect/url`, { headers: getHeaders() });
     if (!res.ok) throw new Error('Failed to get Google Drive connection URL');
-    return res.json();
-  },
-
-  async devAddAccount(email?: string): Promise<any> {
-    const res = await fetch(`${API_BASE}/storage/dev-add-account`, {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify({ email }),
-    });
-    if (!res.ok) throw new Error('Failed to add dev mock account');
     return res.json();
   },
 

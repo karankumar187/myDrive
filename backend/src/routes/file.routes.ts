@@ -23,10 +23,4 @@ router.get('/folders/list', requireUserAuth, FileController.listFolders);
 router.post('/folders/create', requireUserAuth, FileController.createFolder);
 router.delete('/folders/:id', requireUserAuth, FileController.deleteFolder);
 
-// Dev mock upload endpoints
-router.put('/mock-upload/:fileId', FileController.handleMockUpload);
-router.put('/dev-mock-upload-sink', (_req: Request, res: Response) => {
-  res.status(200).send('OK');
-});
-
 export const fileRoutes = router;

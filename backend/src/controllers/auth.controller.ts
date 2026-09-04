@@ -82,36 +82,4 @@ export class AuthController {
       res.status(500).json({ error: error.message });
     }
   }
-
-  /**
-   * Developer login helper: enables instant local testing without setting up Google Cloud OAuth keys.
-   */
-  static async devLogin(req: Request, res: Response): Promise<void> {
-    try {
-      const email = (req.body.email || 'developer@drive.local').toLowerCase();
-      let user = await User.findOne({ email });
-
-      if (!user) {
-        user = await User.create({
-          googleProfileId: `dev_${Date.now()}`,
-          email,
-          name: req.body.name || 'Developer User',
-          role: 'owner',
-        });
-      }
-
-      const token = generateUserJwt(user);
-      res.json({
-        success: true,
-        token,
-        user: {
-          id: user._id,
-          name: user.name,
-          email: user.email,
-        },
-      });
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
-    }
-  }
 }

@@ -54,26 +54,13 @@ export class FileController {
         ? `blob_${Date.now()}_${new Types.ObjectId().toString()}.enc`
         : `file_${Date.now()}_${filename}`;
 
-      let resumableSessionUri = '';
-
-      // Check if this account is a dev mock account or if Google API credentials are mock
-      const isMockAccount =
-        targetAccount.googleDriveAccountId.startsWith('sub_mock_') ||
-        targetAccount.accountEmail.includes('mock.drive') ||
-        targetAccount.encryptedRefreshToken === 'mock_refresh_token_dev' ||
-        process.env.GDRIVE_CLIENT_ID === 'mock_gdrive_client_id';
-
-      if (isMockAccount) {
-        resumableSessionUri = `/api/v1/files/mock-upload/${encodeURIComponent(driveOpaqueName)}`;
-      } else {
-        const clientOrigin = (req.headers.origin as string) || (process.env.CLIENT_URL || 'http://localhost:5173').split(',')[0].trim();
-        resumableSessionUri = await GoogleDriveService.createResumableUploadSession(targetAccount, {
-          name: driveOpaqueName,
-          mimeType: isEncrypted ? 'application/octet-stream' : mimeType,
-          sizeBytes,
-          origin: clientOrigin,
-        });
-      }
+      const clientOrigin = (req.headers.origin as string) || (process.env.CLIENT_URL || 'http://localhost:5173').split(',')[0].trim();
+      const resumableSessionUri = await GoogleDriveService.createResumableUploadSession(targetAccount, {
+        name: driveOpaqueName,
+        mimeType: isEncrypted ? 'application/octet-stream' : mimeType,
+        sizeBytes,
+        origin: clientOrigin,
+      });
 
       res.json({
         isDuplicate: false,
@@ -284,23 +271,6 @@ export class FileController {
       res.setHeader('Content-Type', file.mimeType);
       res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(file.filename)}"`);
 
-      // Check if dev mock account
-      const isMock =
-        account.googleDriveAccountId.startsWith('sub_mock_') ||
-        account.accountEmail.includes('mock.drive') ||
-        account.encryptedRefreshToken === 'mock_refresh_token_dev' ||
-        process.env.GDRIVE_CLIENT_ID === 'mock_gdrive_client_id';
-
-      if (isMock) {
-        const localPath = path.join(UPLOAD_DIR, latestVersion.providerFileId);
-        if (fs.existsSync(localPath)) {
-          res.sendFile(localPath);
-          return;
-        }
-        res.send(`Mock file content for: ${file.filename}`);
-        return;
-      }
-
       const driveStream = await GoogleDriveService.getFileStream(account, latestVersion.providerFileId);
       driveStream.data.pipe(res);
     } catch (error: any) {
@@ -388,18 +358,7 @@ export class FileController {
       for (const version of file.versions) {
         try {
           const account = await StorageAccount.findById(version.storageAccountId);
-          const isMock =
-            account?.googleDriveAccountId.startsWith('sub_mock_') ||
-            account?.accountEmail.includes('mock.drive') ||
-            account?.encryptedRefreshToken === 'mock_refresh_token_dev' ||
-            process.env.GDRIVE_CLIENT_ID === 'mock_gdrive_client_id';
-
-          if (isMock) {
-            const localPath = path.join(UPLOAD_DIR, version.providerFileId);
-            if (fs.existsSync(localPath)) {
-              fs.unlinkSync(localPath);
-            }
-          } else if (account) {
+          if (account) {
             await GoogleDriveService.deleteFile(account, version.providerFileId);
           }
 
@@ -563,29 +522,6 @@ export class FileController {
       await CacheService.set(cacheKey, responsePayload, 180);
 
       res.json(responsePayload);
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
-    }
-  }
-
-  /**
-   * Receives binary file stream for local dev mock accounts and writes to uploads directory.
-   */
-  static async handleMockUpload(req: Request, res: Response): Promise<void> {
-    try {
-      const fileId = req.params.fileId;
-      const filePath = path.join(UPLOAD_DIR, fileId);
-      const writeStream = fs.createWriteStream(filePath);
-
-      req.pipe(writeStream);
-
-      writeStream.on('finish', () => {
-        res.status(200).send('OK');
-      });
-
-      writeStream.on('error', (err) => {
-        res.status(500).json({ error: err.message });
-      });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }

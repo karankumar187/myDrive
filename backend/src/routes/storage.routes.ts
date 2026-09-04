@@ -16,7 +16,4 @@ router.get('/connect/callback', StorageController.connectCallback);
 router.post('/accounts/:id/sync', requireUserAuth, StorageController.syncAccount);
 router.delete('/accounts/:id', requireUserAuth, StorageController.removeAccount);
 
-// Dev simulation helper
-router.post('/dev-add-account', requireUserAuth, StorageController.devAddAccount);
-
 export const storageRoutes = router;

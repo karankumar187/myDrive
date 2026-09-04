@@ -12,7 +12,4 @@ router.get('/google/callback', AuthController.googleCallback);
 router.get('/me', requireUserAuth, AuthController.getCurrentUser);
 router.post('/vault/keys', requireUserAuth, AuthController.updateVaultKeys);
 
-// Dev login for fast offline testing
-router.post('/dev-login', AuthController.devLogin);
-
 export const authRoutes = router;

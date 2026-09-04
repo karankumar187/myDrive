@@ -29,18 +29,6 @@ export const StorageSummaryView: React.FC<Props> = ({ summary, onRefresh }) => {
     }
   };
 
-  const handleDevAddAccount = async () => {
-    try {
-      setLoading(true);
-      await api.devAddAccount();
-      onRefresh();
-    } catch (err: any) {
-      alert(err.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const handleSyncAccount = async (id: string) => {
     try {
       await api.syncAccountQuota(id);
@@ -90,12 +78,6 @@ export const StorageSummaryView: React.FC<Props> = ({ summary, onRefresh }) => {
           </div>
 
           <div className="flex items-center space-x-2">
-            <button
-              onClick={handleDevAddAccount}
-              className="px-3.5 py-1.5 text-xs font-semibold text-zinc-300 bg-[#18181e] hover:bg-[#22222a] border border-[#2b2b36] rounded-full transition active:scale-95 shadow-sm"
-            >
-              + Add Dev Mock 15GB
-            </button>
             <button
               onClick={handleConnectDrive}
               disabled={loading}
@@ -160,7 +142,7 @@ export const StorageSummaryView: React.FC<Props> = ({ summary, onRefresh }) => {
             <Database className="w-10 h-10 text-zinc-600 mx-auto" />
             <p className="text-sm font-semibold text-zinc-200">No Google Drive accounts connected yet</p>
             <p className="text-xs text-zinc-500 max-w-sm mx-auto">
-              Click &quot;Connect Drive&quot; or &quot;Add Dev Mock 15GB&quot; to pool storage accounts into a unified cloud library.
+              Click &quot;Connect Drive&quot; to pool storage accounts into a unified cloud library.
             </p>
           </div>
         ) : (
