@@ -29,23 +29,27 @@ class SyncWorker(
         val deviceId = inputData.getString("device_id") ?: return@withContext Result.failure()
         val deviceKey = inputData.getString("device_key") ?: return@withContext Result.failure()
         val syncVideos = inputData.getBoolean("sync_videos", true)
+        val syncPhotos = inputData.getBoolean("sync_photos", true)
+        val syncDocuments = inputData.getBoolean("sync_documents", true)
 
         val prefs = applicationContext.getSharedPreferences("drive_prefs", Context.MODE_PRIVATE)
         val targetFolderId = inputData.getString("target_folder_id") ?: prefs.getString("target_folder_id", null)
 
-        Log.d("SyncWorker", "Starting media sync for device $deviceId (videos=$syncVideos, targetFolderId=$targetFolderId)")
+        Log.d("SyncWorker", "Starting media sync for device $deviceId (photos=$syncPhotos, videos=$syncVideos, docs=$syncDocuments, targetFolderId=$targetFolderId)")
 
         try {
-            // 1. Sync Photos
-            val imageCount = syncCollection(
-                collectionUri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                serverUrl = serverUrl,
-                deviceId = deviceId,
-                deviceKey = deviceKey,
-                targetFolderId = targetFolderId,
-                defaultMime = "image/jpeg",
-                namePrefix = "photo"
-            )
+            // 1. Sync Photos if enabled
+            val imageCount = if (syncPhotos) {
+                syncCollection(
+                    collectionUri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                    serverUrl = serverUrl,
+                    deviceId = deviceId,
+                    deviceKey = deviceKey,
+                    targetFolderId = targetFolderId,
+                    defaultMime = "image/jpeg",
+                    namePrefix = "photo"
+                )
+            } else 0
 
             // 2. Sync Videos if enabled
             val videoCount = if (syncVideos) {
@@ -60,16 +64,33 @@ class SyncWorker(
                 )
             } else 0
 
-            Log.d("SyncWorker", "Sync complete: $imageCount images, $videoCount videos processed.")
+            // 3. Sync Documents if enabled
+            val docCount = if (syncDocuments) {
+                val docSelection = "${MediaStore.MediaColumns.MIME_TYPE} LIKE ? OR ${MediaStore.MediaColumns.MIME_TYPE} LIKE ? OR ${MediaStore.MediaColumns.MIME_TYPE} LIKE ?"
+                val docArgs = arrayOf("application/%", "text/%", "%document%")
+                syncCollection(
+                    collectionUri = MediaStore.Files.getContentUri("external"),
+                    serverUrl = serverUrl,
+                    deviceId = deviceId,
+                    deviceKey = deviceKey,
+                    targetFolderId = targetFolderId,
+                    defaultMime = "application/pdf",
+                    namePrefix = "doc",
+                    selection = docSelection,
+                    selectionArgs = docArgs
+                )
+            } else 0
 
-            val prefs = applicationContext.getSharedPreferences("drive_prefs", Context.MODE_PRIVATE)
+            val totalSynced = imageCount + videoCount + docCount
+            Log.d("SyncWorker", "Sync complete: $imageCount images, $videoCount videos, $docCount documents processed.")
+
             val prevTotal = prefs.getInt("total_synced_count", 0)
-            val newTotal = prevTotal + imageCount + videoCount
+            val newTotal = prevTotal + totalSynced
             prefs.edit().apply {
                 putLong("last_sync_timestamp", System.currentTimeMillis())
-                putInt("last_sync_count", imageCount + videoCount)
+                putInt("last_sync_count", totalSynced)
                 putInt("total_synced_count", newTotal)
-                putString("last_sync_status", "Synced $imageCount photos, $videoCount videos")
+                putString("last_sync_status", "Synced $imageCount photos, $videoCount videos, $docCount docs")
                 apply()
             }
 
@@ -93,7 +114,9 @@ class SyncWorker(
         deviceKey: String,
         targetFolderId: String?,
         defaultMime: String,
-        namePrefix: String
+        namePrefix: String,
+        selection: String? = null,
+        selectionArgs: Array<String>? = null
     ): Int {
         val projection = arrayOf(
             MediaStore.MediaColumns._ID,
@@ -106,8 +129,8 @@ class SyncWorker(
         val cursor = applicationContext.contentResolver.query(
             collectionUri,
             projection,
-            null,
-            null,
+            selection,
+            selectionArgs,
             sortOrder
         ) ?: return 0
 

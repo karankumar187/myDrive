@@ -23,4 +23,9 @@ router.get('/folders/list', requireAnyAuth, FileController.listFolders);
 router.post('/folders/create', requireAnyAuth, FileController.createFolder);
 router.delete('/folders/:id', requireUserAuth, FileController.deleteFolder);
 
+// Per-device upload history and inbound sync
+router.get('/device/:deviceId/uploads', requireAnyAuth, FileController.listFilesByDevice);
+router.get('/device/:deviceId/inbound-sync', requireAnyAuth, FileController.listInboundSyncFiles);
+router.post('/device/:deviceId/mark-synced', requireAnyAuth, FileController.markFileSyncedLocally);
+
 export const fileRoutes = router;

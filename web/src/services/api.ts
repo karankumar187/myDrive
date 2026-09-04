@@ -204,4 +204,10 @@ export const api = {
     if (!res.ok) throw new Error('Failed to revoke device');
     return res.json();
   },
+
+  async getDeviceUploads(deviceId: string): Promise<{ files: FileItem[] }> {
+    const res = await fetch(`${API_BASE}/files/device/${deviceId}/uploads`, { headers: getHeaders() });
+    if (!res.ok) throw new Error('Failed to fetch device uploads');
+    return res.json();
+  },
 };

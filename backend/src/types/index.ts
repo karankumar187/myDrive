@@ -98,6 +98,15 @@ export interface IFolderDocument extends IFolder, Document {}
 
 export type DeviceType = 'android' | 'iphone' | 'web' | 'desktop';
 
+export interface IPairedDeviceRule {
+  sourceDeviceId: string;
+  sourceDeviceName: string;
+  syncPhotos: boolean;
+  syncVideos: boolean;
+  syncDocuments: boolean;
+  autoDownloadToGallery: boolean;
+}
+
 export interface IDevicePolicy {
   uploadFolders: string[]; // e.g. ["Camera", "WhatsApp", "Screenshots"]
   wifiOnly: boolean;
@@ -106,6 +115,11 @@ export interface IDevicePolicy {
   downloadMode: 'cloud_only' | 'auto_download';
   autoDownloadFolders: string[];
   deletionMode: 'keep_in_cloud' | 'mirror_deletion';
+  syncPhotos?: boolean;
+  syncVideos?: boolean;
+  syncDocuments?: boolean;
+  syncOthers?: boolean;
+  pairedDeviceRules?: IPairedDeviceRule[];
 }
 
 export interface IDevice {

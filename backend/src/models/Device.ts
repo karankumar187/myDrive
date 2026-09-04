@@ -33,6 +33,35 @@ const DevicePolicySchema = new Schema(
       enum: ['keep_in_cloud', 'mirror_deletion'],
       default: 'keep_in_cloud', // Default keep in cloud
     },
+    syncPhotos: {
+      type: Boolean,
+      default: true,
+    },
+    syncVideos: {
+      type: Boolean,
+      default: true,
+    },
+    syncDocuments: {
+      type: Boolean,
+      default: true,
+    },
+    syncOthers: {
+      type: Boolean,
+      default: false,
+    },
+    pairedDeviceRules: {
+      type: [
+        {
+          sourceDeviceId: { type: String, required: true },
+          sourceDeviceName: { type: String, default: '' },
+          syncPhotos: { type: Boolean, default: true },
+          syncVideos: { type: Boolean, default: true },
+          syncDocuments: { type: Boolean, default: true },
+          autoDownloadToGallery: { type: Boolean, default: true },
+        },
+      ],
+      default: [],
+    },
   },
   { _id: false }
 );

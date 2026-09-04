@@ -5,6 +5,8 @@ import { Types } from 'mongoose';
 import { File } from '../models/File.js';
 import { Folder } from '../models/Folder.js';
 import { StorageAccount } from '../models/StorageAccount.js';
+import { Device } from '../models/Device.js';
+import { DeviceFileState } from '../models/DeviceFileState.js';
 import { StorageEngineService } from '../services/storage-engine.service.js';
 import { GoogleDriveService } from '../services/gdrive.service.js';
 import { getSocketIoInstance } from '../server.js';
@@ -475,6 +477,152 @@ export class FileController {
       await CacheService.set(cacheKey, responsePayload, 180);
 
       res.json(responsePayload);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+
+  /**
+   * Lists all files uploaded by a specific physical device.
+   */
+  static async listFilesByDevice(req: Request, res: Response): Promise<void> {
+    try {
+      const userId = req.user!._id;
+      const deviceId = req.params.deviceId || req.device?.deviceId;
+      if (!deviceId) {
+        res.status(400).json({ error: 'deviceId is required' });
+        return;
+      }
+
+      // Query DeviceFileState to get fileIds linked to this device
+      const states = await DeviceFileState.find({ userId, deviceId });
+      const stateFileIds = states.map((s) => s.fileId);
+
+      const files = await File.find({
+        userId,
+        isTrash: false,
+        $or: [{ sourceDeviceIds: deviceId }, { _id: { $in: stateFileIds } }],
+      })
+        .populate('folderId', 'name path')
+        .sort({ createdAt: -1 })
+        .limit(250);
+
+      res.json({ success: true, count: files.length, files });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+
+  /**
+   * Lists files synced from other paired devices based on the device's personalized sync policy.
+   */
+  static async listInboundSyncFiles(req: Request, res: Response): Promise<void> {
+    try {
+      const userId = req.user!._id;
+      const deviceId = req.params.deviceId || req.device?.deviceId;
+      if (!deviceId) {
+        res.status(400).json({ error: 'deviceId is required' });
+        return;
+      }
+
+      // Load device and its policy
+      const device = await Device.findOne({ deviceId, userId });
+      const policy = device?.policy;
+      const pairedRules = policy?.pairedDeviceRules || [];
+
+      // Find all files belonging to the user that were uploaded by other devices or in cloud
+      const candidateFiles = await File.find({
+        userId,
+        isTrash: false,
+      })
+        .populate('folderId', 'name path')
+        .sort({ createdAt: -1 })
+        .limit(200);
+
+      // Fetch DeviceFileState records for this device to determine local sync status
+      const localStates = await DeviceFileState.find({ userId, deviceId });
+      const localStateMap = new Map<string, boolean>();
+      localStates.forEach((s) => {
+        localStateMap.set(s.fileId.toString(), s.isLocallyPresent);
+      });
+
+      // Filter candidate files based on pairedDeviceRules or default policy
+      const resultFiles = candidateFiles.filter((file) => {
+        const isFromThisDeviceOnly =
+          file.sourceDeviceIds.length === 1 && file.sourceDeviceIds[0] === deviceId;
+        if (isFromThisDeviceOnly) {
+          return false;
+        }
+
+        const mime = file.mimeType.toLowerCase();
+        const isPhoto = mime.startsWith('image/');
+        const isVideo = mime.startsWith('video/');
+        const isDoc = !isPhoto && !isVideo;
+
+        // If specific paired device rules exist, check matching rule
+        if (pairedRules.length > 0) {
+          const matchingRule = pairedRules.find((rule) =>
+            file.sourceDeviceIds.includes(rule.sourceDeviceId)
+          );
+          if (matchingRule) {
+            if (isPhoto && !matchingRule.syncPhotos) return false;
+            if (isVideo && !matchingRule.syncVideos) return false;
+            if (isDoc && !matchingRule.syncDocuments) return false;
+            return true;
+          }
+        }
+
+        // Default: respect general device media policy
+        if (isPhoto && policy?.syncPhotos === false) return false;
+        if (isVideo && policy?.syncVideos === false) return false;
+        if (isDoc && policy?.syncDocuments === false) return false;
+        return true;
+      });
+
+      const formatted = resultFiles.map((f: any) => {
+        const fileObj = f.toObject();
+        fileObj.isDownloadedLocally = localStateMap.get(f._id.toString()) || false;
+        const otherSources = f.sourceDeviceIds.filter((id: string) => id !== deviceId);
+        fileObj.sourceDeviceLabel = otherSources.length > 0 ? otherSources[0] : 'Cloud Drive';
+        return fileObj;
+      });
+
+      res.json({
+        success: true,
+        count: formatted.length,
+        files: formatted,
+        rules: pairedRules,
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+
+  /**
+   * Marks a file as synced/downloaded locally on the device (e.g. saved to Gallery).
+   */
+  static async markFileSyncedLocally(req: Request, res: Response): Promise<void> {
+    try {
+      const userId = req.user!._id;
+      const deviceId = req.params.deviceId || req.device?.deviceId;
+      const { fileId, deviceAssetId } = req.body;
+
+      if (!deviceId || !fileId) {
+        res.status(400).json({ error: 'deviceId and fileId are required' });
+        return;
+      }
+
+      const state = await DeviceFileState.findOneAndUpdate(
+        { userId, deviceId, fileId: new Types.ObjectId(fileId) },
+        {
+          deviceAssetId: deviceAssetId || null,
+          isLocallyPresent: true,
+          lastSeenLocalAt: new Date(),
+        },
+        { upsert: true, new: true }
+      );
+
+      res.json({ success: true, state });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }

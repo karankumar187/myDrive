@@ -74,6 +74,15 @@ export interface FolderItem {
   createdAt: string;
 }
 
+export interface PairedDeviceRule {
+  sourceDeviceId: string;
+  sourceDeviceName: string;
+  syncPhotos: boolean;
+  syncVideos: boolean;
+  syncDocuments: boolean;
+  autoDownloadToGallery: boolean;
+}
+
 export interface DeviceItem {
   _id: string;
   deviceId: string;
@@ -88,5 +97,10 @@ export interface DeviceItem {
     autoDeleteLocalAfterBackup: boolean;
     downloadMode: 'cloud_only' | 'auto_download';
     deletionMode: 'keep_in_cloud' | 'mirror_deletion';
+    syncPhotos?: boolean;
+    syncVideos?: boolean;
+    syncDocuments?: boolean;
+    syncOthers?: boolean;
+    pairedDeviceRules?: PairedDeviceRule[];
   };
 }

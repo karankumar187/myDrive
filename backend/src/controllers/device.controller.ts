@@ -54,6 +54,11 @@ export class DeviceController {
           downloadMode: 'cloud_only',
           autoDownloadFolders: [],
           deletionMode: 'keep_in_cloud',
+          syncPhotos: true,
+          syncVideos: true,
+          syncDocuments: true,
+          syncOthers: false,
+          pairedDeviceRules: [],
         },
       });
 
@@ -74,12 +79,71 @@ export class DeviceController {
   }
 
   /**
-   * Updates per-device sync policies.
+   * Fetches personalized policy for the calling device and lists all paired devices.
+   */
+  static async getMyPolicy(req: Request, res: Response): Promise<void> {
+    try {
+      const deviceId = req.device?.deviceId || (req.headers['x-device-id'] as string) || (req.query.deviceId as string);
+      if (!deviceId) {
+        res.status(400).json({ error: 'deviceId is required' });
+        return;
+      }
+      const device = await Device.findOne({ deviceId, userId: req.user!._id }).select('-apiKeyHash');
+      if (!device) {
+        res.status(404).json({ error: 'Device not found' });
+        return;
+      }
+      const pairedDevices = await Device.find({ userId: req.user!._id, deviceId: { $ne: deviceId } })
+        .select('deviceId deviceName deviceType status lastSeenAt')
+        .sort({ lastSeenAt: -1 });
+
+      res.json({ success: true, policy: device.policy, device, pairedDevices });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+
+  /**
+   * Updates personalized policy for the calling device.
+   */
+  static async updateMyPolicy(req: Request, res: Response): Promise<void> {
+    try {
+      const deviceId = req.device?.deviceId || (req.headers['x-device-id'] as string) || (req.body.deviceId as string);
+      if (!deviceId) {
+        res.status(400).json({ error: 'deviceId is required' });
+        return;
+      }
+      const device = await Device.findOneAndUpdate(
+        { deviceId, userId: req.user!._id },
+        { policy: req.body.policy },
+        { new: true }
+      ).select('-apiKeyHash');
+
+      if (!device) {
+        res.status(404).json({ error: 'Device not found or access denied' });
+        return;
+      }
+      res.json({ success: true, policy: device.policy, device });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+
+  /**
+   * Updates per-device sync policies by ID or deviceId.
    */
   static async updatePolicy(req: Request, res: Response): Promise<void> {
     try {
+      const isIdValid = req.params.id && req.params.id.length === 24;
+      const query: any = { userId: req.user!._id };
+      if (isIdValid) {
+        query._id = req.params.id;
+      } else {
+        query.deviceId = req.params.id;
+      }
+
       const device = await Device.findOneAndUpdate(
-        { _id: req.params.id, userId: req.user!._id }, // Strict IDOR protection
+        query, // Strict IDOR protection
         { policy: req.body.policy },
         { new: true }
       ).select('-apiKeyHash');

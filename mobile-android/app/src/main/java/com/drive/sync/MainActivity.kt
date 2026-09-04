@@ -87,6 +87,44 @@ data class CloudFolder(
     val path: String = ""
 )
 
+data class PairedDevice(
+    val id: String,
+    val deviceId: String,
+    val deviceName: String,
+    val deviceType: String,
+    val status: String,
+    val lastSeenAt: String
+)
+
+data class PairedDeviceRule(
+    val sourceDeviceId: String,
+    val sourceDeviceName: String,
+    var syncPhotos: Boolean = true,
+    var syncVideos: Boolean = true,
+    var syncDocuments: Boolean = true,
+    var autoDownloadToGallery: Boolean = true
+)
+
+data class DeviceUploadItem(
+    val id: String,
+    val filename: String,
+    val mimeType: String,
+    val sizeBytes: Long,
+    val folderName: String?,
+    val createdAt: String
+)
+
+data class InboundSyncItem(
+    val id: String,
+    val filename: String,
+    val mimeType: String,
+    val sizeBytes: Long,
+    val folderName: String?,
+    val createdAt: String,
+    val sourceDeviceLabel: String,
+    var isDownloadedLocally: Boolean = false
+)
+
 class MainActivity : ComponentActivity() {
 
     private val httpClient = OkHttpClient()
@@ -114,13 +152,13 @@ class MainActivity : ComponentActivity() {
                 ) {
                     MainAppScreen(
                         prefs = prefs,
-                        onScheduleSync = { serverUrl, deviceId, deviceKey, targetFolderId, wifiOnly, chargingOnly, syncVideos ->
-                            scheduleBackupWork(serverUrl, deviceId, deviceKey, targetFolderId, wifiOnly, chargingOnly, syncVideos)
+                        onScheduleSync = { serverUrl, deviceId, deviceKey, targetFolderId, wifiOnly, chargingOnly, syncPhotos, syncVideos, syncDocuments ->
+                            scheduleBackupWork(serverUrl, deviceId, deviceKey, targetFolderId, wifiOnly, chargingOnly, syncPhotos, syncVideos, syncDocuments)
                             Toast.makeText(this, "Periodic background backup scheduled!", Toast.LENGTH_SHORT).show()
                         },
-                        onSyncNow = { serverUrl, deviceId, deviceKey, targetFolderId, syncVideos ->
-                            triggerImmediateSync(serverUrl, deviceId, deviceKey, targetFolderId, syncVideos)
-                            Toast.makeText(this, "Scanning media for cloud backup...", Toast.LENGTH_SHORT).show()
+                        onSyncNow = { serverUrl, deviceId, deviceKey, targetFolderId, syncPhotos, syncVideos, syncDocuments ->
+                            triggerImmediateSync(serverUrl, deviceId, deviceKey, targetFolderId, syncPhotos, syncVideos, syncDocuments)
+                            Toast.makeText(this, "Scanning media & docs for cloud backup...", Toast.LENGTH_SHORT).show()
                         },
                         httpClient = httpClient
                     )
@@ -136,7 +174,9 @@ class MainActivity : ComponentActivity() {
         targetFolderId: String?,
         wifiOnly: Boolean,
         chargingOnly: Boolean,
-        syncVideos: Boolean
+        syncPhotos: Boolean,
+        syncVideos: Boolean,
+        syncDocuments: Boolean
     ) {
         val constraints = Constraints.Builder().apply {
             if (wifiOnly) {
@@ -157,7 +197,9 @@ class MainActivity : ComponentActivity() {
                     "device_id" to deviceId,
                     "device_key" to deviceKey,
                     "target_folder_id" to (targetFolderId ?: ""),
-                    "sync_videos" to syncVideos
+                    "sync_photos" to syncPhotos,
+                    "sync_videos" to syncVideos,
+                    "sync_documents" to syncDocuments
                 )
             )
             .build()
@@ -174,7 +216,9 @@ class MainActivity : ComponentActivity() {
         deviceId: String,
         deviceKey: String,
         targetFolderId: String?,
-        syncVideos: Boolean
+        syncPhotos: Boolean,
+        syncVideos: Boolean,
+        syncDocuments: Boolean
     ) {
         val syncRequest = OneTimeWorkRequestBuilder<SyncWorker>()
             .setInputData(
@@ -183,7 +227,9 @@ class MainActivity : ComponentActivity() {
                     "device_id" to deviceId,
                     "device_key" to deviceKey,
                     "target_folder_id" to (targetFolderId ?: ""),
-                    "sync_videos" to syncVideos
+                    "sync_photos" to syncPhotos,
+                    "sync_videos" to syncVideos,
+                    "sync_documents" to syncDocuments
                 )
             )
             .build()
@@ -196,8 +242,8 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun MainAppScreen(
     prefs: android.content.SharedPreferences,
-    onScheduleSync: (String, String, String, String?, Boolean, Boolean, Boolean) -> Unit,
-    onSyncNow: (String, String, String, String?, Boolean) -> Unit,
+    onScheduleSync: (String, String, String, String?, Boolean, Boolean, Boolean, Boolean, Boolean) -> Unit,
+    onSyncNow: (String, String, String, String?, Boolean, Boolean, Boolean) -> Unit,
     httpClient: OkHttpClient
 ) {
     val context = LocalContext.current
@@ -210,7 +256,9 @@ fun MainAppScreen(
     var targetFolderName by remember { mutableStateOf(prefs.getString("target_folder_name", "Root (My Drive)") ?: "Root (My Drive)") }
     var wifiOnly by remember { mutableStateOf(prefs.getBoolean("wifi_only", false)) }
     var chargingOnly by remember { mutableStateOf(prefs.getBoolean("charging_only", false)) }
+    var syncPhotos by remember { mutableStateOf(prefs.getBoolean("sync_photos", true)) }
     var syncVideos by remember { mutableStateOf(prefs.getBoolean("sync_videos", true)) }
+    var syncDocuments by remember { mutableStateOf(prefs.getBoolean("sync_documents", true)) }
 
     // Live sync stats
     var lastSyncTimestamp by remember { mutableLongStateOf(prefs.getLong("last_sync_timestamp", 0L)) }
@@ -223,6 +271,13 @@ fun MainAppScreen(
     var galleryList by remember { mutableStateOf<List<CloudMedia>>(emptyList()) }
     var foldersList by remember { mutableStateOf<List<CloudFolder>>(emptyList()) }
     var selectedFilterFolderId by remember { mutableStateOf<String?>(null) }
+
+    // Activity & Paired Devices States
+    var uploadedFilesList by remember { mutableStateOf<List<DeviceUploadItem>>(emptyList()) }
+    var inboundSyncList by remember { mutableStateOf<List<InboundSyncItem>>(emptyList()) }
+    var pairedDevicesList by remember { mutableStateOf<List<PairedDevice>>(emptyList()) }
+    val pairedRulesMap = remember { mutableStateMapOf<String, PairedDeviceRule>() }
+    var isSavingPolicy by remember { mutableStateOf(false) }
 
     var isRefreshing by remember { mutableStateOf(false) }
     var fetchError by remember { mutableStateOf<String?>(null) }
@@ -242,7 +297,9 @@ fun MainAppScreen(
             putString("target_folder_name", targetFolderName)
             putBoolean("wifi_only", wifiOnly)
             putBoolean("charging_only", chargingOnly)
+            putBoolean("sync_photos", syncPhotos)
             putBoolean("sync_videos", syncVideos)
+            putBoolean("sync_documents", syncDocuments)
             apply()
         }
     }
@@ -379,6 +436,141 @@ fun MainAppScreen(
                         } catch (e: Exception) {
                             e.printStackTrace()
                         }
+
+                        // 5. Fetch Uploaded Files by This Device
+                        try {
+                            val req = Request.Builder()
+                                .url("$baseUrl/api/v1/files/device/$deviceId/uploads")
+                                .addHeader("x-device-id", deviceId)
+                                .addHeader("x-device-key", deviceKey)
+                                .build()
+                            val res = httpClient.newCall(req).execute()
+                            if (res.isSuccessful) {
+                                val json = JSONObject(res.body?.string() ?: "{}")
+                                val arr = json.optJSONArray("files")
+                                val list = mutableListOf<DeviceUploadItem>()
+                                if (arr != null) {
+                                    for (i in 0 until arr.length()) {
+                                        val item = arr.getJSONObject(i)
+                                        val fObj = item.optJSONObject("folderId")
+                                        list.add(
+                                            DeviceUploadItem(
+                                                id = item.optString("_id"),
+                                                filename = item.optString("filename"),
+                                                mimeType = item.optString("mimeType"),
+                                                sizeBytes = item.optLong("sizeBytes"),
+                                                folderName = fObj?.optString("name"),
+                                                createdAt = item.optString("createdAt")
+                                            )
+                                        )
+                                    }
+                                }
+                                uploadedFilesList = list
+                            }
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
+
+                        // 6. Fetch Inbound Synced Files from Paired Devices
+                        try {
+                            val req = Request.Builder()
+                                .url("$baseUrl/api/v1/files/device/$deviceId/inbound-sync")
+                                .addHeader("x-device-id", deviceId)
+                                .addHeader("x-device-key", deviceKey)
+                                .build()
+                            val res = httpClient.newCall(req).execute()
+                            if (res.isSuccessful) {
+                                val json = JSONObject(res.body?.string() ?: "{}")
+                                val arr = json.optJSONArray("files")
+                                val list = mutableListOf<InboundSyncItem>()
+                                if (arr != null) {
+                                    for (i in 0 until arr.length()) {
+                                        val item = arr.getJSONObject(i)
+                                        val fObj = item.optJSONObject("folderId")
+                                        list.add(
+                                            InboundSyncItem(
+                                                id = item.optString("_id"),
+                                                filename = item.optString("filename"),
+                                                mimeType = item.optString("mimeType"),
+                                                sizeBytes = item.optLong("sizeBytes"),
+                                                folderName = fObj?.optString("name"),
+                                                createdAt = item.optString("createdAt"),
+                                                sourceDeviceLabel = item.optString("sourceDeviceLabel", "Cloud Drive"),
+                                                isDownloadedLocally = item.optBoolean("isDownloadedLocally", false)
+                                            )
+                                        )
+                                    }
+                                }
+                                inboundSyncList = list
+                            }
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
+
+                        // 7. Fetch Policy & Paired Devices
+                        try {
+                            val req = Request.Builder()
+                                .url("$baseUrl/api/v1/devices/my-policy?deviceId=$deviceId")
+                                .addHeader("x-device-id", deviceId)
+                                .addHeader("x-device-key", deviceKey)
+                                .build()
+                            val res = httpClient.newCall(req).execute()
+                            if (res.isSuccessful) {
+                                val json = JSONObject(res.body?.string() ?: "{}")
+                                val pArr = json.optJSONArray("pairedDevices")
+                                val pList = mutableListOf<PairedDevice>()
+                                if (pArr != null) {
+                                    for (i in 0 until pArr.length()) {
+                                        val item = pArr.getJSONObject(i)
+                                        val devId = item.optString("deviceId")
+                                        pList.add(
+                                            PairedDevice(
+                                                id = item.optString("_id"),
+                                                deviceId = devId,
+                                                deviceName = item.optString("deviceName"),
+                                                deviceType = item.optString("deviceType", "desktop"),
+                                                status = item.optString("status", "offline"),
+                                                lastSeenAt = item.optString("lastSeenAt", "")
+                                            )
+                                        )
+                                        // Ensure a default rule exists in pairedRulesMap for each paired device
+                                        if (!pairedRulesMap.containsKey(devId)) {
+                                            pairedRulesMap[devId] = PairedDeviceRule(
+                                                sourceDeviceId = devId,
+                                                sourceDeviceName = item.optString("deviceName"),
+                                                syncPhotos = true,
+                                                syncVideos = true,
+                                                syncDocuments = true,
+                                                autoDownloadToGallery = true
+                                            )
+                                        }
+                                    }
+                                }
+                                pairedDevicesList = pList
+                                val polObj = json.optJSONObject("policy")
+                                if (polObj != null) {
+                                    val rArr = polObj.optJSONArray("pairedDeviceRules")
+                                    if (rArr != null) {
+                                        for (i in 0 until rArr.length()) {
+                                            val r = rArr.getJSONObject(i)
+                                            val sId = r.optString("sourceDeviceId")
+                                            if (sId.isNotBlank()) {
+                                                pairedRulesMap[sId] = PairedDeviceRule(
+                                                    sourceDeviceId = sId,
+                                                    sourceDeviceName = r.optString("sourceDeviceName"),
+                                                    syncPhotos = r.optBoolean("syncPhotos", true),
+                                                    syncVideos = r.optBoolean("syncVideos", true),
+                                                    syncDocuments = r.optBoolean("syncDocuments", true),
+                                                    autoDownloadToGallery = r.optBoolean("autoDownloadToGallery", true)
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
                     }
 
                     // Reload sync preferences
@@ -435,6 +627,110 @@ fun MainAppScreen(
                     }
                 }
             }
+        }
+    }
+
+    val downloadInboundItem: (InboundSyncItem) -> Unit = { item ->
+        val streamUrl = "${serverUrl.trimEnd('/')}/api/v1/files/${item.id}/stream?deviceId=$deviceId&deviceKey=$deviceKey"
+        val isMedia = item.mimeType.startsWith("image/") || item.mimeType.startsWith("video/")
+        downloadFileToDevice(
+            context = context,
+            url = streamUrl,
+            filename = item.filename,
+            deviceId = deviceId,
+            deviceKey = deviceKey,
+            saveToGallery = isMedia,
+            onSuccess = {
+                scope.launch(Dispatchers.IO) {
+                    try {
+                        val baseUrl = serverUrl.trimEnd('/')
+                        val body = JSONObject().apply { put("fileId", item.id) }
+                        val req = Request.Builder()
+                            .url("$baseUrl/api/v1/files/device/$deviceId/mark-synced")
+                            .addHeader("x-device-id", deviceId)
+                            .addHeader("x-device-key", deviceKey)
+                            .post(body.toString().toRequestBody("application/json".toMediaType()))
+                            .build()
+                        httpClient.newCall(req).execute()
+                        withContext(Dispatchers.Main) {
+                            item.isDownloadedLocally = true
+                        }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                }
+            }
+        )
+    }
+
+    val syncAllToGallery: () -> Unit = {
+        val pending = inboundSyncList.filter { !it.isDownloadedLocally }
+        if (pending.isEmpty()) {
+            Toast.makeText(context, "All paired device files already in Gallery!", Toast.LENGTH_SHORT).show()
+        } else {
+            Toast.makeText(context, "Downloading ${pending.size} files to Gallery...", Toast.LENGTH_SHORT).show()
+            pending.forEach { item ->
+                downloadInboundItem(item)
+            }
+        }
+    }
+
+    val savePolicyAction: () -> Unit = {
+        if (serverUrl.isNotBlank() && deviceId.isNotBlank() && deviceKey.isNotBlank()) {
+            scope.launch(Dispatchers.IO) {
+                isSavingPolicy = true
+                try {
+                    saveCredentials()
+                    val baseUrl = serverUrl.trimEnd('/')
+                    val rulesArray = org.json.JSONArray()
+                    pairedRulesMap.values.forEach { rule ->
+                        rulesArray.put(JSONObject().apply {
+                            put("sourceDeviceId", rule.sourceDeviceId)
+                            put("sourceDeviceName", rule.sourceDeviceName)
+                            put("syncPhotos", rule.syncPhotos)
+                            put("syncVideos", rule.syncVideos)
+                            put("syncDocuments", rule.syncDocuments)
+                            put("autoDownloadToGallery", rule.autoDownloadToGallery)
+                        })
+                    }
+                    val policyObj = JSONObject().apply {
+                        put("syncPhotos", syncPhotos)
+                        put("syncVideos", syncVideos)
+                        put("syncDocuments", syncDocuments)
+                        put("wifiOnly", wifiOnly)
+                        put("chargingOnly", chargingOnly)
+                        put("pairedDeviceRules", rulesArray)
+                    }
+                    val body = JSONObject().apply {
+                        put("policy", policyObj)
+                        put("deviceId", deviceId)
+                    }
+                    val req = Request.Builder()
+                        .url("$baseUrl/api/v1/devices/my-policy")
+                        .addHeader("x-device-id", deviceId)
+                        .addHeader("x-device-key", deviceKey)
+                        .put(body.toString().toRequestBody("application/json".toMediaType()))
+                        .build()
+                    val res = httpClient.newCall(req).execute()
+                    withContext(Dispatchers.Main) {
+                        if (res.isSuccessful) {
+                            Toast.makeText(context, "Personalized sync policy saved to cloud!", Toast.LENGTH_SHORT).show()
+                        } else {
+                            Toast.makeText(context, "Policy saved locally (${res.code})", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                    refreshData()
+                } catch (e: Exception) {
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(context, "Policy saved: ${e.message}", Toast.LENGTH_SHORT).show()
+                    }
+                } finally {
+                    isSavingPolicy = false
+                }
+            }
+        } else {
+            saveCredentials()
+            Toast.makeText(context, "Policy saved locally!", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -522,7 +818,7 @@ fun MainAppScreen(
                     selected = selectedTab == 0,
                     onClick = { selectedTab = 0 },
                     icon = { Icon(Icons.Default.Folder, contentDescription = "Files") },
-                    label = { Text("Files", fontSize = 12.sp) },
+                    label = { Text("Files", fontSize = 11.sp) },
                     colors = NavigationBarItemDefaults.colors(
                         selectedIconColor = Color.White,
                         selectedTextColor = Color(0xFFA855F7),
@@ -535,7 +831,7 @@ fun MainAppScreen(
                     selected = selectedTab == 1,
                     onClick = { selectedTab = 1 },
                     icon = { Icon(Icons.Default.PhotoLibrary, contentDescription = "Gallery") },
-                    label = { Text("Gallery", fontSize = 12.sp) },
+                    label = { Text("Gallery", fontSize = 11.sp) },
                     colors = NavigationBarItemDefaults.colors(
                         selectedIconColor = Color.White,
                         selectedTextColor = Color(0xFFA855F7),
@@ -547,8 +843,21 @@ fun MainAppScreen(
                 NavigationBarItem(
                     selected = selectedTab == 2,
                     onClick = { selectedTab = 2 },
-                    icon = { Icon(Icons.Default.Sync, contentDescription = "Backup") },
-                    label = { Text("Backup", fontSize = 12.sp) },
+                    icon = { Icon(Icons.Default.SyncAlt, contentDescription = "Transfers") },
+                    label = { Text("Transfers", fontSize = 11.sp) },
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = Color.White,
+                        selectedTextColor = Color(0xFFA855F7),
+                        indicatorColor = Color(0xFF9333EA),
+                        unselectedIconColor = Color(0xFF71717A),
+                        unselectedTextColor = Color(0xFF71717A)
+                    )
+                )
+                NavigationBarItem(
+                    selected = selectedTab == 3,
+                    onClick = { selectedTab = 3 },
+                    icon = { Icon(Icons.Default.Tune, contentDescription = "Policies") },
+                    label = { Text("Policies", fontSize = 11.sp) },
                     colors = NavigationBarItemDefaults.colors(
                         selectedIconColor = Color.White,
                         selectedTextColor = Color(0xFFA855F7),
@@ -593,7 +902,19 @@ fun MainAppScreen(
                     },
                     onRefresh = refreshData
                 )
-                2 -> BackupSettingsScreen(
+                2 -> TransfersScreen(
+                    uploadedFiles = uploadedFilesList,
+                    inboundFiles = inboundSyncList,
+                    serverUrl = serverUrl,
+                    deviceId = deviceId,
+                    deviceKey = deviceKey,
+                    isRefreshing = isRefreshing,
+                    onOpenFile = { file -> previewItem = file },
+                    onDownloadToGallery = { item -> downloadInboundItem(item) },
+                    onSyncAllToGallery = syncAllToGallery,
+                    onRefresh = refreshData
+                )
+                3 -> DeviceAndPolicyScreen(
                     serverUrl = serverUrl,
                     deviceId = deviceId,
                     deviceKey = deviceKey,
@@ -601,24 +922,39 @@ fun MainAppScreen(
                     targetFolderName = targetFolderName,
                     wifiOnly = wifiOnly,
                     chargingOnly = chargingOnly,
+                    syncPhotos = syncPhotos,
                     syncVideos = syncVideos,
+                    syncDocuments = syncDocuments,
                     lastSyncTimestamp = lastSyncTimestamp,
                     totalSyncedCount = totalSyncedCount,
                     lastSyncStatus = lastSyncStatus,
+                    pairedDevices = pairedDevicesList,
+                    pairedRules = pairedRulesMap.values.toList(),
+                    isSavingPolicy = isSavingPolicy,
                     onServerUrlChange = { serverUrl = it; saveCredentials() },
                     onDeviceIdChange = { deviceId = it; saveCredentials() },
                     onDeviceKeyChange = { deviceKey = it; saveCredentials() },
                     onWifiOnlyChange = { wifiOnly = it; saveCredentials() },
                     onChargingOnlyChange = { chargingOnly = it; saveCredentials() },
+                    onSyncPhotosChange = { syncPhotos = it; saveCredentials() },
                     onSyncVideosChange = { syncVideos = it; saveCredentials() },
+                    onSyncDocumentsChange = { syncDocuments = it; saveCredentials() },
+                    onUpdatePairedRule = { sId, mutator ->
+                        val existing = pairedRulesMap[sId]
+                        if (existing != null) {
+                            mutator(existing)
+                            pairedRulesMap[sId] = existing.copy()
+                        }
+                    },
+                    onSavePolicy = savePolicyAction,
                     onOpenFolderDialog = { showFolderDialog = true },
                     onSyncNow = {
                         saveCredentials()
-                        onSyncNow(serverUrl, deviceId, deviceKey, targetFolderId, syncVideos)
+                        onSyncNow(serverUrl, deviceId, deviceKey, targetFolderId, syncPhotos, syncVideos, syncDocuments)
                     },
                     onScheduleSync = {
                         saveCredentials()
-                        onScheduleSync(serverUrl, deviceId, deviceKey, targetFolderId, wifiOnly, chargingOnly, syncVideos)
+                        onScheduleSync(serverUrl, deviceId, deviceKey, targetFolderId, wifiOnly, chargingOnly, syncPhotos, syncVideos, syncDocuments)
                     }
                 )
             }
@@ -1032,10 +1368,425 @@ fun GalleryScreen(
 }
 
 // ----------------------------------------------------
-// TAB 2: Backup & Sync Management Screen
+// TAB 2: Activity & Transfers Screen
 // ----------------------------------------------------
 @Composable
-fun BackupSettingsScreen(
+fun TransfersScreen(
+    uploadedFiles: List<DeviceUploadItem>,
+    inboundFiles: List<InboundSyncItem>,
+    serverUrl: String,
+    deviceId: String,
+    deviceKey: String,
+    isRefreshing: Boolean,
+    onOpenFile: (CloudFile) -> Unit,
+    onDownloadToGallery: (InboundSyncItem) -> Unit,
+    onSyncAllToGallery: () -> Unit,
+    onRefresh: () -> Unit
+) {
+    var subTab by remember { mutableIntStateOf(0) } // 0: Uploaded by Device, 1: Synced to Gallery
+    var selectedCategory by remember { mutableStateOf("All") }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFF0D0D11))
+    ) {
+        // Segmented Control Header
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 10.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .background(Color(0xFF181822))
+                .padding(4.dp)
+        ) {
+            // Tab 0: Uploaded by this Device
+            Surface(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(10.dp))
+                    .clickable { subTab = 0; selectedCategory = "All" },
+                color = if (subTab == 0) Color(0xFF9333EA) else Color.Transparent
+            ) {
+                Row(
+                    modifier = Modifier.padding(vertical = 10.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Default.CloudUpload,
+                        contentDescription = null,
+                        tint = if (subTab == 0) Color.White else Color(0xFF94A3B8),
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "Uploaded (${uploadedFiles.size})",
+                        color = if (subTab == 0) Color.White else Color(0xFF94A3B8),
+                        fontSize = 12.sp,
+                        fontWeight = if (subTab == 0) FontWeight.Bold else FontWeight.Medium
+                    )
+                }
+            }
+
+            // Tab 1: Synced & In Gallery
+            Surface(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(10.dp))
+                    .clickable { subTab = 1; selectedCategory = "All" },
+                color = if (subTab == 1) Color(0xFF9333EA) else Color.Transparent
+            ) {
+                Row(
+                    modifier = Modifier.padding(vertical = 10.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Default.CloudDownload,
+                        contentDescription = null,
+                        tint = if (subTab == 1) Color.White else Color(0xFF94A3B8),
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "Synced (${inboundFiles.size})",
+                        color = if (subTab == 1) Color.White else Color(0xFF94A3B8),
+                        fontSize = 12.sp,
+                        fontWeight = if (subTab == 1) FontWeight.Bold else FontWeight.Medium
+                    )
+                }
+            }
+        }
+
+        // Category Filter Chips
+        val categories = listOf("All", "Photos", "Videos", "Documents")
+        LazyRow(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 2.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            items(categories) { cat ->
+                val isSelected = selectedCategory == cat
+                Surface(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(16.dp))
+                        .clickable { selectedCategory = cat },
+                    color = if (isSelected) Color(0xFF26193E) else Color(0xFF14141C),
+                    border = BorderStroke(1.dp, if (isSelected) Color(0xFFA855F7) else Color(0xFF242432))
+                ) {
+                    Text(
+                        text = cat,
+                        color = if (isSelected) Color(0xFFD8B4FE) else Color(0xFF94A3B8),
+                        fontSize = 11.sp,
+                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        if (subTab == 0) {
+            // ---------------- SUBVIEW 0: UPLOADED BY THIS DEVICE ----------------
+            val filteredUploads = remember(uploadedFiles, selectedCategory) {
+                when (selectedCategory) {
+                    "Photos" -> uploadedFiles.filter { it.mimeType.startsWith("image/") }
+                    "Videos" -> uploadedFiles.filter { it.mimeType.startsWith("video/") }
+                    "Documents" -> uploadedFiles.filter { !it.mimeType.startsWith("image/") && !it.mimeType.startsWith("video/") }
+                    else -> uploadedFiles
+                }
+            }
+
+            if (filteredUploads.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(32.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(Icons.Default.CloudUpload, contentDescription = null, tint = Color(0xFF52525B), modifier = Modifier.size(48.dp))
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text("No uploads found", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text("Docs & media uploaded by this phone will be listed here.", color = Color(0xFF71717A), fontSize = 12.sp)
+                    }
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(filteredUploads) { item ->
+                        val isImage = item.mimeType.startsWith("image/")
+                        val isVideo = item.mimeType.startsWith("video/")
+                        val streamUrl = "${serverUrl.trimEnd('/')}/api/v1/files/${item.id}/stream?deviceId=$deviceId&deviceKey=$deviceKey"
+
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    onOpenFile(
+                                        CloudFile(
+                                            id = item.id,
+                                            filename = item.filename,
+                                            mimeType = item.mimeType,
+                                            sizeBytes = item.sizeBytes,
+                                            createdAt = item.createdAt,
+                                            folderId = null
+                                        )
+                                    )
+                                },
+                            shape = RoundedCornerShape(14.dp),
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFF14141C))
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                // Thumbnail / Icon
+                                Box(
+                                    modifier = Modifier
+                                        .size(44.dp)
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(Color(0xFF1C1C28)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    if (isImage) {
+                                        AsyncImage(
+                                            model = ImageRequest.Builder(LocalContext.current)
+                                                .data(streamUrl)
+                                                .addHeader("x-device-id", deviceId)
+                                                .addHeader("x-device-key", deviceKey)
+                                                .crossfade(true)
+                                                .build(),
+                                            contentDescription = item.filename,
+                                            modifier = Modifier.fillMaxSize(),
+                                            contentScale = ContentScale.Crop
+                                        )
+                                    } else if (isVideo) {
+                                        Icon(Icons.Default.Movie, contentDescription = null, tint = Color(0xFFA855F7), modifier = Modifier.size(24.dp))
+                                    } else {
+                                        Icon(Icons.Default.Description, contentDescription = null, tint = Color(0xFF38BDF8), modifier = Modifier.size(24.dp))
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.width(12.dp))
+
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = item.filename,
+                                        color = Color.White,
+                                        fontWeight = FontWeight.SemiBold,
+                                        fontSize = 13.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        text = "${formatBytes(item.sizeBytes)} • ${item.folderName?.let { "Folder: $it" } ?: "Root"}",
+                                        color = Color(0xFF71717A),
+                                        fontSize = 11.sp
+                                    )
+                                }
+
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = Color(0xFF26193E)
+                                ) {
+                                    Text(
+                                        text = "Cloud Stored",
+                                        color = Color(0xFFC084FC),
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            // ---------------- SUBVIEW 1: SYNCED TO DEVICE & IN GALLERY ----------------
+            val filteredInbound = remember(inboundFiles, selectedCategory) {
+                when (selectedCategory) {
+                    "Photos" -> inboundFiles.filter { it.mimeType.startsWith("image/") }
+                    "Videos" -> inboundFiles.filter { it.mimeType.startsWith("video/") }
+                    "Documents" -> inboundFiles.filter { !it.mimeType.startsWith("image/") && !it.mimeType.startsWith("video/") }
+                    else -> inboundFiles
+                }
+            }
+
+            // Sync All to Gallery Action Header
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF161622))
+            ) {
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Paired Devices Inbound Sync", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                        Text("Docs & media from paired devices synced to this phone", fontSize = 10.sp, color = Color(0xFF94A3B8))
+                    }
+                    Button(
+                        onClick = onSyncAllToGallery,
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFA855F7)),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                    ) {
+                        Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(14.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Sync to Gallery", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+
+            if (filteredInbound.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(32.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(Icons.Default.CloudDownload, contentDescription = null, tint = Color(0xFF52525B), modifier = Modifier.size(48.dp))
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text("No paired files to sync", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text("Files uploaded from your other paired devices will appear here.", color = Color(0xFF71717A), fontSize = 12.sp)
+                    }
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(filteredInbound) { item ->
+                        val isImage = item.mimeType.startsWith("image/")
+                        val isVideo = item.mimeType.startsWith("video/")
+                        val streamUrl = "${serverUrl.trimEnd('/')}/api/v1/files/${item.id}/stream?deviceId=$deviceId&deviceKey=$deviceKey"
+
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    onOpenFile(
+                                        CloudFile(
+                                            id = item.id,
+                                            filename = item.filename,
+                                            mimeType = item.mimeType,
+                                            sizeBytes = item.sizeBytes,
+                                            createdAt = item.createdAt,
+                                            folderId = null
+                                        )
+                                    )
+                                },
+                            shape = RoundedCornerShape(14.dp),
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFF14141C))
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                // Thumbnail / Icon
+                                Box(
+                                    modifier = Modifier
+                                        .size(44.dp)
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(Color(0xFF1C1C28)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    if (isImage) {
+                                        AsyncImage(
+                                            model = ImageRequest.Builder(LocalContext.current)
+                                                .data(streamUrl)
+                                                .addHeader("x-device-id", deviceId)
+                                                .addHeader("x-device-key", deviceKey)
+                                                .crossfade(true)
+                                                .build(),
+                                            contentDescription = item.filename,
+                                            modifier = Modifier.fillMaxSize(),
+                                            contentScale = ContentScale.Crop
+                                        )
+                                    } else if (isVideo) {
+                                        Icon(Icons.Default.Movie, contentDescription = null, tint = Color(0xFFA855F7), modifier = Modifier.size(24.dp))
+                                    } else {
+                                        Icon(Icons.Default.Description, contentDescription = null, tint = Color(0xFF38BDF8), modifier = Modifier.size(24.dp))
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.width(12.dp))
+
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = item.filename,
+                                        color = Color.White,
+                                        fontWeight = FontWeight.SemiBold,
+                                        fontSize = 13.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            text = formatBytes(item.sizeBytes),
+                                            color = Color(0xFF71717A),
+                                            fontSize = 11.sp
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Surface(
+                                            shape = RoundedCornerShape(6.dp),
+                                            color = Color(0xFF222230)
+                                        ) {
+                                            Text(
+                                                text = "From: ${item.sourceDeviceLabel}",
+                                                color = Color(0xFFC084FC),
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.Medium,
+                                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                                            )
+                                        }
+                                    }
+                                }
+
+                                IconButton(
+                                    onClick = { onDownloadToGallery(item) }
+                                ) {
+                                    Icon(
+                                        if (item.isDownloadedLocally) Icons.Default.CheckCircle else Icons.Default.Download,
+                                        contentDescription = "Save to Gallery",
+                                        tint = if (item.isDownloadedLocally) Color(0xFF34D399) else Color(0xFFA855F7),
+                                        modifier = Modifier.size(22.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ----------------------------------------------------
+// TAB 3: Device & Personalized Policies Screen
+// ----------------------------------------------------
+@Composable
+fun DeviceAndPolicyScreen(
     serverUrl: String,
     deviceId: String,
     deviceKey: String,
@@ -1043,22 +1794,32 @@ fun BackupSettingsScreen(
     targetFolderName: String,
     wifiOnly: Boolean,
     chargingOnly: Boolean,
+    syncPhotos: Boolean,
     syncVideos: Boolean,
+    syncDocuments: Boolean,
     lastSyncTimestamp: Long,
     totalSyncedCount: Int,
     lastSyncStatus: String,
+    pairedDevices: List<PairedDevice>,
+    pairedRules: List<PairedDeviceRule>,
+    isSavingPolicy: Boolean,
     onServerUrlChange: (String) -> Unit,
     onDeviceIdChange: (String) -> Unit,
     onDeviceKeyChange: (String) -> Unit,
     onWifiOnlyChange: (Boolean) -> Unit,
     onChargingOnlyChange: (Boolean) -> Unit,
+    onSyncPhotosChange: (Boolean) -> Unit,
     onSyncVideosChange: (Boolean) -> Unit,
+    onSyncDocumentsChange: (Boolean) -> Unit,
+    onUpdatePairedRule: (String, (PairedDeviceRule) -> Unit) -> Unit,
+    onSavePolicy: () -> Unit,
     onOpenFolderDialog: () -> Unit,
     onSyncNow: () -> Unit,
     onScheduleSync: () -> Unit
 ) {
     val scrollState = rememberScrollState()
     val isPaired = deviceId.isNotBlank() && deviceKey.isNotBlank()
+    var showCredentials by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
@@ -1067,7 +1828,7 @@ fun BackupSettingsScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        // Live Device Status Card
+        // Device Status Card
         Card(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(18.dp),
@@ -1128,6 +1889,34 @@ fun BackupSettingsScreen(
                         Text(formattedTime, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFFA855F7))
                     }
                 }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = onSyncNow,
+                        modifier = Modifier.weight(1f),
+                        enabled = isPaired
+                    ) {
+                        Icon(Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Sync Now")
+                    }
+
+                    Button(
+                        onClick = onScheduleSync,
+                        modifier = Modifier.weight(1f),
+                        enabled = isPaired,
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF7E22CE))
+                    ) {
+                        Icon(Icons.Default.Schedule, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Auto Sync")
+                    }
+                }
             }
         }
 
@@ -1149,57 +1938,43 @@ fun BackupSettingsScreen(
                     ) {
                         Box(
                             modifier = Modifier
-                                .size(38.dp)
-                                .clip(RoundedCornerShape(10.dp))
+                                .size(40.dp)
+                                .clip(RoundedCornerShape(12.dp))
                                 .background(Color(0xFF26193E)),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
                                 Icons.Default.FolderSpecial,
                                 contentDescription = null,
-                                tint = Color(0xFFC084FC),
-                                modifier = Modifier.size(20.dp)
+                                tint = Color(0xFFA855F7),
+                                modifier = Modifier.size(22.dp)
                             )
                         }
                         Spacer(modifier = Modifier.width(12.dp))
                         Column {
+                            Text("Upload Destination Folder", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color.White)
                             Text(
-                                text = "Upload Destination Folder",
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White
-                            )
-                            Text(
-                                text = if (targetFolderId.isBlank()) "Root (My Drive)" else targetFolderName,
-                                fontSize = 12.sp,
-                                color = Color(0xFFA855F7),
-                                fontWeight = FontWeight.SemiBold,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
+                                text = "Selected: $targetFolderName",
+                                fontSize = 11.sp,
+                                color = Color(0xFFC084FC),
+                                fontWeight = FontWeight.SemiBold
                             )
                         }
                     }
 
-                    OutlinedButton(
+                    Button(
                         onClick = onOpenFolderDialog,
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFA855F7)),
-                        border = BorderStroke(1.dp, Color(0xFFA855F7)),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF26193E)),
                         shape = RoundedCornerShape(10.dp),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                     ) {
-                        Text("Select", fontSize = 12.sp)
+                        Text("Change", color = Color(0xFFE9D5FF), fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                     }
                 }
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = "All photos and videos backed up from this phone will be sent directly to this cloud folder.",
-                    fontSize = 11.sp,
-                    color = Color(0xFF71717A)
-                )
             }
         }
 
-        // Connection & Keys Card
+        // Personalized Outbound Policy Card
         Card(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(18.dp),
@@ -1209,46 +1984,49 @@ fun BackupSettingsScreen(
                 modifier = Modifier.padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Text("Connection & Keys", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                Text("Personalized Outbound Policy", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                Text("Specify which file types this phone backs up to cloud storage:", fontSize = 11.sp, color = Color(0xFF71717A))
 
-                OutlinedTextField(
-                    value = serverUrl,
-                    onValueChange = onServerUrlChange,
-                    label = { Text("Server Backend URL") },
+                Row(
                     modifier = Modifier.fillMaxWidth(),
-                    singleLine = true
-                )
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Image, contentDescription = null, tint = Color(0xFFA855F7), modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Sync Photos & Pictures", fontSize = 13.sp, color = Color(0xFFE4E4E7))
+                    }
+                    Switch(checked = syncPhotos, onCheckedChange = onSyncPhotosChange)
+                }
 
-                OutlinedTextField(
-                    value = deviceId,
-                    onValueChange = onDeviceIdChange,
-                    label = { Text("Device ID") },
+                Row(
                     modifier = Modifier.fillMaxWidth(),
-                    singleLine = true
-                )
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Movie, contentDescription = null, tint = Color(0xFFA855F7), modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Sync Videos", fontSize = 13.sp, color = Color(0xFFE4E4E7))
+                    }
+                    Switch(checked = syncVideos, onCheckedChange = onSyncVideosChange)
+                }
 
-                OutlinedTextField(
-                    value = deviceKey,
-                    onValueChange = onDeviceKeyChange,
-                    label = { Text("Device Key") },
-                    visualTransformation = PasswordVisualTransformation(),
+                Row(
                     modifier = Modifier.fillMaxWidth(),
-                    singleLine = true
-                )
-            }
-        }
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Description, contentDescription = null, tint = Color(0xFF38BDF8), modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Sync Documents (PDF, Docs)", fontSize = 13.sp, color = Color(0xFFE4E4E7))
+                    }
+                    Switch(checked = syncDocuments, onCheckedChange = onSyncDocumentsChange)
+                }
 
-        // Backup Policy Card
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(18.dp),
-            colors = CardDefaults.cardColors(containerColor = Color(0xFF14141C))
-        ) {
-            Column(
-                modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Text("Backup Constraints", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                HorizontalDivider(color = Color(0xFF22222E), modifier = Modifier.padding(vertical = 4.dp))
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -1267,47 +2045,246 @@ fun BackupSettingsScreen(
                     Text("Charging Only Uploads", fontSize = 13.sp, color = Color(0xFFE4E4E7))
                     Switch(checked = chargingOnly, onCheckedChange = onChargingOnlyChange)
                 }
+            }
+        }
 
+        // Paired Devices Inbound Sync Policy Card
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(18.dp),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF14141C))
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Backup Videos", fontSize = 13.sp, color = Color(0xFFE4E4E7))
-                    Switch(checked = syncVideos, onCheckedChange = onSyncVideosChange)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Devices, contentDescription = null, tint = Color(0xFFA855F7), modifier = Modifier.size(20.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column {
+                            Text("Paired Devices Inbound Policy", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                            Text("Filter what files sync from each paired device", fontSize = 11.sp, color = Color(0xFF71717A))
+                        }
+                    }
+                }
+
+                if (pairedDevices.isEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 12.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "No other devices paired yet.\nPair your laptop or other phones to configure per-device policies.",
+                            fontSize = 12.sp,
+                            color = Color(0xFF71717A),
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+                    }
+                } else {
+                    pairedDevices.forEach { pDev ->
+                        val rule = pairedRules.find { it.sourceDeviceId == pDev.deviceId }
+                            ?: PairedDeviceRule(
+                                sourceDeviceId = pDev.deviceId,
+                                sourceDeviceName = pDev.deviceName,
+                                syncPhotos = true,
+                                syncVideos = true,
+                                syncDocuments = true,
+                                autoDownloadToGallery = true
+                            )
+
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(14.dp),
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFF1C1C28))
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(
+                                            if (pDev.deviceType == "mobile") Icons.Default.Smartphone else Icons.Default.Laptop,
+                                            contentDescription = null,
+                                            tint = Color(0xFF38BDF8),
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Column {
+                                            Text(pDev.deviceName, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                                            Text("ID: ${pDev.deviceId.take(12)}...", fontSize = 10.sp, color = Color(0xFF71717A))
+                                        }
+                                    }
+
+                                    Surface(
+                                        shape = CircleShape,
+                                        color = if (pDev.status == "online") Color(0xFF064E3B) else Color(0xFF27272A)
+                                    ) {
+                                        Text(
+                                            text = pDev.status.uppercase(),
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (pDev.status == "online") Color(0xFF6EE7B7) else Color(0xFF71717A),
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                        )
+                                    }
+                                }
+
+                                HorizontalDivider(color = Color(0xFF2E2E3E), modifier = Modifier.padding(vertical = 2.dp))
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("Sync Photos", fontSize = 12.sp, color = Color(0xFFE4E4E7))
+                                    Switch(
+                                        checked = rule.syncPhotos,
+                                        onCheckedChange = { chk ->
+                                            onUpdatePairedRule(pDev.deviceId) { it.syncPhotos = chk }
+                                        }
+                                    )
+                                }
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("Sync Videos", fontSize = 12.sp, color = Color(0xFFE4E4E7))
+                                    Switch(
+                                        checked = rule.syncVideos,
+                                        onCheckedChange = { chk ->
+                                            onUpdatePairedRule(pDev.deviceId) { it.syncVideos = chk }
+                                        }
+                                    )
+                                }
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("Sync Documents (PDF/Docs)", fontSize = 12.sp, color = Color(0xFFE4E4E7))
+                                    Switch(
+                                        checked = rule.syncDocuments,
+                                        onCheckedChange = { chk ->
+                                            onUpdatePairedRule(pDev.deviceId) { it.syncDocuments = chk }
+                                        }
+                                    )
+                                }
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("Auto Download to Phone Gallery", fontSize = 12.sp, color = Color(0xFFA855F7), fontWeight = FontWeight.SemiBold)
+                                    Switch(
+                                        checked = rule.autoDownloadToGallery,
+                                        onCheckedChange = { chk ->
+                                            onUpdatePairedRule(pDev.deviceId) { it.autoDownloadToGallery = chk }
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Button(
+                    onClick = onSavePolicy,
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = isPaired && !isSavingPolicy,
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFA855F7))
+                ) {
+                    if (isSavingPolicy) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Saving Policy to Cloud...")
+                    } else {
+                        Icon(Icons.Default.CloudUpload, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Save Personalized Policy to Cloud", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    }
                 }
             }
         }
 
-        // Trigger Buttons
-        Row(
+        // Connection & Device Credentials Card
+        Card(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
+            shape = RoundedCornerShape(18.dp),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF14141C))
         ) {
-            OutlinedButton(
-                onClick = onSyncNow,
-                modifier = Modifier.weight(1f),
-                enabled = isPaired
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Icon(Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(16.dp))
-                Spacer(modifier = Modifier.width(6.dp))
-                Text("Sync Now")
-            }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Backend & Device Credentials", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    TextButton(onClick = { showCredentials = !showCredentials }) {
+                        Text(if (showCredentials) "Hide" else "Show / Edit", color = Color(0xFFA855F7), fontSize = 12.sp)
+                    }
+                }
 
-            Button(
-                onClick = onScheduleSync,
-                modifier = Modifier.weight(1f),
-                enabled = isPaired,
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF7E22CE))
-            ) {
-                Icon(Icons.Default.Schedule, contentDescription = null, modifier = Modifier.size(16.dp))
-                Spacer(modifier = Modifier.width(6.dp))
-                Text("Auto Sync")
+                if (showCredentials) {
+                    OutlinedTextField(
+                        value = serverUrl,
+                        onValueChange = onServerUrlChange,
+                        label = { Text("Server Backend URL") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = Color(0xFFA855F7),
+                            unfocusedBorderColor = Color(0xFF2E2E3E)
+                        )
+                    )
+
+                    OutlinedTextField(
+                        value = deviceId,
+                        onValueChange = onDeviceIdChange,
+                        label = { Text("Device ID") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = Color(0xFFA855F7),
+                            unfocusedBorderColor = Color(0xFF2E2E3E)
+                        )
+                    )
+
+                    OutlinedTextField(
+                        value = deviceKey,
+                        onValueChange = onDeviceKeyChange,
+                        label = { Text("Device Key") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = Color(0xFFA855F7),
+                            unfocusedBorderColor = Color(0xFF2E2E3E)
+                        )
+                    )
+                }
             }
         }
     }
 }
-
 // ----------------------------------------------------
 // In-App Media Viewer (Zero Browser Redirects)
 // ----------------------------------------------------
@@ -1693,20 +2670,31 @@ fun FolderPickerDialog(
     )
 }
 
-fun downloadFileToDevice(context: Context, url: String, filename: String, deviceId: String, deviceKey: String) {
+fun downloadFileToDevice(
+    context: Context,
+    url: String,
+    filename: String,
+    deviceId: String,
+    deviceKey: String,
+    saveToGallery: Boolean = false,
+    onSuccess: (() -> Unit)? = null
+) {
     try {
         val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
         val uri = Uri.parse(url)
+        val dir = if (saveToGallery) Environment.DIRECTORY_PICTURES else Environment.DIRECTORY_DOWNLOADS
         val request = DownloadManager.Request(uri).apply {
             setTitle(filename)
-            setDescription("Downloading from myDrive")
+            setDescription(if (saveToGallery) "Saving to Gallery" else "Downloading from myDrive")
             setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-            setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, filename)
+            setDestinationInExternalPublicDir(dir, filename)
             addRequestHeader("x-device-id", deviceId)
             addRequestHeader("x-device-key", deviceKey)
         }
         dm.enqueue(request)
-        Toast.makeText(context, "Downloading $filename to Downloads folder...", Toast.LENGTH_SHORT).show()
+        onSuccess?.invoke()
+        val dest = if (saveToGallery) "Gallery / Pictures" else "Downloads"
+        Toast.makeText(context, "Saving $filename to $dest...", Toast.LENGTH_SHORT).show()
     } catch (e: Exception) {
         Toast.makeText(context, "Download notice: ${e.message}", Toast.LENGTH_SHORT).show()
     }
