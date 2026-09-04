@@ -276,7 +276,7 @@ class MainActivity : ComponentActivity() {
             }
         }.build()
 
-        val syncRequest = PeriodicWorkRequestBuilder<SyncWorker>(15, TimeUnit.MINUTES)
+        val syncRequest = PeriodicWorkRequestBuilder<SyncWorker>(12, TimeUnit.HOURS)
             .setConstraints(constraints)
             .setInputData(
                 workDataOf(
@@ -298,7 +298,10 @@ class MainActivity : ComponentActivity() {
         )
     }
 
-    private fun triggerImmediateSync(
+    // triggerImmediateSync is kept for API compatibility but actual implementation
+    // is done in-process via performInProcessSync() called from MainAppScreen,
+    // so we get live per-file progress in the UI.
+    fun triggerImmediateSync(
         serverUrl: String,
         deviceId: String,
         deviceKey: String,
@@ -308,30 +311,8 @@ class MainActivity : ComponentActivity() {
         syncDocuments: Boolean,
         onComplete: (() -> Unit)? = null
     ) {
-        val syncRequest = OneTimeWorkRequestBuilder<SyncWorker>()
-            .setInputData(
-                workDataOf(
-                    "server_url" to serverUrl,
-                    "device_id" to deviceId,
-                    "device_key" to deviceKey,
-                    "target_folder_id" to (targetFolderId ?: ""),
-                    "sync_photos" to syncPhotos,
-                    "sync_videos" to syncVideos,
-                    "sync_documents" to syncDocuments
-                )
-            )
-            .build()
-
-        val wm = WorkManager.getInstance(applicationContext)
-        wm.enqueue(syncRequest)
-
-        wm.getWorkInfoByIdLiveData(syncRequest.id).observe(this) { workInfo ->
-            if (workInfo != null && workInfo.state.isFinished) {
-                runOnUiThread {
-                    onComplete?.invoke()
-                }
-            }
-        }
+        // Immediately invoke onComplete — actual sync runs in-process (see performInProcessSync)
+        onComplete?.invoke()
     }
 }
 
@@ -776,6 +757,8 @@ fun MainAppScreen(
     }
     var isSavingPolicy by remember { mutableStateOf(false) }
     var isSyncingNow by remember { mutableStateOf(false) }
+    var syncStatusText by remember { mutableStateOf("") }          // current step summary
+    val syncLogLines = remember { mutableStateListOf<String>() }   // live per-file log
 
     var isRefreshing by remember { mutableStateOf(false) }
     var fetchError by remember { mutableStateOf<String?>(null) }
@@ -805,6 +788,205 @@ fun MainAppScreen(
             e.printStackTrace()
         }
     }
+
+    // ── In-process Sync Now ─────────────────────────────────────────────────
+    // Runs directly in a UI-scope coroutine so we can post live progress back.
+    val performInProcessSync: () -> Unit = {
+        scope.launch {
+            if (serverUrl.isBlank() || deviceId.isBlank() || deviceKey.isBlank()) return@launch
+            isSyncingNow = true
+            syncStatusText = "Starting sync…"
+            syncLogLines.clear()
+
+            val base = serverUrl.trimEnd('/')
+            val targetFolder = targetFolderId.takeIf { it.isNotBlank() }
+
+            fun log(msg: String) { syncLogLines.add(0, msg) }  // newest first
+            fun status(msg: String) { syncStatusText = msg }
+
+            // Helper: fetch storage account name for display
+            var driveLabel = "Cloud Drive"
+            try {
+                withContext(Dispatchers.IO) {
+                    val req = Request.Builder()
+                        .url("$base/api/v1/storage/summary")
+                        .addHeader("x-device-id", deviceId)
+                        .addHeader("x-device-key", deviceKey)
+                        .build()
+                    val res = httpClient.newCall(req).execute()
+                    if (res.isSuccessful) {
+                        val j = org.json.JSONObject(res.body?.string() ?: "{}")
+                        val accs = j.optJSONArray("accounts")
+                        if (accs != null && accs.length() > 0) {
+                            val acc = accs.getJSONObject(0)
+                            driveLabel = acc.optString("accountEmail", "").ifBlank {
+                                acc.optString("providerType", "Google Drive")
+                            }
+                        }
+                    }
+                }
+            } catch (_: Exception) {}
+
+            var totalUploaded = 0
+            var totalSkipped = 0
+
+            suspend fun syncMediaCollection(
+                collectionUri: android.net.Uri,
+                label: String,
+                defaultMime: String,
+                namePrefix: String,
+                selection: String? = null,
+                selectionArgs: Array<String>? = null
+            ) {
+                status("📂 Scanning $label…")
+                log("── Scanning $label ──")
+
+                val projection = arrayOf(
+                    android.provider.MediaStore.MediaColumns._ID,
+                    android.provider.MediaStore.MediaColumns.DISPLAY_NAME,
+                    android.provider.MediaStore.MediaColumns.MIME_TYPE,
+                    android.provider.MediaStore.MediaColumns.SIZE
+                )
+                val cursor = context.contentResolver.query(
+                    collectionUri, projection, selection, selectionArgs,
+                    "${android.provider.MediaStore.MediaColumns.DATE_ADDED} DESC"
+                ) ?: run { log("⚠ Could not read $label"); return }
+
+                val items = mutableListOf<Triple<Long, String, String>>() // id, name, mime
+                cursor.use {
+                    val idCol = it.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns._ID)
+                    val nameCol = it.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns.DISPLAY_NAME)
+                    val mimeCol = it.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns.MIME_TYPE)
+                    val sizeCol = it.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns.SIZE)
+                    while (it.moveToNext()) {
+                        val sz = it.getLong(sizeCol)
+                        if (sz <= 0) continue
+                        items.add(Triple(it.getLong(idCol), it.getString(nameCol) ?: "${namePrefix}_${it.getLong(idCol)}", it.getString(mimeCol) ?: defaultMime))
+                    }
+                }
+
+                val total = items.size
+                status("📂 $label — $total file(s) found")
+                log("Found $total $label file(s)")
+
+                items.take(100).forEachIndexed { idx, (id, filename, mimeType) ->
+                    val num = idx + 1
+                    status("⬆ Uploading $filename  ($num/$total)\n☁ Drive: $driveLabel")
+                    withContext(Dispatchers.IO) {
+                        try {
+                            val contentUri = android.content.ContentUris.withAppendedId(collectionUri, id)
+                            val bytes = context.contentResolver.openInputStream(contentUri)?.use { stream ->
+                                val buf = java.io.ByteArrayOutputStream(); stream.copyTo(buf); buf.toByteArray()
+                            } ?: return@withContext
+
+                            val hash = com.drive.sync.crypto.VaultCrypto.calculateSha256(bytes.inputStream())
+                            val sizeBytes = bytes.size.toLong()
+
+                            val initJson = org.json.JSONObject().apply {
+                                put("filename", filename); put("mimeType", mimeType)
+                                put("sizeBytes", sizeBytes); put("contentHash", hash)
+                                targetFolder?.let { put("folderId", it) }
+                            }
+                            val initReq = Request.Builder()
+                                .url("$base/api/v1/files/upload/initiate")
+                                .addHeader("x-device-id", deviceId)
+                                .addHeader("x-device-key", deviceKey)
+                                .post(initJson.toString().toRequestBody("application/json".toMediaType()))
+                                .build()
+                            val initRes = httpClient.newCall(initReq).execute()
+                            if (!initRes.isSuccessful) {
+                                withContext(Dispatchers.Main) { log("✗ $filename — initiate failed (${initRes.code})") }
+                                return@withContext
+                            }
+                            val initResult = org.json.JSONObject(initRes.body?.string() ?: "{}")
+                            if (initResult.optBoolean("isDuplicate", false)) {
+                                withContext(Dispatchers.Main) {
+                                    log("⏩ $filename — already backed up")
+                                    totalSkipped++
+                                }
+                                return@withContext
+                            }
+                            val uploadUrl = initResult.getString("uploadSessionUrl")
+                            val storageAccountId = initResult.getString("storageAccountId")
+                            val driveOpaqueName = initResult.optString("driveOpaqueName", "")
+
+                            val putRes = httpClient.newCall(
+                                Request.Builder().url(uploadUrl).put(bytes.toRequestBody(mimeType.toMediaType())).build()
+                            ).execute()
+                            if (!putRes.isSuccessful && putRes.code != 200 && putRes.code != 201) {
+                                withContext(Dispatchers.Main) { log("✗ $filename — upload to drive failed (${putRes.code})") }
+                                putRes.close(); return@withContext
+                            }
+                            val putBody = putRes.body?.string() ?: ""
+                            var providerFileId = try { if (putBody.isNotBlank()) org.json.JSONObject(putBody).optString("id", "") else "" } catch (_: Exception) { "" }
+                            if (providerFileId.isBlank()) providerFileId = driveOpaqueName
+
+                            val completeJson = org.json.JSONObject().apply {
+                                put("filename", filename); put("mimeType", mimeType)
+                                put("sizeBytes", sizeBytes); put("contentHash", hash)
+                                put("storageAccountId", storageAccountId)
+                                put("providerFileId", providerFileId)
+                                put("driveOpaqueName", driveOpaqueName)
+                                put("deviceAssetId", id.toString())
+                                targetFolder?.let { put("folderId", it) }
+                            }
+                            httpClient.newCall(
+                                Request.Builder()
+                                    .url("$base/api/v1/files/upload/complete")
+                                    .addHeader("x-device-id", deviceId)
+                                    .addHeader("x-device-key", deviceKey)
+                                    .post(completeJson.toString().toRequestBody("application/json".toMediaType()))
+                                    .build()
+                            ).execute().close()
+
+                            withContext(Dispatchers.Main) {
+                                log("✓ $filename → $driveLabel")
+                                totalUploaded++
+                            }
+                        } catch (e: Exception) {
+                            withContext(Dispatchers.Main) { log("✗ $filename — ${e.message}") }
+                        }
+                    }
+                }
+                log("── $label done: ${items.take(100).size} processed ──")
+            }
+
+            try {
+                if (syncPhotos) syncMediaCollection(
+                    android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                    "Photos", "image/jpeg", "photo"
+                )
+                if (syncVideos) syncMediaCollection(
+                    android.provider.MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+                    "Videos", "video/mp4", "video"
+                )
+                if (syncDocuments) syncMediaCollection(
+                    android.provider.MediaStore.Files.getContentUri("external"),
+                    "Documents", "application/pdf", "doc",
+                    selection = "${android.provider.MediaStore.MediaColumns.MIME_TYPE} LIKE ? OR ${android.provider.MediaStore.MediaColumns.MIME_TYPE} LIKE ? OR ${android.provider.MediaStore.MediaColumns.MIME_TYPE} LIKE ?",
+                    selectionArgs = arrayOf("application/%", "text/%", "%document%")
+                )
+            } catch (e: Exception) {
+                log("❌ Sync error: ${e.message}")
+            }
+
+            val summary = "Sync complete — $totalUploaded uploaded, $totalSkipped already backed up"
+            status("✅ $summary")
+            log("═══════════════════════════════")
+            log("✅ $summary")
+
+            prefs.edit().apply {
+                putLong("last_sync_timestamp", System.currentTimeMillis())
+                putString("last_sync_status", summary)
+                putInt("last_sync_count", totalUploaded)
+                putInt("total_synced_count", prefs.getInt("total_synced_count", 0) + totalUploaded)
+                apply()
+            }
+            // refreshData() called via LaunchedEffect(isSyncingNow) below
+            isSyncingNow = false
+        }
+    }
+    // ───────────────────────────────────────────────────────────────────────
 
     val saveCredentials = {
         prefs.edit().apply {
@@ -1286,6 +1468,13 @@ fun MainAppScreen(
         refreshData()
     }
 
+    // Auto-refresh cloud data when Sync Now finishes
+    LaunchedEffect(isSyncingNow) {
+        if (!isSyncingNow) {
+            refreshData()
+        }
+    }
+
     // In-App Media Preview Dialog (Eliminates Browser Redirects)
     if (previewItem != null) {
         MediaViewerDialog(
@@ -1758,20 +1947,15 @@ fun MainAppScreen(
                         onOpenFolderDialog = { showFolderDialog = true },
                         onSyncNow = {
                             saveCredentials()
-                            isSyncingNow = true
-                            Toast.makeText(context, "Scanning gallery for cloud backup...", Toast.LENGTH_SHORT).show()
-                            onSyncNow(serverUrl, deviceId, deviceKey, targetFolderId, syncPhotos, syncVideos, syncDocuments) {
-                                isSyncingNow = false
-                                refreshData()
-                                val status = prefs.getString("last_sync_status", "Backup complete") ?: "Backup complete"
-                                Toast.makeText(context, status, Toast.LENGTH_LONG).show()
-                            }
+                            performInProcessSync()
                         },
                         onScheduleSync = {
                             saveCredentials()
                             onScheduleSync(serverUrl, deviceId, deviceKey, targetFolderId, wifiOnly, chargingOnly, syncPhotos, syncVideos, syncDocuments)
                         },
-                        isSyncingNow = isSyncingNow
+                        isSyncingNow = isSyncingNow,
+                        syncStatusText = syncStatusText,
+                        syncLogLines = syncLogLines
                     )
                 }
             }
@@ -3068,7 +3252,9 @@ fun DeviceAndPolicyScreen(
     onOpenFolderDialog: () -> Unit,
     onSyncNow: () -> Unit,
     onScheduleSync: () -> Unit,
-    isSyncingNow: Boolean = false
+    isSyncingNow: Boolean = false,
+    syncStatusText: String = "",
+    syncLogLines: List<String> = emptyList()
 ) {
     val scrollState = rememberScrollState()
     val isPaired = deviceId.isNotBlank() && deviceKey.isNotBlank()
@@ -3182,6 +3368,138 @@ fun DeviceAndPolicyScreen(
                 }
             }
         }
+
+        // ── Live Sync Progress Panel ───────────────────────────────────────
+        if (isSyncingNow || syncLogLines.isNotEmpty()) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF0F1A0F))
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    // Header row
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        if (isSyncingNow) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                color = Color(0xFF34D399),
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                        } else {
+                            Icon(
+                                Icons.Default.CheckCircle,
+                                contentDescription = null,
+                                tint = Color(0xFF34D399),
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                        }
+                        Text(
+                            text = if (isSyncingNow) "Sync in progress" else "Last sync log",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF6EE7B7)
+                        )
+                    }
+
+                    // Status / current file line
+                    if (syncStatusText.isNotBlank()) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = Color(0xFF1A2D1A)
+                        ) {
+                            Text(
+                                text = syncStatusText,
+                                fontSize = 12.sp,
+                                color = Color(0xFFD1FAE5),
+                                lineHeight = 18.sp,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                            )
+                        }
+                    }
+
+                    // Per-file log (newest first, max 20 lines visible)
+                    if (syncLogLines.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        HorizontalDivider(color = Color(0xFF1F2E1F))
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 200.dp)
+                                .verticalScroll(rememberScrollState())
+                        ) {
+                            syncLogLines.take(50).forEach { line ->
+                                val (color, icon) = when {
+                                    line.startsWith("✓") -> Pair(Color(0xFF86EFAC), "")
+                                    line.startsWith("⏩") -> Pair(Color(0xFF6B7280), "")
+                                    line.startsWith("✗") -> Pair(Color(0xFFFCA5A5), "")
+                                    line.startsWith("❌") -> Pair(Color(0xFFEF4444), "")
+                                    line.startsWith("✅") -> Pair(Color(0xFF34D399), "")
+                                    line.startsWith("──") || line.startsWith("═") -> Pair(Color(0xFF4B5563), "")
+                                    else -> Pair(Color(0xFF9CA3AF), "")
+                                }
+                                Text(
+                                    text = line,
+                                    fontSize = 11.sp,
+                                    color = color,
+                                    lineHeight = 16.sp,
+                                    modifier = Modifier.padding(vertical = 1.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        } else if (lastSyncStatus.isNotBlank() && lastSyncStatus != "Never synced") {
+            // Compact status when idle and a previous sync exists
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = Color(0xFF13131A),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(Icons.Default.Info, contentDescription = null, tint = Color(0xFF6B7280), modifier = Modifier.size(14.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = lastSyncStatus,
+                        fontSize = 12.sp,
+                        color = Color(0xFF9CA3AF),
+                        lineHeight = 16.sp
+                    )
+                }
+            }
+        }
+
+        // Auto Sync info chip
+        Surface(
+            shape = RoundedCornerShape(10.dp),
+            color = Color(0xFF1E1830),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(Icons.Default.Schedule, contentDescription = null, tint = Color(0xFF7C3AED), modifier = Modifier.size(14.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Auto sync runs twice a day (every 12 hours) in the background to save battery.",
+                    fontSize = 12.sp,
+                    color = Color(0xFF9CA3AF),
+                    lineHeight = 17.sp
+                )
+            }
+        }
+        // ──────────────────────────────────────────────────────────────────
 
         // Upload Destination Folder Card
         Card(
