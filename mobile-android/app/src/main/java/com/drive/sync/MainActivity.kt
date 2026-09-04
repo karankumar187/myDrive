@@ -62,8 +62,16 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import android.media.MediaPlayer
+import android.widget.MediaController
+import android.widget.VideoView
 import androidx.work.*
+import coil.Coil
+import coil.ImageLoader
 import coil.compose.AsyncImage
+import coil.decode.SvgDecoder
 import coil.request.ImageRequest
 import com.drive.sync.workers.SyncWorker
 import kotlinx.coroutines.Dispatchers
@@ -168,6 +176,14 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        val imageLoader = ImageLoader.Builder(this)
+            .components {
+                add(SvgDecoder.Factory())
+            }
+            .crossfade(true)
+            .build()
+        Coil.setImageLoader(imageLoader)
+
         val prefs = getSharedPreferences("drive_prefs", Context.MODE_PRIVATE)
 
         setContent {
@@ -192,14 +208,31 @@ class MainActivity : ComponentActivity() {
                             scheduleBackupWork(serverUrl, deviceId, deviceKey, targetFolderId, wifiOnly, chargingOnly, syncPhotos, syncVideos, syncDocuments)
                             Toast.makeText(this, "Periodic background backup scheduled!", Toast.LENGTH_SHORT).show()
                         },
-                        onSyncNow = { serverUrl, deviceId, deviceKey, targetFolderId, syncPhotos, syncVideos, syncDocuments ->
-                            triggerImmediateSync(serverUrl, deviceId, deviceKey, targetFolderId, syncPhotos, syncVideos, syncDocuments)
-                            Toast.makeText(this, "Scanning media & docs for cloud backup...", Toast.LENGTH_SHORT).show()
+                        onSyncNow = { serverUrl, deviceId, deviceKey, targetFolderId, syncPhotos, syncVideos, syncDocuments, onComplete ->
+                            triggerImmediateSync(serverUrl, deviceId, deviceKey, targetFolderId, syncPhotos, syncVideos, syncDocuments, onComplete)
                         },
                         httpClient = httpClient
                     )
                 }
             }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        val prefs = getSharedPreferences("drive_prefs", Context.MODE_PRIVATE)
+        val deviceId = prefs.getString("device_id", "") ?: ""
+        val deviceKey = prefs.getString("device_key", "") ?: ""
+        val serverUrl = prefs.getString("server_url", "https://mydrive-sti3.onrender.com") ?: "https://mydrive-sti3.onrender.com"
+        val targetFolderId = prefs.getString("target_folder_id", "") ?: ""
+        val wifiOnly = prefs.getBoolean("wifi_only", false)
+        val chargingOnly = prefs.getBoolean("charging_only", false)
+        val syncPhotos = prefs.getBoolean("sync_photos", true)
+        val syncVideos = prefs.getBoolean("sync_videos", true)
+        val syncDocuments = prefs.getBoolean("sync_documents", true)
+
+        if (deviceId.isNotBlank() && deviceKey.isNotBlank()) {
+            scheduleBackupWork(serverUrl, deviceId, deviceKey, targetFolderId, wifiOnly, chargingOnly, syncPhotos, syncVideos, syncDocuments)
         }
     }
 
@@ -254,7 +287,8 @@ class MainActivity : ComponentActivity() {
         targetFolderId: String?,
         syncPhotos: Boolean,
         syncVideos: Boolean,
-        syncDocuments: Boolean
+        syncDocuments: Boolean,
+        onComplete: (() -> Unit)? = null
     ) {
         val syncRequest = OneTimeWorkRequestBuilder<SyncWorker>()
             .setInputData(
@@ -270,7 +304,16 @@ class MainActivity : ComponentActivity() {
             )
             .build()
 
-        WorkManager.getInstance(applicationContext).enqueue(syncRequest)
+        val wm = WorkManager.getInstance(applicationContext)
+        wm.enqueue(syncRequest)
+
+        wm.getWorkInfoByIdLiveData(syncRequest.id).observe(this) { workInfo ->
+            if (workInfo != null && workInfo.state.isFinished) {
+                runOnUiThread {
+                    onComplete?.invoke()
+                }
+            }
+        }
     }
 }
 
@@ -279,7 +322,7 @@ class MainActivity : ComponentActivity() {
 fun MainAppScreen(
     prefs: android.content.SharedPreferences,
     onScheduleSync: (String, String, String, String?, Boolean, Boolean, Boolean, Boolean, Boolean) -> Unit,
-    onSyncNow: (String, String, String, String?, Boolean, Boolean, Boolean) -> Unit,
+    onSyncNow: (String, String, String, String?, Boolean, Boolean, Boolean, (() -> Unit)?) -> Unit,
     httpClient: OkHttpClient
 ) {
     val context = LocalContext.current
@@ -351,6 +394,7 @@ fun MainAppScreen(
     var pairedDevicesList by remember { mutableStateOf<List<PairedDevice>>(emptyList()) }
     val pairedRulesMap = remember { mutableStateMapOf<String, PairedDeviceRule>() }
     var isSavingPolicy by remember { mutableStateOf(false) }
+    var isSyncingNow by remember { mutableStateOf(false) }
 
     var isRefreshing by remember { mutableStateOf(false) }
     var fetchError by remember { mutableStateOf<String?>(null) }
@@ -1315,12 +1359,20 @@ fun MainAppScreen(
                         onOpenFolderDialog = { showFolderDialog = true },
                         onSyncNow = {
                             saveCredentials()
-                            onSyncNow(serverUrl, deviceId, deviceKey, targetFolderId, syncPhotos, syncVideos, syncDocuments)
+                            isSyncingNow = true
+                            Toast.makeText(context, "Scanning gallery for cloud backup...", Toast.LENGTH_SHORT).show()
+                            onSyncNow(serverUrl, deviceId, deviceKey, targetFolderId, syncPhotos, syncVideos, syncDocuments) {
+                                isSyncingNow = false
+                                refreshData()
+                                val status = prefs.getString("last_sync_status", "Backup complete") ?: "Backup complete"
+                                Toast.makeText(context, status, Toast.LENGTH_LONG).show()
+                            }
                         },
                         onScheduleSync = {
                             saveCredentials()
                             onScheduleSync(serverUrl, deviceId, deviceKey, targetFolderId, wifiOnly, chargingOnly, syncPhotos, syncVideos, syncDocuments)
-                        }
+                        },
+                        isSyncingNow = isSyncingNow
                     )
                 }
             }
@@ -2608,7 +2660,8 @@ fun DeviceAndPolicyScreen(
     onSavePolicy: () -> Unit,
     onOpenFolderDialog: () -> Unit,
     onSyncNow: () -> Unit,
-    onScheduleSync: () -> Unit
+    onScheduleSync: () -> Unit,
+    isSyncingNow: Boolean = false
 ) {
     val scrollState = rememberScrollState()
     val isPaired = deviceId.isNotBlank() && deviceKey.isNotBlank()
@@ -2692,11 +2745,21 @@ fun DeviceAndPolicyScreen(
                     OutlinedButton(
                         onClick = onSyncNow,
                         modifier = Modifier.weight(1f),
-                        enabled = isPaired
+                        enabled = isPaired && !isSyncingNow
                     ) {
-                        Icon(Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Sync Now")
+                        if (isSyncingNow) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                color = Color(0xFFA855F7),
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Syncing...")
+                        } else {
+                            Icon(Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Sync Now")
+                        }
                     }
 
                     Button(
@@ -3184,61 +3247,10 @@ fun MediaViewerDialog(
                             )
                         }
                     } else if (isVideo) {
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.Center,
-                            modifier = Modifier.padding(24.dp)
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(80.dp)
-                                    .clip(CircleShape)
-                                    .background(Color(0xFF26193E))
-                                    .clickable {
-                                        try {
-                                            val intent = Intent(Intent.ACTION_VIEW).apply {
-                                                setDataAndType(Uri.parse(streamUrl), "video/*")
-                                                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION
-                                            }
-                                            context.startActivity(intent)
-                                        } catch (e: Exception) {
-                                            Toast.makeText(context, "No video player available", Toast.LENGTH_SHORT).show()
-                                        }
-                                    },
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    Icons.Default.PlayArrow,
-                                    contentDescription = "Play",
-                                    tint = Color(0xFFC084FC),
-                                    modifier = Modifier.size(44.dp)
-                                )
-                            }
-                            Spacer(modifier = Modifier.height(16.dp))
-                            Text("Cloud Video Stream", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                            Spacer(modifier = Modifier.height(6.dp))
-                            Text(file.filename, color = Color(0xFF94A3B8), fontSize = 12.sp, maxLines = 2)
-                            Spacer(modifier = Modifier.height(16.dp))
-                            Button(
-                                onClick = {
-                                    try {
-                                        val intent = Intent(Intent.ACTION_VIEW).apply {
-                                            setDataAndType(Uri.parse(streamUrl), "video/*")
-                                            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION
-                                        }
-                                        context.startActivity(intent)
-                                    } catch (e: Exception) {
-                                        Toast.makeText(context, "No video player available", Toast.LENGTH_SHORT).show()
-                                    }
-                                },
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF7E22CE)),
-                                shape = RoundedCornerShape(12.dp)
-                            ) {
-                                Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Play in Video Player")
-                            }
-                        }
+                        VideoPlayer(
+                            streamUrl = streamUrl,
+                            filename = file.filename
+                        )
                     } else if (isPdf) {
                         PdfViewer(
                             file = file,
@@ -3294,6 +3306,128 @@ fun MediaViewerDialog(
                         Spacer(modifier = Modifier.width(6.dp))
                         Text("Save to Phone")
                     }
+                }
+            }
+        }
+    }
+}
+
+// ----------------------------------------------------
+// In-App Video Player with VideoView & MediaController
+// ----------------------------------------------------
+@Composable
+fun VideoPlayer(
+    streamUrl: String,
+    filename: String,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    var isBuffering by remember { mutableStateOf(true) }
+    var playbackError by remember { mutableStateOf<String?>(null) }
+    var videoViewRef by remember { mutableStateOf<VideoView?>(null) }
+
+    DisposableEffect(streamUrl) {
+        onDispose {
+            videoViewRef?.stopPlayback()
+        }
+    }
+
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(Color.Black),
+        contentAlignment = Alignment.Center
+    ) {
+        AndroidView(
+            factory = { ctx ->
+                VideoView(ctx).apply {
+                    videoViewRef = this
+                    val mc = MediaController(ctx)
+                    mc.setAnchorView(this)
+                    setMediaController(mc)
+
+                    setOnPreparedListener { mp ->
+                        isBuffering = false
+                        playbackError = null
+                        mp.isLooping = false
+                        start()
+                    }
+
+                    setOnInfoListener { _, what, _ ->
+                        if (what == MediaPlayer.MEDIA_INFO_BUFFERING_START) {
+                            isBuffering = true
+                        } else if (what == MediaPlayer.MEDIA_INFO_BUFFERING_END) {
+                            isBuffering = false
+                        }
+                        true
+                    }
+
+                    setOnErrorListener { _, what, extra ->
+                        isBuffering = false
+                        playbackError = "Unable to stream video (code: $what, extra: $extra)"
+                        true
+                    }
+
+                    setVideoURI(Uri.parse(streamUrl))
+                }
+            },
+            modifier = Modifier.fillMaxSize()
+        )
+
+        if (isBuffering && playbackError == null) {
+            CircularProgressIndicator(
+                color = Color(0xFFA855F7),
+                modifier = Modifier.size(48.dp)
+            )
+        }
+
+        if (playbackError != null) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+                modifier = Modifier
+                    .background(Color(0xFF0F0F14).copy(alpha = 0.94f), RoundedCornerShape(16.dp))
+                    .padding(24.dp)
+            ) {
+                Icon(
+                    Icons.Default.ErrorOutline,
+                    contentDescription = null,
+                    tint = Color(0xFFEF4444),
+                    modifier = Modifier.size(40.dp)
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = "Playback Error",
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 15.sp
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = playbackError ?: "Error loading stream",
+                    color = Color(0xFF94A3B8),
+                    fontSize = 12.sp,
+                    textAlign = TextAlign.Center
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                Button(
+                    onClick = {
+                        try {
+                            val intent = Intent(Intent.ACTION_VIEW).apply {
+                                setDataAndType(Uri.parse(streamUrl), "video/*")
+                                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION
+                            }
+                            context.startActivity(intent)
+                        } catch (e: Exception) {
+                            Toast.makeText(context, "No external video player found", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF7E22CE)),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Try External Player")
                 }
             }
         }

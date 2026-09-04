@@ -314,8 +314,27 @@ export class FileController {
 
       res.setHeader('Content-Type', file.mimeType);
       res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(file.filename)}"`);
+      res.setHeader('Accept-Ranges', 'bytes');
 
-      const driveStream = await GoogleDriveService.getFileStream(account, latestVersion.providerFileId);
+      const range = req.headers.range;
+      const driveStream = await GoogleDriveService.getFileStream(account, latestVersion.providerFileId, range);
+
+      if (driveStream.status === 206) {
+        res.status(206);
+        if (driveStream.headers['content-range']) {
+          res.setHeader('Content-Range', driveStream.headers['content-range']);
+        }
+        if (driveStream.headers['content-length']) {
+          res.setHeader('Content-Length', driveStream.headers['content-length']);
+        }
+      } else {
+        if (driveStream.headers['content-length']) {
+          res.setHeader('Content-Length', driveStream.headers['content-length']);
+        } else if (latestVersion.sizeBytes) {
+          res.setHeader('Content-Length', latestVersion.sizeBytes.toString());
+        }
+      }
+
       driveStream.data.pipe(res);
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -334,10 +353,20 @@ export class FileController {
         return;
       }
 
-      // If file has a direct thumbnail link stored
-      if (file.metadata?.thumbnail && file.metadata.thumbnail.startsWith('http')) {
-        res.redirect(file.metadata.thumbnail);
-        return;
+      // If file has a direct thumbnail link stored (URL or base64 data URI)
+      if (file.metadata?.thumbnail) {
+        if (file.metadata.thumbnail.startsWith('http')) {
+          res.redirect(file.metadata.thumbnail);
+          return;
+        } else if (file.metadata.thumbnail.startsWith('data:image/')) {
+          const matches = file.metadata.thumbnail.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+          if (matches && matches.length === 3) {
+            res.setHeader('Content-Type', matches[1]);
+            res.setHeader('Cache-Control', 'public, max-age=86400');
+            res.send(Buffer.from(matches[2], 'base64'));
+            return;
+          }
+        }
       }
 
       const latestVersion = file.versions[file.versions.length - 1];
@@ -358,12 +387,14 @@ export class FileController {
         const drive = google.drive({ version: 'v3', auth: oauth2Client });
         let actualFileId = latestVersion.providerFileId;
         if (actualFileId.startsWith('blob_') || actualFileId.startsWith('file_') || actualFileId.includes('.enc')) {
-          const query = (!actualFileId.includes('.') && actualFileId.startsWith('file_'))
-            ? `name contains '${actualFileId}' and trashed = false`
+          const lastUnderscore = actualFileId.lastIndexOf('_');
+          const baseName = lastUnderscore !== -1 ? actualFileId.substring(lastUnderscore + 1) : actualFileId;
+          const query = (baseName && baseName.includes('.'))
+            ? `name contains '${baseName}' and trashed = false`
             : `name = '${actualFileId}' and trashed = false`;
           const listRes = await drive.files.list({
             q: query,
-            fields: 'files(id, name)',
+            fields: 'files(id, name, thumbnailLink)',
             pageSize: 1,
           });
           if (listRes.data.files?.[0]?.id) {
@@ -377,10 +408,17 @@ export class FileController {
         });
 
         if (meta.data.thumbnailLink) {
-          const tokenRes = await oauth2Client.getAccessToken();
-          const thumbRes = await fetch(meta.data.thumbnailLink, {
-            headers: tokenRes.token ? { Authorization: `Bearer ${tokenRes.token}` } : {},
-          });
+          // Google thumbnailLink is usually on lh3.googleusercontent.com
+          // First attempt fetch without Bearer header (many Google CDN links reject Bearer with 401/403)
+          let thumbRes = await fetch(meta.data.thumbnailLink);
+          if (!thumbRes.ok) {
+            const tokenRes = await oauth2Client.getAccessToken();
+            if (tokenRes.token) {
+              thumbRes = await fetch(meta.data.thumbnailLink, {
+                headers: { Authorization: `Bearer ${tokenRes.token}` },
+              });
+            }
+          }
           if (thumbRes.ok) {
             res.setHeader('Content-Type', thumbRes.headers.get('content-type') || 'image/jpeg');
             res.setHeader('Cache-Control', 'public, max-age=86400');
@@ -390,7 +428,26 @@ export class FileController {
           }
         }
       } catch (thumbErr) {
-        // Fallback to streaming main file with caching
+        // Fallback below
+      }
+
+      // If it is a video and no thumbnail image exists, return a crisp SVG video poster
+      if (file.mimeType.startsWith('video/')) {
+        const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="320" height="320" viewBox="0 0 320 320">
+  <defs>
+    <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#181824"/>
+      <stop offset="100%" stop-color="#0E0E17"/>
+    </linearGradient>
+  </defs>
+  <rect width="320" height="320" fill="url(#g)"/>
+  <circle cx="160" cy="160" r="46" fill="#7C3AED" opacity="0.9"/>
+  <polygon points="152,143 176,160 152,177" fill="#FFFFFF"/>
+</svg>`;
+        res.setHeader('Content-Type', 'image/svg+xml');
+        res.setHeader('Cache-Control', 'public, max-age=86400');
+        res.send(svg);
+        return;
       }
 
       // Fallback: stream file with client-side cache headers

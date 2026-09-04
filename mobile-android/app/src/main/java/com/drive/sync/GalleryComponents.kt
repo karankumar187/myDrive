@@ -7,9 +7,11 @@ import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import android.media.MediaPlayer
 import android.widget.MediaController
 import android.widget.Toast
 import android.widget.VideoView
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.animation.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.gestures.*
@@ -996,6 +998,26 @@ fun FullGalleryScreen(
                                     }
                                 )
                         ) {
+                            if (isVideo) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .background(
+                                            Brush.verticalGradient(
+                                                listOf(Color(0xFF261044), Color(0xFF101018))
+                                            )
+                                        ),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        Icons.Default.PlayArrow,
+                                        contentDescription = null,
+                                        tint = Color(0xFFA855F7).copy(alpha = 0.75f),
+                                        modifier = Modifier.size(34.dp)
+                                    )
+                                }
+                            }
+
                             // Thumbnail image
                             AsyncImage(
                                 model = ImageRequest.Builder(LocalContext.current)
@@ -1345,19 +1367,99 @@ fun FullScreenPhotoViewer(
                 contentAlignment = Alignment.Center
             ) {
                 if (isVideo) {
-                    // Inline Android VideoView with media controller
-                    AndroidView(
-                        factory = { ctx ->
-                            VideoView(ctx).apply {
-                                val mc = MediaController(ctx)
-                                mc.setAnchorView(this)
-                                setMediaController(mc)
-                                setVideoURI(Uri.parse(streamUrl))
-                                setOnPreparedListener { start() }
+                    key(currentItem.id) {
+                        var isBuffering by remember { mutableStateOf(true) }
+                        var playbackError by remember { mutableStateOf<String?>(null) }
+                        var videoViewRef by remember { mutableStateOf<VideoView?>(null) }
+
+                        DisposableEffect(currentItem.id) {
+                            onDispose {
+                                videoViewRef?.stopPlayback()
                             }
-                        },
-                        modifier = Modifier.fillMaxSize()
-                    )
+                        }
+
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            AndroidView(
+                                factory = { ctx ->
+                                    VideoView(ctx).apply {
+                                        videoViewRef = this
+                                        val mc = MediaController(ctx)
+                                        mc.setAnchorView(this)
+                                        setMediaController(mc)
+
+                                        setOnPreparedListener { mp ->
+                                            isBuffering = false
+                                            playbackError = null
+                                            mp.isLooping = false
+                                            start()
+                                        }
+
+                                        setOnInfoListener { _, what, _ ->
+                                            if (what == MediaPlayer.MEDIA_INFO_BUFFERING_START) isBuffering = true
+                                            else if (what == MediaPlayer.MEDIA_INFO_BUFFERING_END) isBuffering = false
+                                            true
+                                        }
+
+                                        setOnErrorListener { _, what, extra ->
+                                            isBuffering = false
+                                            playbackError = "Unable to stream video ($what, $extra)"
+                                            true
+                                        }
+
+                                        setVideoURI(Uri.parse(streamUrl))
+                                    }
+                                },
+                                modifier = Modifier.fillMaxSize()
+                            )
+
+                            if (isBuffering && playbackError == null) {
+                                CircularProgressIndicator(
+                                    color = Color(0xFFA855F7),
+                                    modifier = Modifier.size(48.dp)
+                                )
+                            }
+
+                            if (playbackError != null) {
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    modifier = Modifier
+                                        .background(Color(0xFF0F0F14).copy(alpha = 0.94f), RoundedCornerShape(16.dp))
+                                        .padding(24.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.ErrorOutline,
+                                        contentDescription = null,
+                                        tint = Color(0xFFEF4444),
+                                        modifier = Modifier.size(36.dp)
+                                    )
+                                    Spacer(modifier = Modifier.height(10.dp))
+                                    Text("Playback Error", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(playbackError ?: "", color = Color(0xFF94A3B8), fontSize = 12.sp)
+                                    Spacer(modifier = Modifier.height(14.dp))
+                                    Button(
+                                        onClick = {
+                                            try {
+                                                val intent = Intent(Intent.ACTION_VIEW).apply {
+                                                    setDataAndType(Uri.parse(streamUrl), "video/*")
+                                                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION
+                                                }
+                                                context.startActivity(intent)
+                                            } catch (e: Exception) {
+                                                Toast.makeText(context, "No external video player found", Toast.LENGTH_SHORT).show()
+                                            }
+                                        },
+                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF7E22CE))
+                                    ) {
+                                        Text("Open in External Player")
+                                    }
+                                }
+                            }
+                        }
+                    }
                 } else {
                     AsyncImage(
                         model = ImageRequest.Builder(LocalContext.current)
@@ -1455,6 +1557,24 @@ fun FullScreenPhotoViewer(
                                     onOpenMove()
                                 }
                             )
+                            if (isVideo) {
+                                DropdownMenuItem(
+                                    text = { Text("Open in External Player", color = Color.White) },
+                                    leadingIcon = { Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null, tint = Color(0xFFA855F7)) },
+                                    onClick = {
+                                        isMoreMenuOpen = false
+                                        try {
+                                            val intent = Intent(Intent.ACTION_VIEW).apply {
+                                                setDataAndType(Uri.parse(streamUrl), "video/*")
+                                                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION
+                                            }
+                                            context.startActivity(intent)
+                                        } catch (e: Exception) {
+                                            Toast.makeText(context, "No video player available", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                )
+                            }
                             DropdownMenuItem(
                                 text = { Text("Share", color = Color.White) },
                                 leadingIcon = { Icon(Icons.Default.Share, contentDescription = null, tint = Color.LightGray) },

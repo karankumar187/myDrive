@@ -176,7 +176,7 @@ export class GoogleDriveService {
   /**
    * Streams a file from Google Drive for client download or browser decryption.
    */
-  static async getFileStream(account: IStorageAccountDocument, providerFileId: string) {
+  static async getFileStream(account: IStorageAccountDocument, providerFileId: string, rangeHeader?: string): Promise<any> {
     const oauth2Client = this.getOAuth2Client(account);
     const drive = google.drive({ version: 'v3', auth: oauth2Client });
 
@@ -185,8 +185,10 @@ export class GoogleDriveService {
     // If providerFileId is an opaque filename rather than a Google Drive file ID, look it up by name
     if (providerFileId.startsWith('blob_') || providerFileId.startsWith('file_') || providerFileId.includes('.enc')) {
       try {
-        const query = (!providerFileId.includes('.') && providerFileId.startsWith('file_'))
-          ? `name contains '${providerFileId}' and trashed = false`
+        const lastUnderscore = providerFileId.lastIndexOf('_');
+        const baseName = lastUnderscore !== -1 ? providerFileId.substring(lastUnderscore + 1) : providerFileId;
+        const query = (baseName && baseName.includes('.'))
+          ? `name contains '${baseName}' and trashed = false`
           : `name = '${providerFileId}' and trashed = false`;
         const listRes = await drive.files.list({
           q: query,
@@ -201,12 +203,17 @@ export class GoogleDriveService {
       }
     }
 
+    const requestOptions: any = { responseType: 'stream' };
+    if (rangeHeader) {
+      requestOptions.headers = { Range: rangeHeader };
+    }
+
     return await drive.files.get(
       {
         fileId: actualFileId,
         alt: 'media',
       },
-      { responseType: 'stream' }
+      requestOptions
     );
   }
 
