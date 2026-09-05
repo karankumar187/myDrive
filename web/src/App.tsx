@@ -325,7 +325,8 @@ export const App: React.FC = () => {
 
   const handleGoogleLogin = () => {
     const apiBase = import.meta.env.VITE_API_URL || '';
-    window.location.href = `${apiBase}/api/v1/auth/google`;
+    const currentOrigin = typeof window !== 'undefined' ? encodeURIComponent(window.location.origin) : '';
+    window.location.href = `${apiBase}/api/v1/auth/google?client_url=${currentOrigin}`;
   };
 
   const handleConnectDrive = async () => {

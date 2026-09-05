@@ -160,7 +160,8 @@ export const api = {
   },
 
   async getConnectUrl(): Promise<{ url: string }> {
-    const res = await fetchWithLoading(`${API_BASE}/storage/connect/url`, { headers: getHeaders() });
+    const currentOrigin = typeof window !== 'undefined' ? encodeURIComponent(window.location.origin) : '';
+    const res = await fetchWithLoading(`${API_BASE}/storage/connect/url?client_url=${currentOrigin}`, { headers: getHeaders() });
     if (!res.ok) throw new Error('Failed to get Google Drive connection URL');
     return res.json();
   },

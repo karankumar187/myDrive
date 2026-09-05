@@ -43,9 +43,23 @@ export class StorageController {
    */
   static async getConnectUrl(req: Request, res: Response): Promise<void> {
     try {
-      // Encode user ID into encrypted state token to prevent CSRF
+      const rawOrigin = (req.query.client_url as string) || req.headers.referer || '';
+      let targetClientOrigin = '';
+      if (rawOrigin) {
+        try {
+          targetClientOrigin = new URL(rawOrigin).origin;
+        } catch {
+          targetClientOrigin = rawOrigin;
+        }
+      }
+
+      // Encode user ID and clientUrl into encrypted state token to prevent CSRF
       const statePayload = CryptoService.encrypt(
-        JSON.stringify({ userId: req.user!._id.toString(), timestamp: Date.now() })
+        JSON.stringify({
+          userId: req.user!._id.toString(),
+          clientUrl: targetClientOrigin,
+          timestamp: Date.now(),
+        })
       );
       const state = Buffer.from(JSON.stringify(statePayload)).toString('base64url');
 
@@ -60,10 +74,10 @@ export class StorageController {
    * Callback from Google OAuth when linking a new Drive storage account.
    */
   static async connectCallback(req: Request, res: Response): Promise<void> {
+    let clientUrl = (process.env.CLIENT_URL || 'https://mydrive-frontend.karan9302451907.workers.dev').split(',')[0].trim();
     try {
       const code = req.query.code as string;
       const state = req.query.state as string;
-      const clientUrl = (process.env.CLIENT_URL || 'http://localhost:5173').split(',')[0].trim();
 
       if (!code || !state) {
         return res.redirect(`${clientUrl}/?error=missing_code_or_state`);
@@ -73,6 +87,9 @@ export class StorageController {
       const stateJson = Buffer.from(state, 'base64url').toString('utf8');
       const decryptedState = JSON.parse(CryptoService.decrypt(JSON.parse(stateJson)));
       const userId = decryptedState.userId;
+      if (decryptedState.clientUrl) {
+        clientUrl = decryptedState.clientUrl;
+      }
 
       // Exchange code for permanent refresh token and account info
       const tokens = await GoogleDriveService.exchangeCodeForTokens(code);
@@ -118,7 +135,6 @@ export class StorageController {
       res.redirect(`${clientUrl}/?success=account_connected&email=${encodeURIComponent(tokens.email)}`);
     } catch (error: any) {
       console.error('Error linking storage account:', error);
-      const clientUrl = (process.env.CLIENT_URL || 'http://localhost:5173').split(',')[0].trim();
       res.redirect(`${clientUrl}/?error=${encodeURIComponent(error.message)}`);
     }
   }

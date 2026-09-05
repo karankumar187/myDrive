@@ -7,18 +7,44 @@ export class AuthController {
   /**
    * Triggers Passport Google OAuth flow for App User Authentication.
    */
-  static googleLogin = passport.authenticate('google', {
-    scope: ['openid', 'profile', 'email'],
-    session: false,
-    prompt: 'select_account',
-  });
+  static googleLogin = (req: Request, res: Response, next: any) => {
+    const rawOrigin = (req.query.client_url as string) || req.headers.referer || '';
+    let targetClientOrigin = '';
+    if (rawOrigin) {
+      try {
+        targetClientOrigin = new URL(rawOrigin).origin;
+      } catch {
+        targetClientOrigin = rawOrigin;
+      }
+    }
+
+    const state = targetClientOrigin ? Buffer.from(JSON.stringify({ clientUrl: targetClientOrigin })).toString('base64url') : undefined;
+
+    passport.authenticate('google', {
+      scope: ['openid', 'profile', 'email'],
+      session: false,
+      prompt: 'select_account',
+      state,
+    })(req, res, next);
+  };
 
   /**
    * Google OAuth Callback handler. Issues JWT session and redirects to Web Client.
    */
   static googleCallback(req: Request, res: Response): void {
     passport.authenticate('google', { session: false }, (err: any, user: any) => {
-      const clientUrl = (process.env.CLIENT_URL || 'http://localhost:5173').split(',')[0].trim();
+      let clientUrl = (process.env.CLIENT_URL || 'https://mydrive-frontend.karan9302451907.workers.dev').split(',')[0].trim();
+
+      // Check if original frontend origin was passed in state
+      if (req.query.state) {
+        try {
+          const decodedState = JSON.parse(Buffer.from(req.query.state as string, 'base64url').toString('utf8'));
+          if (decodedState.clientUrl) {
+            clientUrl = decodedState.clientUrl;
+          }
+        } catch {}
+      }
+
       if (err || !user) {
         return res.redirect(`${clientUrl}/?error=auth_failed`);
       }
