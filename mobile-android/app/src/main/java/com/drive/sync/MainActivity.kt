@@ -126,6 +126,7 @@ data class CloudMedia(
     val width: Int? = null,
     val height: Int? = null,
     val duration: Double? = null,
+    val thumbnail: String? = null,
     val cameraMake: String? = null,
     val cameraModel: String? = null,
     val latitude: Double? = null,
@@ -997,6 +998,30 @@ fun MainAppScreen(
                             var providerFileId = try { if (putBody.isNotBlank()) org.json.JSONObject(putBody).optString("id", "") else "" } catch (_: Exception) { "" }
                             if (providerFileId.isBlank()) providerFileId = driveOpaqueName
 
+                            // Extract video frame thumbnail locally if video
+                            var videoThumbBase64: String? = null
+                            val isVideo = mimeType.startsWith("video/") ||
+                                filename.lowercase().matches(Regex(".*\\.(mp4|mov|m4v|mkv|webm|avi|wmv|flv|3gp|ts)$"))
+                            if (isVideo) {
+                                try {
+                                    val bitmap = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                                        context.contentResolver.loadThumbnail(contentUri, android.util.Size(320, 320), null)
+                                    } else {
+                                        val retriever = android.media.MediaMetadataRetriever()
+                                        retriever.setDataSource(context, contentUri)
+                                        val frame = retriever.getFrameAtTime(1000000)
+                                        retriever.release()
+                                        frame
+                                    }
+                                    if (bitmap != null) {
+                                        val out = ByteArrayOutputStream()
+                                        bitmap.compress(Bitmap.CompressFormat.JPEG, 75, out)
+                                        val b64 = android.util.Base64.encodeToString(out.toByteArray(), android.util.Base64.NO_WRAP)
+                                        videoThumbBase64 = "data:image/jpeg;base64,$b64"
+                                    }
+                                } catch (_: Exception) {}
+                            }
+
                             val completeJson = org.json.JSONObject().apply {
                                 put("filename", filename); put("mimeType", mimeType)
                                 put("sizeBytes", sizeBytes); put("contentHash", hash)
@@ -1005,6 +1030,9 @@ fun MainAppScreen(
                                 put("driveOpaqueName", driveOpaqueName)
                                 put("deviceAssetId", id.toString())
                                 targetFolder?.let { put("folderId", it) }
+                                if (!videoThumbBase64.isNullOrBlank()) {
+                                    put("thumbnail", videoThumbBase64)
+                                }
                             }
                             httpClient.newCall(
                                 Request.Builder()
@@ -1278,6 +1306,7 @@ fun MainAppScreen(
                                                         width = if (meta != null && meta.has("width")) meta.optInt("width") else null,
                                                         height = if (meta != null && meta.has("height")) meta.optInt("height") else null,
                                                         duration = if (meta != null && meta.has("duration")) meta.optDouble("duration") else null,
+                                                        thumbnail = meta?.optString("thumbnail")?.ifBlank { null },
                                                         cameraMake = meta?.optString("cameraMake")?.ifBlank { null },
                                                         cameraModel = meta?.optString("cameraModel")?.ifBlank { null },
                                                         latitude = if (meta != null && meta.has("latitude")) meta.optDouble("latitude") else null,
@@ -1829,6 +1858,30 @@ fun MainAppScreen(
                                         providerFileId = driveOpaqueName
                                     }
 
+                                    // Extract video frame thumbnail locally if video
+                                    var videoThumbBase64: String? = null
+                                    val isVideo = mimeType.startsWith("video/") ||
+                                        filename.lowercase().matches(Regex(".*\\.(mp4|mov|m4v|mkv|webm|avi|wmv|flv|3gp|ts)$"))
+                                    if (isVideo) {
+                                        try {
+                                            val bitmap = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                                                context.contentResolver.loadThumbnail(uri, android.util.Size(320, 320), null)
+                                            } else {
+                                                val retriever = android.media.MediaMetadataRetriever()
+                                                retriever.setDataSource(context, uri)
+                                                val frame = retriever.getFrameAtTime(1000000)
+                                                retriever.release()
+                                                frame
+                                            }
+                                            if (bitmap != null) {
+                                                val out = ByteArrayOutputStream()
+                                                bitmap.compress(Bitmap.CompressFormat.JPEG, 75, out)
+                                                val b64 = android.util.Base64.encodeToString(out.toByteArray(), android.util.Base64.NO_WRAP)
+                                                videoThumbBase64 = "data:image/jpeg;base64,$b64"
+                                            }
+                                        } catch (_: Exception) {}
+                                    }
+
                                     val compJson = JSONObject().apply {
                                         put("filename", filename)
                                         put("mimeType", mimeType)
@@ -1839,6 +1892,9 @@ fun MainAppScreen(
                                         put("driveOpaqueName", driveOpaqueName)
                                         if (targetFolderId.isNotBlank()) {
                                             put("folderId", targetFolderId)
+                                        }
+                                        if (!videoThumbBase64.isNullOrBlank()) {
+                                            put("thumbnail", videoThumbBase64)
                                         }
                                     }
                                     val compReq = Request.Builder()
@@ -4592,7 +4648,9 @@ fun MediaViewerDialog(
                     } else if (isVideo) {
                         VideoPlayer(
                             streamUrl = resolvedVideoUrl,
-                            filename = file.filename
+                            filename = file.filename,
+                            deviceId = deviceId,
+                            deviceKey = deviceKey
                         )
                     } else if (isPdf) {
                         PdfViewer(
@@ -4662,6 +4720,8 @@ fun MediaViewerDialog(
 fun VideoPlayer(
     streamUrl: String,
     filename: String,
+    deviceId: String = "",
+    deviceKey: String = "",
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -4711,7 +4771,15 @@ fun VideoPlayer(
                         true
                     }
 
-                    setVideoURI(Uri.parse(streamUrl))
+                    val headers = if (deviceId.isNotBlank() && deviceKey.isNotBlank()) {
+                        mapOf("x-device-id" to deviceId, "x-device-key" to deviceKey)
+                    } else emptyMap()
+
+                    if (headers.isNotEmpty()) {
+                        setVideoURI(Uri.parse(streamUrl), headers)
+                    } else {
+                        setVideoURI(Uri.parse(streamUrl))
+                    }
                 }
             },
             modifier = Modifier.fillMaxSize()

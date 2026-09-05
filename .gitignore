@@ -32,6 +32,8 @@ yarn-debug.log*
 
 # Android Build
 mobile-android/.gradle/
+mobile-android/.kotlin/
+.kotlin/
 mobile-android/app/build/
 mobile-android/build/
 mobile-android/local.properties

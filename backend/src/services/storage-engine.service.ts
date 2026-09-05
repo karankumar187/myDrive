@@ -248,9 +248,20 @@ export class StorageEngineService {
     const existingFile = await this.findExistingDuplicate(userId, contentHash, filename, sizeBytes);
 
     if (existingFile) {
-      // Content already exists! Link this device as a source without duplicate Drive storage
+      let needsSave = false;
       if (deviceId && !existingFile.sourceDeviceIds.includes(deviceId)) {
         existingFile.sourceDeviceIds.push(deviceId);
+        needsSave = true;
+      }
+      if (metadata?.thumbnail && (!existingFile.metadata?.thumbnail || existingFile.metadata.thumbnail.startsWith('http'))) {
+        existingFile.metadata = { ...(existingFile.metadata || {}), thumbnail: metadata.thumbnail };
+        needsSave = true;
+      }
+      if (existingFile.mimeType === 'application/octet-stream' && mimeType !== 'application/octet-stream') {
+        existingFile.mimeType = mimeType;
+        needsSave = true;
+      }
+      if (needsSave) {
         await existingFile.save();
       }
 

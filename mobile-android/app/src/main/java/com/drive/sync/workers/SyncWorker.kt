@@ -366,7 +366,9 @@ class SyncWorker(
 
                 // Extract video frame thumbnail locally if video
                 var videoThumbBase64: String? = null
-                if (mimeType.startsWith("video/")) {
+                val isVideo = mimeType.startsWith("video/") ||
+                    filename.lowercase().matches(Regex(".*\\.(mp4|mov|m4v|mkv|webm|avi|wmv|flv|3gp|ts)$"))
+                if (isVideo) {
                     try {
                         val bitmap = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                             applicationContext.contentResolver.loadThumbnail(contentUri, Size(320, 320), null)

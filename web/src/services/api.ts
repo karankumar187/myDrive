@@ -214,6 +214,20 @@ export const api = {
     return `${API_BASE}/files/${fileId}/thumbnail${token ? `?token=${encodeURIComponent(token)}` : ''}`;
   },
 
+  async updateThumbnail(fileId: string, thumbnail: string): Promise<any> {
+    try {
+      const res = await fetch(`${API_BASE}/files/${fileId}/thumbnail`, {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify({ thumbnail }),
+      });
+      if (!res.ok) return null;
+      return await res.json();
+    } catch {
+      return null;
+    }
+  },
+
   async toggleFavorite(fileId: string, isFavorite?: boolean): Promise<{ success: boolean; isFavorite: boolean }> {
     const res = await fetchWithLoading(`${API_BASE}/files/${fileId}/favorite`, {
       method: 'PATCH',

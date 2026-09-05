@@ -476,8 +476,9 @@ private fun GalleryMediaTile(
 ) {
     val context = LocalContext.current
     val isVideo = item.mimeType.startsWith("video/")
-    val thumbUrl = remember(item.id, serverUrl, deviceId, deviceKey) {
-        "${serverUrl.trimEnd('/')}/api/v1/files/${item.id}/thumbnail?deviceId=$deviceId&deviceKey=$deviceKey"
+    val thumbUrl = remember(item.id, item.thumbnail) {
+        item.thumbnail?.takeIf { it.isNotBlank() }
+            ?: "${serverUrl.trimEnd('/')}/api/v1/files/${item.id}/thumbnail?deviceId=$deviceId&deviceKey=$deviceKey"
     }
 
     val imageRequest = remember(item.id, thumbUrl) {
@@ -485,8 +486,8 @@ private fun GalleryMediaTile(
             .data(thumbUrl)
             .addHeader("x-device-id", deviceId)
             .addHeader("x-device-key", deviceKey)
-            .size(Size(240, 240))
-            .precision(Precision.INEXACT)
+            .size(Size(480, 480))
+            .precision(Precision.EXACT)
             .memoryCacheKey("thumb_${item.id}")
             .diskCacheKey("thumb_${item.id}")
             .crossfade(false)
@@ -1707,7 +1708,15 @@ fun FullScreenPhotoViewer(
                                             true
                                         }
 
-                                        setVideoURI(Uri.parse(playUrl))
+                                        val headers = if (deviceId.isNotBlank() && deviceKey.isNotBlank()) {
+                                            mapOf("x-device-id" to deviceId, "x-device-key" to deviceKey)
+                                        } else emptyMap()
+
+                                        if (headers.isNotEmpty()) {
+                                            setVideoURI(Uri.parse(playUrl), headers)
+                                        } else {
+                                            setVideoURI(Uri.parse(playUrl))
+                                        }
                                     }
                                 },
                                 modifier = Modifier.fillMaxSize()
@@ -1757,44 +1766,28 @@ fun FullScreenPhotoViewer(
                     }
                 } else {
                     key(currentItem.id) {
-                        var isImageLoading by remember { mutableStateOf(true) }
-                        var isImageError by remember { mutableStateOf(false) }
-                        val thumbUrl = "${serverUrl.trimEnd('/')}/api/v1/files/${currentItem.id}/thumbnail?deviceId=$deviceId&deviceKey=$deviceKey"
+                        var isImageLoading by remember(currentItem.id) { mutableStateOf(true) }
+                        var isImageError by remember(currentItem.id) { mutableStateOf(false) }
+                        val thumbData = currentItem.thumbnail?.takeIf { it.isNotBlank() }
+                            ?: "${serverUrl.trimEnd('/')}/api/v1/files/${currentItem.id}/thumbnail?deviceId=$deviceId&deviceKey=$deviceKey"
 
                         Box(
                             modifier = Modifier.fillMaxSize(),
                             contentAlignment = Alignment.Center
                         ) {
-                            // While high-res loads: show previous image (or thumbnail) — no spinner or loading screen
+                            // While high-res loads: show matching thumbnail of the CURRENT image — no distorted mismatch from previous photos!
                             if (isImageLoading && !isImageError) {
-                                val prevUrl = prevImageUrl
-                                if (prevUrl != null) {
-                                    // Previous image kept clear and crisp — seamless transition without blank screen or loading spinner
-                                    AsyncImage(
-                                        model = ImageRequest.Builder(context)
-                                            .data(prevUrl)
-                                            .addHeader("x-device-id", deviceId)
-                                            .addHeader("x-device-key", deviceKey)
-                                            .crossfade(false)
-                                            .build(),
-                                        contentDescription = null,
-                                        modifier = Modifier.fillMaxSize(),
-                                        contentScale = ContentScale.Fit
-                                    )
-                                } else {
-                                    // First-ever image: show thumbnail while full-res loads
-                                    AsyncImage(
-                                        model = ImageRequest.Builder(context)
-                                            .data(thumbUrl)
-                                            .addHeader("x-device-id", deviceId)
-                                            .addHeader("x-device-key", deviceKey)
-                                            .crossfade(false)
-                                            .build(),
-                                        contentDescription = null,
-                                        modifier = Modifier.fillMaxSize(),
-                                        contentScale = ContentScale.Fit
-                                    )
-                                }
+                                AsyncImage(
+                                    model = ImageRequest.Builder(context)
+                                        .data(thumbData)
+                                        .addHeader("x-device-id", deviceId)
+                                        .addHeader("x-device-key", deviceKey)
+                                        .crossfade(false)
+                                        .build(),
+                                    contentDescription = null,
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentScale = ContentScale.Fit
+                                )
                             }
 
                             AsyncImage(
@@ -1806,7 +1799,6 @@ fun FullScreenPhotoViewer(
                                     .build(),
                                 contentDescription = currentItem.filename,
                                 onSuccess = {
-                                    prevImageUrl = streamUrl
                                     isImageLoading = false
                                     isViewerMediaLoading = false
                                 },
@@ -1821,8 +1813,7 @@ fun FullScreenPhotoViewer(
                                         scaleX = scale,
                                         scaleY = scale,
                                         translationX = offset.x,
-                                        translationY = offset.y,
-                                        alpha = if (isImageLoading) 0f else 1f
+                                        translationY = offset.y
                                     ),
                                 contentScale = ContentScale.Fit
                             )

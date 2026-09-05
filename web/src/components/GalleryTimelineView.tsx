@@ -32,7 +32,7 @@ import {
   Send,
 } from 'lucide-react';
 import { VaultCryptoService } from '../services/vault-crypto.js';
-import { mediaCache, mediaQueue } from '../services/media-cache.js';
+import { mediaCache, mediaQueue, isVideoFile, extractVideoThumbnailFromUrl } from '../services/media-cache.js';
 import { getStreamUrl, formatBytes, formatDate, formatDateTime } from '../utils/format.js';
 import { api, startGlobalLoading, subscribeToProgress, GlobalProgressState } from '../services/api.js';
 
@@ -105,8 +105,8 @@ export const GalleryTimelineView: React.FC<Props> = ({ media, vaultKey, onOpenVa
   // Filtered media based on filterType, selectedDeviceFilters, and searchQuery
   const filteredMedia = useMemo(() => {
     return localMediaList.filter((item) => {
-      const isVideo = item.mimeType.startsWith('video/');
-      const isPhoto = item.mimeType.startsWith('image/');
+      const isVideo = isVideoFile(item.mimeType) || isVideoFile(item.filename);
+      const isPhoto = item.mimeType.startsWith('image/') || /\.(jpg|jpeg|png|webp|gif|heic|svg|bmp)$/i.test(item.filename);
 
       if (filterType === 'favorites' && !item.isFavorite) return false;
       if (filterType === 'videos' && !isVideo) return false;
@@ -318,7 +318,10 @@ export const GalleryTimelineView: React.FC<Props> = ({ media, vaultKey, onOpenVa
           {/* Filter Dropdown */}
           <div className="relative">
             <button
-              onClick={() => setIsFilterDropdownOpen(!isFilterDropdownOpen)}
+              onClick={() => {
+                setIsFilterDropdownOpen(!isFilterDropdownOpen);
+                setIsDeviceDropdownOpen(false);
+              }}
               className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-[#181822] hover:bg-[#222230] text-zinc-200 border border-[#2d2d3d] transition active:scale-95"
             >
               <span>
@@ -331,60 +334,69 @@ export const GalleryTimelineView: React.FC<Props> = ({ media, vaultKey, onOpenVa
             </button>
 
             {isFilterDropdownOpen && (
-              <div
-                className="absolute left-0 mt-2 w-44 bg-[#181822] border border-[#2d2d3d] rounded-xl shadow-2xl z-30 py-1 overflow-hidden"
-                onClick={() => setIsFilterDropdownOpen(false)}
-              >
-                <button
-                  onClick={() => setFilterType('all')}
-                  className={`w-full px-3 py-2 text-left text-xs flex items-center justify-between hover:bg-purple-900/30 ${
-                    filterType === 'all' ? 'text-purple-300 font-semibold bg-purple-950/40' : 'text-zinc-300'
-                  }`}
+              <>
+                <div
+                  className="fixed inset-0 z-20"
+                  onClick={() => setIsFilterDropdownOpen(false)}
+                />
+                <div
+                  className="absolute left-0 mt-2 w-44 bg-[#181822] border border-[#2d2d3d] rounded-xl shadow-2xl z-30 py-1 overflow-hidden"
+                  onClick={() => setIsFilterDropdownOpen(false)}
                 >
-                  <span>All Photos</span>
-                  {filterType === 'all' && <Check className="w-3.5 h-3.5 text-purple-400" />}
-                </button>
-                <button
-                  onClick={() => setFilterType('favorites')}
-                  className={`w-full px-3 py-2 text-left text-xs flex items-center justify-between hover:bg-purple-900/30 ${
-                    filterType === 'favorites' ? 'text-purple-300 font-semibold bg-purple-950/40' : 'text-zinc-300'
-                  }`}
-                >
-                  <span className="flex items-center">
-                    <Heart className="w-3 h-3 text-red-400 mr-1.5 fill-red-400" /> Favorites
-                  </span>
-                  {filterType === 'favorites' && <Check className="w-3.5 h-3.5 text-purple-400" />}
-                </button>
-                <button
-                  onClick={() => setFilterType('videos')}
-                  className={`w-full px-3 py-2 text-left text-xs flex items-center justify-between hover:bg-purple-900/30 ${
-                    filterType === 'videos' ? 'text-purple-300 font-semibold bg-purple-950/40' : 'text-zinc-300'
-                  }`}
-                >
-                  <span className="flex items-center">
-                    <Film className="w-3 h-3 text-purple-400 mr-1.5" /> Videos Only
-                  </span>
-                  {filterType === 'videos' && <Check className="w-3.5 h-3.5 text-purple-400" />}
-                </button>
-                <button
-                  onClick={() => setFilterType('photos')}
-                  className={`w-full px-3 py-2 text-left text-xs flex items-center justify-between hover:bg-purple-900/30 ${
-                    filterType === 'photos' ? 'text-purple-300 font-semibold bg-purple-950/40' : 'text-zinc-300'
-                  }`}
-                >
-                  <span className="flex items-center">
-                    <ImageIcon className="w-3 h-3 text-blue-400 mr-1.5" /> Photos Only
-                  </span>
-                  {filterType === 'photos' && <Check className="w-3.5 h-3.5 text-purple-400" />}
-                </button>
-              </div>
+                  <button
+                    onClick={() => setFilterType('all')}
+                    className={`w-full px-3 py-2 text-left text-xs flex items-center justify-between hover:bg-purple-900/30 ${
+                      filterType === 'all' ? 'text-purple-300 font-semibold bg-purple-950/40' : 'text-zinc-300'
+                    }`}
+                  >
+                    <span>All Photos</span>
+                    {filterType === 'all' && <Check className="w-3.5 h-3.5 text-purple-400" />}
+                  </button>
+                  <button
+                    onClick={() => setFilterType('favorites')}
+                    className={`w-full px-3 py-2 text-left text-xs flex items-center justify-between hover:bg-purple-900/30 ${
+                      filterType === 'favorites' ? 'text-purple-300 font-semibold bg-purple-950/40' : 'text-zinc-300'
+                    }`}
+                  >
+                    <span className="flex items-center">
+                      <Heart className="w-3 h-3 text-red-400 mr-1.5 fill-red-400" /> Favorites
+                    </span>
+                    {filterType === 'favorites' && <Check className="w-3.5 h-3.5 text-purple-400" />}
+                  </button>
+                  <button
+                    onClick={() => setFilterType('videos')}
+                    className={`w-full px-3 py-2 text-left text-xs flex items-center justify-between hover:bg-purple-900/30 ${
+                      filterType === 'videos' ? 'text-purple-300 font-semibold bg-purple-950/40' : 'text-zinc-300'
+                    }`}
+                  >
+                    <span className="flex items-center">
+                      <Film className="w-3 h-3 text-purple-400 mr-1.5" /> Videos Only
+                    </span>
+                    {filterType === 'videos' && <Check className="w-3.5 h-3.5 text-purple-400" />}
+                  </button>
+                  <button
+                    onClick={() => setFilterType('photos')}
+                    className={`w-full px-3 py-2 text-left text-xs flex items-center justify-between hover:bg-purple-900/30 ${
+                      filterType === 'photos' ? 'text-purple-300 font-semibold bg-purple-950/40' : 'text-zinc-300'
+                    }`}
+                  >
+                    <span className="flex items-center">
+                      <ImageIcon className="w-3 h-3 text-blue-400 mr-1.5" /> Photos Only
+                    </span>
+                    {filterType === 'photos' && <Check className="w-3.5 h-3.5 text-purple-400" />}
+                  </button>
+                </div>
+              </>
             )}
           </div>
 
           {/* Device Filter Dropdown with Checkboxes */}
           <div className="relative">
             <button
-              onClick={() => setIsDeviceDropdownOpen(!isDeviceDropdownOpen)}
+              onClick={() => {
+                setIsDeviceDropdownOpen(!isDeviceDropdownOpen);
+                setIsFilterDropdownOpen(false);
+              }}
               className={`inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-full text-xs font-semibold border transition active:scale-95 ${
                 selectedDeviceFilters.size > 0
                   ? 'bg-purple-950/50 text-purple-300 border-purple-600/60 shadow-glow-purple'
@@ -401,78 +413,84 @@ export const GalleryTimelineView: React.FC<Props> = ({ media, vaultKey, onOpenVa
             </button>
 
             {isDeviceDropdownOpen && (
-              <div
-                className="absolute left-0 mt-2 w-60 bg-[#181822] border border-[#2d2d3d] rounded-2xl shadow-2xl z-40 p-2 space-y-1 animate-in fade-in"
-              >
-                <div className="px-2 py-1 text-[11px] font-bold text-zinc-400 uppercase tracking-wider flex items-center justify-between border-b border-[#2d2d3d] pb-1.5 mb-1">
-                  <span>Filter by Upload Source</span>
-                  {selectedDeviceFilters.size > 0 && (
-                    <button
-                      onClick={() => setSelectedDeviceFilters(new Set())}
-                      className="text-purple-400 hover:text-purple-300 normal-case font-semibold text-[10px]"
-                    >
-                      Reset
-                    </button>
-                  )}
+              <>
+                <div
+                  className="fixed inset-0 z-30"
+                  onClick={() => setIsDeviceDropdownOpen(false)}
+                />
+                <div
+                  className="absolute left-0 mt-2 w-60 bg-[#181822] border border-[#2d2d3d] rounded-2xl shadow-2xl z-40 p-2 space-y-1 animate-in fade-in"
+                >
+                  <div className="px-2 py-1 text-[11px] font-bold text-zinc-400 uppercase tracking-wider flex items-center justify-between border-b border-[#2d2d3d] pb-1.5 mb-1">
+                    <span>Filter by Upload Source</span>
+                    {selectedDeviceFilters.size > 0 && (
+                      <button
+                        onClick={() => setSelectedDeviceFilters(new Set())}
+                        className="text-purple-400 hover:text-purple-300 normal-case font-semibold text-[10px]"
+                      >
+                        Reset
+                      </button>
+                    )}
+                  </div>
+
+                  {/* All Devices checkbox */}
+                  <label className="flex items-center space-x-2.5 px-2.5 py-1.5 rounded-xl hover:bg-[#232330] cursor-pointer text-xs text-white">
+                    <input
+                      type="checkbox"
+                      checked={selectedDeviceFilters.size === 0}
+                      onChange={() => setSelectedDeviceFilters(new Set())}
+                      className="w-4 h-4 rounded text-purple-600 focus:ring-purple-500 bg-[#121218] border-zinc-700"
+                    />
+                    <span className="font-semibold">All Devices</span>
+                  </label>
+
+                  {/* Paired devices checkboxes */}
+                  {devices.map((dev) => {
+                    const isChecked = selectedDeviceFilters.has(dev.deviceId);
+                    return (
+                      <label
+                        key={dev.deviceId}
+                        className="flex items-center space-x-2.5 px-2.5 py-1.5 rounded-xl hover:bg-[#232330] cursor-pointer text-xs text-zinc-200"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={() => {
+                            setSelectedDeviceFilters((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(dev.deviceId)) next.delete(dev.deviceId);
+                              else next.add(dev.deviceId);
+                              return next;
+                            });
+                          }}
+                          className="w-4 h-4 rounded text-purple-600 focus:ring-purple-500 bg-[#121218] border-zinc-700"
+                        />
+                        <span className="truncate flex-1 font-medium">{dev.deviceName}</span>
+                        <span className="text-[10px] text-zinc-500 uppercase">{dev.deviceType}</span>
+                      </label>
+                    );
+                  })}
+
+                  {/* Web / Unified Drive checkbox */}
+                  <label className="flex items-center space-x-2.5 px-2.5 py-1.5 rounded-xl hover:bg-[#232330] cursor-pointer text-xs text-zinc-200">
+                    <input
+                      type="checkbox"
+                      checked={selectedDeviceFilters.has('web')}
+                      onChange={() => {
+                        setSelectedDeviceFilters((prev) => {
+                          const next = new Set(prev);
+                          if (next.has('web')) next.delete('web');
+                          else next.add('web');
+                          return next;
+                        });
+                      }}
+                      className="w-4 h-4 rounded text-purple-600 focus:ring-purple-500 bg-[#121218] border-zinc-700"
+                    />
+                    <span className="truncate flex-1 font-medium">Unified Drive (Web)</span>
+                    <Cloud className="w-3.5 h-3.5 text-zinc-500" />
+                  </label>
                 </div>
-
-                {/* All Devices checkbox */}
-                <label className="flex items-center space-x-2.5 px-2.5 py-1.5 rounded-xl hover:bg-[#232330] cursor-pointer text-xs text-white">
-                  <input
-                    type="checkbox"
-                    checked={selectedDeviceFilters.size === 0}
-                    onChange={() => setSelectedDeviceFilters(new Set())}
-                    className="w-4 h-4 rounded text-purple-600 focus:ring-purple-500 bg-[#121218] border-zinc-700"
-                  />
-                  <span className="font-semibold">All Devices</span>
-                </label>
-
-                {/* Paired devices checkboxes */}
-                {devices.map((dev) => {
-                  const isChecked = selectedDeviceFilters.has(dev.deviceId);
-                  return (
-                    <label
-                      key={dev.deviceId}
-                      className="flex items-center space-x-2.5 px-2.5 py-1.5 rounded-xl hover:bg-[#232330] cursor-pointer text-xs text-zinc-200"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={isChecked}
-                        onChange={() => {
-                          setSelectedDeviceFilters((prev) => {
-                            const next = new Set(prev);
-                            if (next.has(dev.deviceId)) next.delete(dev.deviceId);
-                            else next.add(dev.deviceId);
-                            return next;
-                          });
-                        }}
-                        className="w-4 h-4 rounded text-purple-600 focus:ring-purple-500 bg-[#121218] border-zinc-700"
-                      />
-                      <span className="truncate flex-1 font-medium">{dev.deviceName}</span>
-                      <span className="text-[10px] text-zinc-500 uppercase">{dev.deviceType}</span>
-                    </label>
-                  );
-                })}
-
-                {/* Web / Unified Drive checkbox */}
-                <label className="flex items-center space-x-2.5 px-2.5 py-1.5 rounded-xl hover:bg-[#232330] cursor-pointer text-xs text-zinc-200">
-                  <input
-                    type="checkbox"
-                    checked={selectedDeviceFilters.has('web')}
-                    onChange={() => {
-                      setSelectedDeviceFilters((prev) => {
-                        const next = new Set(prev);
-                        if (next.has('web')) next.delete('web');
-                        else next.add('web');
-                        return next;
-                      });
-                    }}
-                    className="w-4 h-4 rounded text-purple-600 focus:ring-purple-500 bg-[#121218] border-zinc-700"
-                  />
-                  <span className="truncate flex-1 font-medium">Unified Drive (Web)</span>
-                  <Cloud className="w-3.5 h-3.5 text-zinc-500" />
-                </label>
-              </div>
+              </>
             )}
           </div>
         </div>
@@ -923,29 +941,56 @@ const GalleryGridTile: React.FC<{
   onToggleFavorite: () => void;
   onClick: () => void;
 }> = React.memo(({ item, vaultKey, isSelected, isSelectionMode, onToggleSelect, onToggleFavorite, onClick }) => {
-  const isVideo = item.mimeType.startsWith('video/');
+  const isVideo = isVideoFile(item.mimeType) || isVideoFile(item.filename);
   const isEncrypted = item.versions?.[item.versions.length - 1]?.isEncrypted || false;
   const [loadError, setLoadError] = useState(false);
 
-  // If local base64 thumbnail exists, use it. Otherwise, use fast /thumbnail endpoint.
-  const initialThumb = (item.metadata?.thumbnail && item.metadata.thumbnail.startsWith('data:image/'))
+  const hasRealThumb = item.metadata?.thumbnail && (
+    item.metadata.thumbnail.startsWith('data:image/') ||
+    item.metadata.thumbnail.startsWith('http')
+  );
+
+  // If local base64 thumbnail exists, use it. Otherwise, use cached blob or fast /thumbnail endpoint.
+  const initialThumb = (hasRealThumb && item.metadata?.thumbnail)
     ? item.metadata.thumbnail
-    : mediaCache.getThumbnail(item._id) || mediaCache.get(item._id) || api.getThumbnailUrl(item._id);
+    : (mediaCache.getThumbnail(item._id) || mediaCache.get(item._id) || api.getThumbnailUrl(item._id));
 
   const [thumbUrl, setThumbUrl] = useState<string | null>(initialThumb);
   const [loading, setLoading] = useState(!initialThumb);
 
   useEffect(() => {
     setLoadError(false);
-    const cached = mediaCache.get(item._id);
+    const cached = mediaCache.getThumbnail(item._id) || mediaCache.get(item._id);
     if (cached) {
       setThumbUrl(cached);
       setLoading(false);
       return;
     }
+
+    if (hasRealThumb && item.metadata?.thumbnail) {
+      setThumbUrl(item.metadata.thumbnail);
+      setLoading(false);
+      return;
+    }
+
     setThumbUrl(api.getThumbnailUrl(item._id));
     setLoading(false);
-  }, [item._id]);
+
+    // If it's a video and lacks an extracted frame thumbnail, generate one on client in background
+    if (isVideo) {
+      mediaQueue.enqueue(async () => {
+        try {
+          const streamUrl = getStreamUrl(item._id);
+          const captured = await extractVideoThumbnailFromUrl(streamUrl);
+          if (captured) {
+            setThumbUrl(captured);
+            mediaCache.saveThumbnail(item._id, captured);
+            api.updateThumbnail(item._id, captured).catch(() => {});
+          }
+        } catch {}
+      });
+    }
+  }, [item._id, isVideo, item.metadata?.thumbnail]);
 
   return (
     <div
@@ -970,11 +1015,25 @@ const GalleryGridTile: React.FC<{
           loading="lazy"
           decoding="async"
           onError={() => {
-            const fallbackUrl = getStreamUrl(item._id);
-            if (thumbUrl !== fallbackUrl) {
-              setThumbUrl(fallbackUrl);
+            if (isVideo) {
+              extractVideoThumbnailFromUrl(getStreamUrl(item._id)).then((captured) => {
+                if (captured) {
+                  setThumbUrl(captured);
+                  mediaCache.saveThumbnail(item._id, captured);
+                  api.updateThumbnail(item._id, captured).catch(() => {});
+                } else {
+                  setLoadError(true);
+                }
+              }).catch(() => {
+                setLoadError(true);
+              });
             } else {
-              setLoadError(true);
+              const fallbackUrl = getStreamUrl(item._id);
+              if (thumbUrl !== fallbackUrl) {
+                setThumbUrl(fallbackUrl);
+              } else {
+                setLoadError(true);
+              }
             }
           }}
         />
@@ -1072,7 +1131,7 @@ const FullScreenViewer: React.FC<{
   onOpenForceDownload,
 }) => {
   const item = mediaList[currentIndex];
-  const isVideo = item.mimeType.startsWith('video/');
+  const isVideo = isVideoFile(item.mimeType) || isVideoFile(item.filename);
   const [showControls, setShowControls] = useState(true);
   const [isOptionsOpen, setIsOptionsOpen] = useState(false);
   const [scale, setScale] = useState(1);
@@ -1138,7 +1197,7 @@ const FullScreenViewer: React.FC<{
 
     toPreload.forEach((id) => {
       const m = mediaList.find((x) => x._id === id);
-      if (m && !m.mimeType.startsWith('video/')) {
+      if (m && !(isVideoFile(m.mimeType) || isVideoFile(m.filename))) {
         const preImg = new Image();
         preImg.src = getStreamUrl(id);
       }

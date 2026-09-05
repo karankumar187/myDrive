@@ -1,6 +1,6 @@
 import { api, startGlobalLoading } from './api.js';
 import { VaultCryptoService } from './vault-crypto.js';
-import { mediaCache, generateThumbnailFromVideoFile } from './media-cache.js';
+import { mediaCache, generateThumbnailFromVideoFile, isVideoFile, getEffectiveMimeType } from './media-cache.js';
 
 export interface UploadTask {
   id: string;
@@ -75,72 +75,6 @@ class BackgroundUploadManager {
     this.processQueue();
   }
 
-  private async generateVideoThumbnail(file: File): Promise<string | null> {
-    return new Promise((resolve) => {
-      const video = document.createElement('video');
-      video.preload = 'metadata';
-      video.muted = true;
-      video.playsInline = true;
-
-      const url = URL.createObjectURL(file);
-      video.src = url;
-
-      const cleanup = () => {
-        URL.revokeObjectURL(url);
-        video.remove();
-      };
-
-      const timer = setTimeout(() => {
-        cleanup();
-        resolve(null);
-      }, 5000);
-
-      video.onloadedmetadata = () => {
-        video.currentTime = Math.min(1.0, video.duration > 2 ? 1.0 : 0.1);
-      };
-
-      video.onseeked = () => {
-        try {
-          const canvas = document.createElement('canvas');
-          const maxDim = 640;
-          let w = video.videoWidth || 640;
-          let h = video.videoHeight || 360;
-          if (w > maxDim || h > maxDim) {
-            if (w > h) {
-              h = Math.round((h * maxDim) / w);
-              w = maxDim;
-            } else {
-              w = Math.round((w * maxDim) / h);
-              h = maxDim;
-            }
-          }
-          canvas.width = w;
-          canvas.height = h;
-          const ctx = canvas.getContext('2d');
-          if (ctx) {
-            ctx.drawImage(video, 0, 0, w, h);
-            const thumb = canvas.toDataURL('image/jpeg', 0.8);
-            clearTimeout(timer);
-            cleanup();
-            resolve(thumb);
-            return;
-          }
-        } catch {
-          // ignore
-        }
-        clearTimeout(timer);
-        cleanup();
-        resolve(null);
-      };
-
-      video.onerror = () => {
-        clearTimeout(timer);
-        cleanup();
-        resolve(null);
-      };
-    });
-  }
-
   private async processQueue() {
     if (this.isProcessing) return;
     this.isProcessing = true;
@@ -164,12 +98,13 @@ class BackgroundUploadManager {
     const stopLoading = startGlobalLoading('upload');
 
     try {
+      const effectiveMime = getEffectiveMimeType(task.file.name, task.file.type);
       let videoThumb: string | null = null;
-      if (task.file.type.startsWith('video/')) {
+      if (isVideoFile(task.file.name) || effectiveMime.startsWith('video/')) {
         task.message = `Extracting preview frame...`;
         this.notify();
         try {
-          videoThumb = await this.generateVideoThumbnail(task.file);
+          videoThumb = await generateThumbnailFromVideoFile(task.file);
         } catch {
           // ignore thumbnail failure
         }
@@ -188,7 +123,7 @@ class BackgroundUploadManager {
 
       const initResult = await api.initiateUpload({
         filename: task.file.name,
-        mimeType: task.file.type || 'application/octet-stream',
+        mimeType: effectiveMime,
         sizeBytes: task.file.size,
         contentHash,
         folderId: task.folderId,
@@ -219,7 +154,7 @@ class BackgroundUploadManager {
       await new Promise<void>((resolve, reject) => {
         const xhr = new XMLHttpRequest();
         xhr.open('PUT', uploadUrl);
-        xhr.setRequestHeader('Content-Type', task.file.type || 'application/octet-stream');
+        xhr.setRequestHeader('Content-Type', effectiveMime);
 
         xhr.upload.onprogress = (e) => {
           if (e.lengthComputable) {
@@ -253,7 +188,7 @@ class BackgroundUploadManager {
 
       const completeRes = await api.completeUpload({
         filename: task.file.name,
-        mimeType: task.file.type || 'application/octet-stream',
+        mimeType: effectiveMime,
         sizeBytes: task.file.size,
         contentHash,
         storageAccountId: initResult.storageAccountId,

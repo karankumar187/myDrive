@@ -19,10 +19,39 @@ if (!fs.existsSync(UPLOAD_DIR)) {
   fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 }
 
+// Helper to resolve accurate MIME types for common media extensions (mov, mkv, webm, etc.)
+export function getEffectiveMimeType(filename: string, mimeType?: string): string {
+  if (mimeType && mimeType.length > 0 && mimeType !== 'application/octet-stream') {
+    return mimeType;
+  }
+  const ext = filename.split('.').pop()?.toLowerCase() || '';
+  switch (ext) {
+    case 'mov': return 'video/quicktime';
+    case 'mp4': return 'video/mp4';
+    case 'm4v': return 'video/x-m4v';
+    case 'mkv': return 'video/x-matroska';
+    case 'webm': return 'video/webm';
+    case 'avi': return 'video/x-msvideo';
+    case '3gp': return 'video/3gpp';
+    case 'wmv': return 'video/x-ms-wmv';
+    case 'flv': return 'video/x-flv';
+    case 'ts':
+    case 'mts':
+    case 'm2ts': return 'video/mp2t';
+    case 'jpg':
+    case 'jpeg': return 'image/jpeg';
+    case 'png': return 'image/png';
+    case 'webp': return 'image/webp';
+    case 'gif': return 'image/gif';
+    case 'heic': return 'image/heic';
+    case 'pdf': return 'application/pdf';
+    default: return mimeType || 'application/octet-stream';
+  }
+}
+
 export class FileController {
   /**
-   * Step 1 of Upload: Allocates target Drive account and returns direct Resumable Upload URL.
-   * Also checks if identical file hash already exists (instant deduplication).
+   * Step 1 of Upload: Checks for duplicates and requests a direct Google Drive Resumable Upload Session URL.
    */
   static async initiateUpload(req: Request, res: Response): Promise<void> {
     try {
@@ -63,9 +92,10 @@ export class FileController {
       const driveOpaqueName = `file_${Date.now()}_${sanitizedName}`;
 
       const clientOrigin = (req.headers.origin as string) || (process.env.CLIENT_URL || 'http://localhost:5173').split(',')[0].trim();
+      const effectiveMime = getEffectiveMimeType(filename, mimeType);
       const resumableSessionUri = await GoogleDriveService.createResumableUploadSession(targetAccount, {
         name: driveOpaqueName,
-        mimeType: mimeType || 'application/octet-stream',
+        mimeType: effectiveMime,
         sizeBytes,
         origin: clientOrigin,
       });
@@ -225,15 +255,33 @@ export class FileController {
         isTrash: false,
       };
 
+      const videoExtRegex = '\\.(mp4|mov|m4v|mkv|webm|avi|wmv|flv|3gp|ts)$';
+      const imageExtRegex = '\\.(jpg|jpeg|png|webp|gif|heic|bmp|tiff)$';
       if (filter === 'favorites') {
         mediaFilter.isFavorite = true;
-        mediaFilter.$or = [{ mimeType: { $regex: '^image/' } }, { mimeType: { $regex: '^video/' } }];
+        mediaFilter.$or = [
+          { mimeType: { $regex: '^image/' } },
+          { mimeType: { $regex: '^video/' } },
+          { filename: { $regex: videoExtRegex, $options: 'i' } },
+          { filename: { $regex: imageExtRegex, $options: 'i' } },
+        ];
       } else if (filter === 'videos') {
-        mediaFilter.mimeType = { $regex: '^video/' };
+        mediaFilter.$or = [
+          { mimeType: { $regex: '^video/' } },
+          { filename: { $regex: videoExtRegex, $options: 'i' } },
+        ];
       } else if (filter === 'photos') {
-        mediaFilter.mimeType = { $regex: '^image/' };
+        mediaFilter.$or = [
+          { mimeType: { $regex: '^image/' } },
+          { filename: { $regex: imageExtRegex, $options: 'i' } },
+        ];
       } else {
-        mediaFilter.$or = [{ mimeType: { $regex: '^image/' } }, { mimeType: { $regex: '^video/' } }];
+        mediaFilter.$or = [
+          { mimeType: { $regex: '^image/' } },
+          { mimeType: { $regex: '^video/' } },
+          { filename: { $regex: videoExtRegex, $options: 'i' } },
+          { filename: { $regex: imageExtRegex, $options: 'i' } },
+        ];
       }
 
       if (search && typeof search === 'string' && search.trim()) {
@@ -293,6 +341,7 @@ export class FileController {
 
       const enrichedMedia = uniqueMediaFiles.map((file) => {
         const obj: any = file.toObject();
+        obj.mimeType = getEffectiveMimeType(file.filename, file.mimeType);
         obj.isFavorite = file.isFavorite || false;
         obj.sourceDeviceId = file.sourceDeviceIds?.length ? file.sourceDeviceIds[0] : 'web';
         obj.sourceDeviceName = file.sourceDeviceIds?.length && deviceMap.has(file.sourceDeviceIds[0])
@@ -425,7 +474,16 @@ export class FileController {
         return;
       }
 
-      res.setHeader('Content-Type', file.mimeType);
+      let responseMime = getEffectiveMimeType(file.filename, file.mimeType);
+      if (file.mimeType === 'application/octet-stream' && responseMime !== 'application/octet-stream') {
+        file.mimeType = responseMime;
+        File.updateOne({ _id: file._id }, { $set: { mimeType: responseMime } }).exec();
+      }
+      if (responseMime === 'video/quicktime' || file.filename.toLowerCase().endsWith('.mov')) {
+        responseMime = 'video/mp4';
+      }
+
+      res.setHeader('Content-Type', responseMime);
       res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(file.filename)}"`);
       res.setHeader('Accept-Ranges', 'bytes');
 
@@ -441,19 +499,30 @@ export class FileController {
 
       if (driveStream.status === 206) {
         res.status(206);
-        if (driveStream.headers['content-range']) {
-          res.setHeader('Content-Range', driveStream.headers['content-range']);
+        const cr = driveStream.headers['content-range'] || driveStream.headers['Content-Range'];
+        if (cr) {
+          res.setHeader('Content-Range', cr);
         }
-        if (driveStream.headers['content-length']) {
-          res.setHeader('Content-Length', driveStream.headers['content-length']);
+        const cl = driveStream.headers['content-length'] || driveStream.headers['Content-Length'];
+        if (cl) {
+          res.setHeader('Content-Length', cl);
         }
       } else {
-        if (driveStream.headers['content-length']) {
-          res.setHeader('Content-Length', driveStream.headers['content-length']);
+        const cl = driveStream.headers['content-length'] || driveStream.headers['Content-Length'];
+        if (cl) {
+          res.setHeader('Content-Length', cl);
         } else if (latestVersion.sizeBytes) {
           res.setHeader('Content-Length', latestVersion.sizeBytes.toString());
         }
       }
+
+      req.on('close', () => {
+        try {
+          if (driveStream.data && typeof driveStream.data.destroy === 'function') {
+            driveStream.data.destroy();
+          }
+        } catch {}
+      });
 
       driveStream.data.pipe(res);
     } catch (error: any) {
@@ -471,6 +540,15 @@ export class FileController {
       if (!file) {
         res.status(404).json({ error: 'File not found or access denied' });
         return;
+      }
+
+      // If previously stored as application/octet-stream, auto-correct based on filename extension
+      if (file.mimeType === 'application/octet-stream') {
+        const effMime = getEffectiveMimeType(file.filename, file.mimeType);
+        if (effMime !== file.mimeType) {
+          file.mimeType = effMime;
+          File.updateOne({ _id: file._id }, { $set: { mimeType: effMime } }).exec();
+        }
       }
 
       // If file has a direct thumbnail link stored (URL or base64 data URI)
@@ -577,6 +655,43 @@ export class FileController {
       res.setHeader('Cache-Control', 'public, max-age=86400');
       const driveStream = await GoogleDriveService.getFileStream(account, latestVersion.providerFileId);
       driveStream.data.pipe(res);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+
+  /**
+   * Updates or saves a captured thumbnail for a file (e.g. video preview frame).
+   */
+  static async updateThumbnail(req: Request, res: Response): Promise<void> {
+    try {
+      const userId = req.user!._id;
+      const fileId = req.params.id;
+      const { thumbnail } = req.body;
+
+      if (!thumbnail || typeof thumbnail !== 'string') {
+        res.status(400).json({ error: 'thumbnail data URI is required' });
+        return;
+      }
+
+      const file = await File.findOne({ _id: fileId, userId });
+      if (!file) {
+        res.status(404).json({ error: 'File not found or access denied' });
+        return;
+      }
+
+      const updateFields: any = { 'metadata.thumbnail': thumbnail };
+      if (file.mimeType === 'application/octet-stream') {
+        const effMime = getEffectiveMimeType(file.filename, file.mimeType);
+        if (effMime !== 'application/octet-stream') {
+          updateFields.mimeType = effMime;
+        }
+      }
+
+      await File.updateOne({ _id: fileId }, { $set: updateFields });
+      await CacheService.invalidateUser(userId.toString());
+
+      res.json({ success: true, message: 'Thumbnail updated successfully' });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
