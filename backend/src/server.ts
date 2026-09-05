@@ -120,6 +120,10 @@ app.use('/api/v1/files', fileRoutes);
 app.use('/api/v1/devices', deviceRoutes);
 app.use('/api/v1/shortcuts', shortcutRoutes);
 
+app.get('/', (_req: express.Request, res: express.Response) => {
+  res.json({ status: 'ok', service: 'myDrive API', version: '1.0.0' });
+});
+
 app.get('/health', (_req: express.Request, res: express.Response) => {
   res.json({ status: 'ok', service: 'myDrive', timestamp: new Date() });
 });
