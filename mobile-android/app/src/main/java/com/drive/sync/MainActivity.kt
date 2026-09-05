@@ -1,5 +1,7 @@
 package com.drive.sync
 
+import android.content.ContentValues
+import android.provider.MediaStore
 import android.app.DownloadManager
 import android.content.Context
 import android.content.Intent
@@ -91,6 +93,10 @@ import java.text.SimpleDateFormat
 import java.util.*
 import java.util.concurrent.TimeUnit
 
+// ══════════════════════════════════════════════════════════════════
+// Data Classes & Models
+// ══════════════════════════════════════════════════════════════════
+
 data class StoragePoolSummary(
     val totalCapacityBytes: Long,
     val totalUsedBytes: Long,
@@ -104,7 +110,8 @@ data class CloudFile(
     val mimeType: String,
     val sizeBytes: Long,
     val createdAt: String,
-    val folderId: String? = null
+    val folderId: String? = null,
+    val takenAt: String? = null
 )
 
 data class CloudMedia(
@@ -171,8 +178,10 @@ data class InboundSyncItem(
     val folderName: String?,
     val createdAt: String,
     val sourceDeviceLabel: String,
+    val sourceDeviceId: String? = null,
     var isDownloadedLocally: Boolean = false,
-    val isForceDownload: Boolean = false
+    val isForceDownload: Boolean = false,
+    val autoDownloadToGallery: Boolean = false
 )
 
 class MainActivity : ComponentActivity() {
@@ -252,7 +261,12 @@ class MainActivity : ComponentActivity() {
         val syncDocuments = prefs.getBoolean("sync_documents", true)
 
         if (deviceId.isNotBlank() && deviceKey.isNotBlank()) {
-            scheduleBackupWork(serverUrl, deviceId, deviceKey, targetFolderId, wifiOnly, chargingOnly, syncPhotos, syncVideos, syncDocuments, forceUpdate = false)
+            val lastScheduled = prefs.getLong("last_work_scheduled_timestamp", 0L)
+            val now = System.currentTimeMillis()
+            // Avoid rescheduling on every single app switch unless > 24h passed
+            if (lastScheduled == 0L || (now - lastScheduled) > 24 * 3600 * 1000L) {
+                scheduleBackupWork(serverUrl, deviceId, deviceKey, targetFolderId, wifiOnly, chargingOnly, syncPhotos, syncVideos, syncDocuments, forceUpdate = false)
+            }
         }
     }
 
@@ -268,6 +282,10 @@ class MainActivity : ComponentActivity() {
         syncDocuments: Boolean,
         forceUpdate: Boolean = false
     ) {
+        val prefs = getSharedPreferences("drive_prefs", Context.MODE_PRIVATE)
+        val intervalHours = prefs.getInt("sync_interval_hours", 2).toLong().coerceAtLeast(1L)
+        val staggerMinutes = prefs.getInt("stagger_offset_minutes", 0).toLong().coerceAtLeast(0L)
+
         val constraints = Constraints.Builder().apply {
             if (wifiOnly) {
                 setRequiredNetworkType(NetworkType.UNMETERED)
@@ -279,7 +297,7 @@ class MainActivity : ComponentActivity() {
             }
         }.build()
 
-        val syncRequest = PeriodicWorkRequestBuilder<SyncWorker>(12, TimeUnit.HOURS)
+        val syncRequestBuilder = PeriodicWorkRequestBuilder<SyncWorker>(intervalHours, TimeUnit.HOURS)
             .setConstraints(constraints)
             .setInputData(
                 workDataOf(
@@ -292,8 +310,12 @@ class MainActivity : ComponentActivity() {
                     "sync_documents" to syncDocuments
                 )
             )
-            .build()
 
+        if (staggerMinutes > 0) {
+            syncRequestBuilder.setInitialDelay(staggerMinutes, TimeUnit.MINUTES)
+        }
+
+        val syncRequest = syncRequestBuilder.build()
         val policy = if (forceUpdate) ExistingPeriodicWorkPolicy.UPDATE else ExistingPeriodicWorkPolicy.KEEP
 
         WorkManager.getInstance(applicationContext).enqueueUniquePeriodicWork(
@@ -301,6 +323,18 @@ class MainActivity : ComponentActivity() {
             policy,
             syncRequest
         )
+
+        val nextSync = if (staggerMinutes > 0) {
+            System.currentTimeMillis() + (staggerMinutes * 60 * 1000L)
+        } else {
+            System.currentTimeMillis() + (intervalHours * 3600 * 1000L)
+        }
+
+        prefs.edit().apply {
+            putLong("next_sync_timestamp", nextSync)
+            putLong("last_work_scheduled_timestamp", System.currentTimeMillis())
+            apply()
+        }
     }
 
     // triggerImmediateSync is kept for API compatibility but actual implementation
@@ -718,8 +752,13 @@ fun MainAppScreen(
     var syncVideos by remember { mutableStateOf(prefs.getBoolean("sync_videos", true)) }
     var syncDocuments by remember { mutableStateOf(prefs.getBoolean("sync_documents", true)) }
 
-    // Live sync stats
+    // Live sync stats & collision-free schedule
     var lastSyncTimestamp by remember { mutableLongStateOf(prefs.getLong("last_sync_timestamp", 0L)) }
+    var nextSyncTimestamp by remember { mutableLongStateOf(prefs.getLong("next_sync_timestamp", 0L)) }
+    var syncIntervalHours by remember { mutableIntStateOf(prefs.getInt("sync_interval_hours", 2)) }
+    var staggerOffsetMinutes by remember { mutableIntStateOf(prefs.getInt("stagger_offset_minutes", 0)) }
+    var staggerTotalDevices by remember { mutableIntStateOf(prefs.getInt("stagger_total_devices", 1)) }
+    var staggerDeviceSlot by remember { mutableIntStateOf(prefs.getInt("stagger_device_slot", 1)) }
     var totalSyncedCount by remember { mutableIntStateOf(prefs.getInt("total_synced_count", 0)) }
     var lastSyncStatus by remember { mutableStateOf(prefs.getString("last_sync_status", "Never synced") ?: "Never synced") }
 
@@ -811,6 +850,8 @@ fun MainAppScreen(
 
             fun log(msg: String) { syncLogLines.add(0, msg) }  // newest first
             fun status(msg: String) { syncStatusText = msg }
+
+            reportSyncStatusToServer(httpClient, serverUrl, deviceId, deviceKey, "syncing", "Starting manual sync", "Manual sync started from mobile app")
 
             // Helper: fetch storage account name for display
             var driveLabel = "Cloud Drive"
@@ -1005,19 +1046,76 @@ fun MainAppScreen(
                 log("❌ Sync error: ${e.message}")
             }
 
-            val summary = "Sync complete — $totalUploaded uploaded, $totalSkipped already backed up"
+            // ── Inbound Sync Phase (Paired Device Downloads) ─────────────
+            status("📥 Checking paired devices for downloads…")
+            log("── Checking paired devices for downloads ──")
+            reportSyncStatusToServer(httpClient, serverUrl, deviceId, deviceKey, "syncing", "Checking paired devices for downloads")
+            var totalDownloaded = 0
+            try {
+                withContext(Dispatchers.IO) {
+                    val inReq = Request.Builder()
+                        .url("$base/api/v1/files/device/$deviceId/inbound-sync")
+                        .addHeader("x-device-id", deviceId)
+                        .addHeader("x-device-key", deviceKey)
+                        .build()
+                    val inRes = httpClient.newCall(inReq).execute()
+                    if (inRes.isSuccessful) {
+                        val inJson = JSONObject(inRes.body?.string() ?: "{}")
+                        val inFiles = inJson.optJSONArray("files")
+                        if (inFiles != null) {
+                            for (i in 0 until inFiles.length()) {
+                                val fObj = inFiles.getJSONObject(i)
+                                val isDownloaded = fObj.optBoolean("isDownloadedLocally", false)
+                                val isForce = fObj.optBoolean("isForceDownload", false)
+                                val srcDevId = fObj.optString("sourceDeviceId")
+                                val autoDl = fObj.optBoolean("autoDownloadToGallery", false) ||
+                                        (srcDevId.isNotBlank() && pairedRulesMap[srcDevId]?.autoDownloadToGallery == true)
+
+                                if (!isDownloaded && (isForce || autoDl)) {
+                                    val fId = fObj.optString("_id")
+                                    val fName = fObj.optString("filename")
+                                    val fMime = fObj.optString("mimeType")
+                                    if (fId.isNotBlank() && fName.isNotBlank()) {
+                                        withContext(Dispatchers.Main) {
+                                            status("📥 Downloading $fName to phone…")
+                                            log("⬇ Downloading $fName from paired device")
+                                        }
+                                        reportSyncStatusToServer(httpClient, serverUrl, deviceId, deviceKey, "syncing", "Downloading $fName")
+                                        val ok = downloadInboundFileLocally(context, httpClient, serverUrl, deviceId, deviceKey, fId, fName, fMime)
+                                        if (ok) {
+                                            totalDownloaded++
+                                            withContext(Dispatchers.Main) {
+                                                log("✓ $fName saved to phone storage")
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                log("⚠ Inbound download notice: ${e.message}")
+            }
+
+            val interval = syncIntervalHours.toLong().coerceAtLeast(1L)
+            val nextSync = System.currentTimeMillis() + (interval * 3600 * 1000L)
+            val summary = "Sync complete — $totalUploaded uploaded, $totalDownloaded downloaded, $totalSkipped skipped"
             status("✅ $summary")
             log("═══════════════════════════════")
             log("✅ $summary")
 
             prefs.edit().apply {
                 putLong("last_sync_timestamp", System.currentTimeMillis())
+                putLong("next_sync_timestamp", nextSync)
                 putString("last_sync_status", summary)
                 putInt("last_sync_count", totalUploaded)
                 putInt("total_synced_count", prefs.getInt("total_synced_count", 0) + totalUploaded)
                 apply()
             }
-            // refreshData() called via LaunchedEffect(isSyncingNow) below
+            lastSyncTimestamp = System.currentTimeMillis()
+            nextSyncTimestamp = nextSync
+            reportSyncStatusToServer(httpClient, serverUrl, deviceId, deviceKey, "online", "Idle ($summary)", summary)
             isSyncingNow = false
         }
     }
@@ -1040,36 +1138,25 @@ fun MainAppScreen(
     }
 
     val downloadInboundItem: (InboundSyncItem) -> Unit = { item ->
-        val streamUrl = "${serverUrl.trimEnd('/')}/api/v1/files/${item.id}/stream?deviceId=$deviceId&deviceKey=$deviceKey"
-        val isMedia = item.mimeType.startsWith("image/") || item.mimeType.startsWith("video/")
-        downloadFileToDevice(
-            context = context,
-            url = streamUrl,
-            filename = item.filename,
-            deviceId = deviceId,
-            deviceKey = deviceKey,
-            saveToGallery = isMedia,
-            onSuccess = {
-                scope.launch(Dispatchers.IO) {
-                    try {
-                        val baseUrl = serverUrl.trimEnd('/')
-                        val body = JSONObject().apply { put("fileId", item.id) }
-                        val req = Request.Builder()
-                            .url("$baseUrl/api/v1/files/device/$deviceId/mark-synced")
-                            .addHeader("x-device-id", deviceId)
-                            .addHeader("x-device-key", deviceKey)
-                            .post(body.toString().toRequestBody("application/json".toMediaType()))
-                            .build()
-                        httpClient.newCall(req).execute()
-                        withContext(Dispatchers.Main) {
-                            item.isDownloadedLocally = true
-                        }
-                    } catch (e: Exception) {
-                        e.printStackTrace()
-                    }
-                }
+        scope.launch {
+            Toast.makeText(context, "Saving ${item.filename} to phone storage...", Toast.LENGTH_SHORT).show()
+            val ok = downloadInboundFileLocally(
+                context = context,
+                httpClient = httpClient,
+                serverUrl = serverUrl,
+                deviceId = deviceId,
+                deviceKey = deviceKey,
+                fileId = item.id,
+                filename = item.filename,
+                mimeType = item.mimeType
+            )
+            if (ok) {
+                item.isDownloadedLocally = true
+                Toast.makeText(context, "Saved ${item.filename} to phone storage!", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(context, "Failed to download ${item.filename}", Toast.LENGTH_SHORT).show()
             }
-        )
+        }
     }
 
     val refreshData: () -> Unit = {
@@ -1125,6 +1212,7 @@ fun MainAppScreen(
                                 if (array != null) {
                                     for (i in 0 until array.length()) {
                                         val item = array.getJSONObject(i)
+                                        val meta = item.optJSONObject("metadata")
                                         list.add(
                                             CloudFile(
                                                 id = item.optString("_id"),
@@ -1132,7 +1220,8 @@ fun MainAppScreen(
                                                 mimeType = item.optString("mimeType"),
                                                 sizeBytes = item.optLong("sizeBytes"),
                                                 createdAt = item.optString("createdAt"),
-                                                folderId = item.optString("folderId", "")
+                                                folderId = item.optString("folderId", ""),
+                                                takenAt = meta?.optString("takenAt")?.ifBlank { null }
                                             )
                                         )
                                     }
@@ -1283,20 +1372,23 @@ fun MainAppScreen(
                                                 folderName = fObj?.optString("name"),
                                                 createdAt = item.optString("createdAt"),
                                                 sourceDeviceLabel = item.optString("sourceDeviceLabel", "Cloud Drive"),
+                                                sourceDeviceId = item.optString("sourceDeviceId").ifBlank { null },
                                                 isDownloadedLocally = item.optBoolean("isDownloadedLocally", false),
-                                                isForceDownload = item.optBoolean("isForceDownload", false)
+                                                isForceDownload = item.optBoolean("isForceDownload", false),
+                                                autoDownloadToGallery = item.optBoolean("autoDownloadToGallery", false)
                                             )
                                         )
                                     }
                                 }
                                 inboundSyncList = list
 
-                                // Automatically trigger download for force-download items requested from Web
-                                val forcePending = list.filter { it.isForceDownload && !it.isDownloadedLocally }
-                                if (forcePending.isNotEmpty()) {
+                                // Automatically trigger download for force-download items or autoDownloadToGallery matching paired rules
+                                val autoPending = list.filter {
+                                    !it.isDownloadedLocally && (it.isForceDownload || it.autoDownloadToGallery || (it.sourceDeviceId != null && pairedRulesMap[it.sourceDeviceId]?.autoDownloadToGallery == true))
+                                }
+                                if (autoPending.isNotEmpty()) {
                                     withContext(Dispatchers.Main) {
-                                        Toast.makeText(context, "Force download: saving ${forcePending.size} file(s) to Gallery...", Toast.LENGTH_SHORT).show()
-                                        forcePending.forEach { fItem ->
+                                        autoPending.forEach { fItem ->
                                             downloadInboundItem(fItem)
                                         }
                                     }
@@ -1316,6 +1408,25 @@ fun MainAppScreen(
                             val res = httpClient.newCall(req).execute()
                             if (res.isSuccessful) {
                                 val json = JSONObject(res.body?.string() ?: "{}")
+                                val schObj = json.optJSONObject("schedule")
+                                if (schObj != null) {
+                                    val intervalHours = schObj.optInt("intervalHours", 2)
+                                    val staggerOffset = schObj.optInt("staggerOffsetMinutes", 0)
+                                    val totalDevs = schObj.optInt("totalDevices", 1)
+                                    val devSlot = schObj.optInt("deviceSlot", 1)
+                                    prefs.edit()
+                                        .putInt("sync_interval_hours", intervalHours)
+                                        .putInt("stagger_offset_minutes", staggerOffset)
+                                        .putInt("stagger_total_devices", totalDevs)
+                                        .putInt("stagger_device_slot", devSlot)
+                                        .apply()
+                                    withContext(Dispatchers.Main) {
+                                        syncIntervalHours = intervalHours
+                                        staggerOffsetMinutes = staggerOffset
+                                        staggerTotalDevices = totalDevs
+                                        staggerDeviceSlot = devSlot
+                                    }
+                                }
                                 val pArr = json.optJSONArray("pairedDevices")
                                 val pList = mutableListOf<PairedDevice>()
                                 if (pArr != null) {
@@ -1406,6 +1517,11 @@ fun MainAppScreen(
 
                     // Reload sync preferences
                     lastSyncTimestamp = prefs.getLong("last_sync_timestamp", 0L)
+                    nextSyncTimestamp = prefs.getLong("next_sync_timestamp", 0L)
+                    syncIntervalHours = prefs.getInt("sync_interval_hours", 2)
+                    staggerOffsetMinutes = prefs.getInt("stagger_offset_minutes", 0)
+                    staggerTotalDevices = prefs.getInt("stagger_total_devices", 1)
+                    staggerDeviceSlot = prefs.getInt("stagger_device_slot", 1)
                     totalSyncedCount = prefs.getInt("total_synced_count", 0)
                     lastSyncStatus = prefs.getString("last_sync_status", "Up to date") ?: "Up to date"
                 } catch (e: Exception) {
@@ -1500,6 +1616,7 @@ fun MainAppScreen(
                         put("syncDocuments", syncDocuments)
                         put("wifiOnly", wifiOnly)
                         put("chargingOnly", chargingOnly)
+                        put("syncIntervalHours", syncIntervalHours)
                         put("pairedDeviceRules", rulesArray)
                     }
                     val body = JSONObject().apply {
@@ -2055,7 +2172,18 @@ fun MainAppScreen(
                         },
                         isSyncingNow = isSyncingNow,
                         syncStatusText = syncStatusText,
-                        syncLogLines = syncLogLines
+                        syncLogLines = syncLogLines,
+                        nextSyncTimestamp = nextSyncTimestamp,
+                        syncIntervalHours = syncIntervalHours,
+                        staggerOffsetMinutes = staggerOffsetMinutes,
+                        staggerTotalDevices = staggerTotalDevices,
+                        staggerDeviceSlot = staggerDeviceSlot,
+                        onSyncIntervalChange = { newHrs ->
+                            syncIntervalHours = newHrs
+                            prefs.edit().putInt("sync_interval_hours", newHrs).apply()
+                            onScheduleSync(serverUrl, deviceId, deviceKey, targetFolderId, wifiOnly, chargingOnly, syncPhotos, syncVideos, syncDocuments)
+                            savePolicyAction()
+                        }
                     )
                 }
             }
@@ -2755,6 +2883,7 @@ fun FilesScreen(
 
     if (fileToShowDetails != null) {
         val f = fileToShowDetails!!
+        val dateFormatted = formatDetailsDate(f.takenAt ?: f.createdAt)
         AlertDialog(
             onDismissRequest = { fileToShowDetails = null },
             containerColor = Color(0xFF14141C),
@@ -2764,7 +2893,11 @@ fun FilesScreen(
                     Text("Name: ${f.filename}", color = Color.White)
                     Text("Type: ${f.mimeType}", color = Color.White)
                     Text("Size: ${formatBytes(f.sizeBytes)}", color = Color.White)
-                    Text("Created: ${f.createdAt}", color = Color.White)
+                    if (!f.takenAt.isNullOrBlank()) {
+                        Text("Taken Date & Time: $dateFormatted", color = Color(0xFFA855F7), fontWeight = FontWeight.SemiBold)
+                    } else {
+                        Text("Created: $dateFormatted", color = Color.White)
+                    }
                     Text("Folder ID: ${f.folderId ?: "None"}", color = Color.White)
                 }
             },
@@ -3478,7 +3611,13 @@ fun DeviceAndPolicyScreen(
     onScheduleSync: () -> Unit,
     isSyncingNow: Boolean = false,
     syncStatusText: String = "",
-    syncLogLines: List<String> = emptyList()
+    syncLogLines: List<String> = emptyList(),
+    nextSyncTimestamp: Long = 0L,
+    syncIntervalHours: Int = 2,
+    staggerOffsetMinutes: Int = 0,
+    staggerTotalDevices: Int = 1,
+    staggerDeviceSlot: Int = 1,
+    onSyncIntervalChange: (Int) -> Unit = {}
 ) {
     val scrollState = rememberScrollState()
     val context = LocalContext.current
@@ -3549,12 +3688,49 @@ fun DeviceAndPolicyScreen(
                         Text("Total Uploaded", fontSize = 10.sp, color = Color(0xFF71717A))
                         Text("$totalSyncedCount files", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
                     }
-                    Column(horizontalAlignment = Alignment.End) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text("Last Sync", fontSize = 10.sp, color = Color(0xFF71717A))
                         val formattedTime = if (lastSyncTimestamp > 0) {
                             SimpleDateFormat("h:mm a, MMM d", Locale.getDefault()).format(Date(lastSyncTimestamp))
                         } else "Never"
                         Text(formattedTime, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFFA855F7))
+                    }
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text("Next Sync", fontSize = 10.sp, color = Color(0xFF71717A))
+                        val nextFormatted = if (nextSyncTimestamp > 0) {
+                            val diffMs = nextSyncTimestamp - System.currentTimeMillis()
+                            val relative = when {
+                                diffMs <= 0 -> "Due soon"
+                                diffMs < 3600 * 1000L -> "in ${diffMs / (60 * 1000L)}m"
+                                else -> "in ${diffMs / (3600 * 1000L)}h ${(diffMs % (3600 * 1000L)) / (60 * 1000L)}m"
+                            }
+                            "${SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(nextSyncTimestamp))} ($relative)"
+                        } else "In ~$syncIntervalHours hrs"
+                        Text(nextFormatted, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF34D399))
+                    }
+                }
+
+                if (staggerTotalDevices > 1) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = Color(0xFF1B1B2A)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(Icons.Default.Bolt, contentDescription = null, tint = Color(0xFF38BDF8), modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Collision Protection: Slot $staggerDeviceSlot of $staggerTotalDevices (+${staggerOffsetMinutes}m offset)",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = Color(0xFF7DD3FC)
+                            )
+                        }
                     }
                 }
 
@@ -3708,24 +3884,60 @@ fun DeviceAndPolicyScreen(
             }
         }
 
-        // Auto Sync info chip
+        // Auto Sync Schedule & Interval Setting
         Surface(
-            shape = RoundedCornerShape(10.dp),
+            shape = RoundedCornerShape(12.dp),
             color = Color(0xFF1E1830),
             modifier = Modifier.fillMaxWidth()
         ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(Icons.Default.Schedule, contentDescription = null, tint = Color(0xFF7C3AED), modifier = Modifier.size(14.dp))
-                Spacer(modifier = Modifier.width(8.dp))
+            Column(modifier = Modifier.padding(14.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Schedule, contentDescription = null, tint = Color(0xFFA855F7), modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Auto-Sync Interval: Every $syncIntervalHours hours",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color.White
+                    )
+                }
+                Spacer(modifier = Modifier.height(6.dp))
                 Text(
-                    text = "Auto sync runs twice a day (every 12 hours) in the background to save battery.",
-                    fontSize = 12.sp,
+                    text = if (staggerTotalDevices > 1) {
+                        "Scheduled across $staggerTotalDevices connected devices with staggered time offsets (+${staggerOffsetMinutes}m) so they never collide or sync simultaneously."
+                    } else {
+                        "Background auto sync periodically backs up photos, videos, and documents to your cloud storage pool without draining battery."
+                    },
+                    fontSize = 11.sp,
                     color = Color(0xFF9CA3AF),
-                    lineHeight = 17.sp
+                    lineHeight = 16.sp
                 )
+                Spacer(modifier = Modifier.height(10.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    listOf(1, 2, 4, 6, 12).forEach { hrs ->
+                        val isSelected = syncIntervalHours == hrs
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = if (isSelected) Color(0xFF7E22CE) else Color(0xFF14141C),
+                            border = BorderStroke(1.dp, if (isSelected) Color(0xFFA855F7) else Color(0xFF2E2E3A)),
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable { onSyncIntervalChange(hrs) }
+                        ) {
+                            Text(
+                                text = "${hrs}h",
+                                color = if (isSelected) Color.White else Color(0xFF94A3B8),
+                                fontSize = 12.sp,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.padding(vertical = 8.dp)
+                            )
+                        }
+                    }
+                }
             }
         }
 
@@ -5105,6 +5317,156 @@ fun ManualUploadDialog(
             }
         }
     )
+}
+
+fun reportSyncStatusToServer(
+    httpClient: OkHttpClient,
+    serverUrl: String,
+    deviceId: String,
+    deviceKey: String,
+    status: String,
+    activity: String,
+    logMessage: String? = null
+) {
+    if (serverUrl.isBlank() || deviceId.isBlank() || deviceKey.isBlank()) return
+    try {
+        val base = serverUrl.trimEnd('/')
+        val json = JSONObject().apply {
+            put("deviceId", deviceId)
+            put("status", status)
+            put("currentSyncActivity", activity)
+            if (!logMessage.isNullOrBlank()) {
+                put("logMessage", logMessage)
+            }
+        }
+        val req = Request.Builder()
+            .url("$base/api/v1/devices/sync-status")
+            .addHeader("x-device-id", deviceId)
+            .addHeader("x-device-key", deviceKey)
+            .post(json.toString().toRequestBody("application/json".toMediaType()))
+            .build()
+        httpClient.newCall(req).execute().close()
+    } catch (_: Exception) {}
+}
+
+suspend fun downloadInboundFileLocally(
+    context: Context,
+    httpClient: OkHttpClient,
+    serverUrl: String,
+    deviceId: String,
+    deviceKey: String,
+    fileId: String,
+    filename: String,
+    mimeType: String
+): Boolean {
+    return withContext(Dispatchers.IO) {
+        try {
+            val base = serverUrl.trimEnd('/')
+            val streamUrl = "$base/api/v1/files/$fileId/stream?deviceId=$deviceId&deviceKey=$deviceKey"
+            val req = Request.Builder()
+                .url(streamUrl)
+                .addHeader("x-device-id", deviceId)
+                .addHeader("x-device-key", deviceKey)
+                .build()
+            val res = httpClient.newCall(req).execute()
+            if (!res.isSuccessful) {
+                res.close()
+                return@withContext false
+            }
+            val body = res.body ?: return@withContext false
+
+            val isImage = mimeType.startsWith("image/")
+            val isVideo = mimeType.startsWith("video/")
+            val isMedia = isImage || isVideo
+
+            val contentResolver = context.contentResolver
+            var insertedUri: Uri? = null
+
+            if (isMedia) {
+                val contentValues = ContentValues().apply {
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
+                    put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        put(
+                            MediaStore.MediaColumns.RELATIVE_PATH,
+                            if (isVideo) Environment.DIRECTORY_MOVIES + "/myDrive" else Environment.DIRECTORY_PICTURES + "/myDrive"
+                        )
+                        put(MediaStore.MediaColumns.IS_PENDING, 1)
+                    }
+                }
+                val collection = if (isVideo) {
+                    MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                } else {
+                    MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                }
+                insertedUri = contentResolver.insert(collection, contentValues)
+            } else {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    val contentValues = ContentValues().apply {
+                        put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
+                        put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+                        put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/myDrive")
+                        put(MediaStore.MediaColumns.IS_PENDING, 1)
+                    }
+                    insertedUri = contentResolver.insert(MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY), contentValues)
+                } else {
+                    val downloadsDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "myDrive")
+                    downloadsDir.mkdirs()
+                    val targetFile = File(downloadsDir, filename)
+                    targetFile.outputStream().use { outStream ->
+                        body.byteStream().use { inStream ->
+                            inStream.copyTo(outStream)
+                        }
+                    }
+                }
+            }
+
+            if (insertedUri != null) {
+                contentResolver.openOutputStream(insertedUri)?.use { outStream ->
+                    body.byteStream().use { inStream ->
+                        inStream.copyTo(outStream)
+                    }
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    val updateValues = ContentValues().apply {
+                        put(MediaStore.MediaColumns.IS_PENDING, 0)
+                    }
+                    contentResolver.update(insertedUri, updateValues, null, null)
+                }
+            }
+
+            // Record in history file so outbound sync never re-uploads
+            val localId = insertedUri?.lastPathSegment?.toLongOrNull()
+            if (localId != null) {
+                val category = when {
+                    isImage -> "photos"
+                    isVideo -> "videos"
+                    else -> "documents"
+                }
+                val historyFile = File(context.filesDir, "synced_$category.txt")
+                historyFile.appendText("$localId\n")
+            }
+
+            // Mark synced with backend
+            val markJson = JSONObject().apply {
+                put("fileId", fileId)
+                if (localId != null) put("deviceAssetId", localId.toString())
+            }
+            val markReq = Request.Builder()
+                .url("$base/api/v1/files/device/$deviceId/mark-synced")
+                .addHeader("x-device-id", deviceId)
+                .addHeader("x-device-key", deviceKey)
+                .post(markJson.toString().toRequestBody("application/json".toMediaType()))
+                .build()
+            val markRes = httpClient.newCall(markReq).execute()
+            markRes.close()
+
+            true
+        } catch (e: Exception) {
+            e.printStackTrace()
+            false
+        }
+    }
 }
 
 fun downloadFileToDevice(

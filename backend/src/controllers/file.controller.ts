@@ -1279,13 +1279,44 @@ export class FileController {
         return true;
       });
 
+      // Fetch registered devices to map friendly device labels
+      const userDevices = await Device.find({ userId }).select('deviceId deviceName');
+      const deviceNameMap = new Map<string, string>();
+      userDevices.forEach((d) => deviceNameMap.set(d.deviceId, d.deviceName));
+
       const formatted = resultFiles.map((f: any) => {
         const fileObj = f.toObject();
         const fileIdStr = f._id.toString();
         fileObj.isDownloadedLocally = localStateMap.get(fileIdStr) || false;
         fileObj.isForceDownload = forceDownloadMap.get(fileIdStr) || false;
-        const otherSources = f.sourceDeviceIds.filter((id: string) => id !== deviceId);
-        fileObj.sourceDeviceLabel = otherSources.length > 0 ? otherSources[0] : 'Cloud Drive';
+        const otherSources = (f.sourceDeviceIds || []).filter((id: string) => id !== deviceId);
+
+        let autoDownload = false;
+        let matchedSourceId: string | null = null;
+        let matchedSourceName: string | null = null;
+
+        if (pairedRules.length > 0 && f.sourceDeviceIds && f.sourceDeviceIds.length > 0) {
+          const matchingRule = pairedRules.find((rule) =>
+            f.sourceDeviceIds.includes(rule.sourceDeviceId)
+          );
+          if (matchingRule) {
+            matchedSourceId = matchingRule.sourceDeviceId;
+            matchedSourceName = matchingRule.sourceDeviceName || deviceNameMap.get(matchingRule.sourceDeviceId) || null;
+            autoDownload = !!matchingRule.autoDownloadToGallery;
+          }
+        }
+
+        // If no paired device rule specified, fallback to general device policy autoDownloadToGallery
+        if (!matchedSourceId && policy?.autoDownloadToGallery) {
+          autoDownload = true;
+        }
+
+        const sourceId = matchedSourceId || (otherSources.length > 0 ? otherSources[0] : null);
+        const resolvedName = matchedSourceName || (sourceId ? deviceNameMap.get(sourceId) : null);
+
+        fileObj.autoDownloadToGallery = autoDownload;
+        fileObj.sourceDeviceId = sourceId;
+        fileObj.sourceDeviceLabel = resolvedName || sourceId || 'Cloud Drive';
         return fileObj;
       });
 
@@ -1324,6 +1355,27 @@ export class FileController {
         },
         { upsert: true, new: true }
       );
+
+      // Also record inbound sync activity on Device
+      try {
+        const syncedFile = await File.findById(fileId).select('filename');
+        const fname = syncedFile?.filename || 'paired file';
+        await Device.findOneAndUpdate(
+          { deviceId, userId },
+          {
+            $set: {
+              lastSeenAt: new Date(),
+              currentSyncActivity: `Saved ${fname} to device storage`,
+            },
+            $push: {
+              syncLogs: {
+                $each: [{ timestamp: new Date(), message: `Inbound sync: saved ${fname} to Gallery/local storage` }],
+                $slice: -20,
+              },
+            },
+          }
+        );
+      } catch (_: any) {}
 
       res.json({ success: true, state });
     } catch (error: any) {

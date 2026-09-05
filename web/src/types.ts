@@ -97,8 +97,12 @@ export interface DeviceItem {
   deviceId: string;
   deviceName: string;
   deviceType: 'android' | 'iphone' | 'web' | 'desktop';
-  status: 'online' | 'offline';
+  status: 'online' | 'offline' | 'syncing';
   lastSeenAt: string;
+  currentSyncActivity?: string;
+  syncLogs?: { timestamp: string; message: string }[];
+  lastSyncStartedAt?: string;
+  lastSyncCompletedAt?: string;
   policy: {
     uploadFolders: string[];
     wifiOnly: boolean;
@@ -110,6 +114,8 @@ export interface DeviceItem {
     syncVideos?: boolean;
     syncDocuments?: boolean;
     syncOthers?: boolean;
+    autoDownloadToGallery?: boolean;
+    syncIntervalHours?: number;
     pairedDeviceRules?: PairedDeviceRule[];
   };
 }

@@ -120,7 +120,14 @@ export interface IDevicePolicy {
   syncVideos?: boolean;
   syncDocuments?: boolean;
   syncOthers?: boolean;
+  autoDownloadToGallery?: boolean;
+  syncIntervalHours?: number;
   pairedDeviceRules?: IPairedDeviceRule[];
+}
+
+export interface ISyncLogEntry {
+  timestamp: Date;
+  message: string;
 }
 
 export interface IDevice {
@@ -132,7 +139,11 @@ export interface IDevice {
   deviceType: DeviceType;
   osVersion?: string;
   appVersion?: string;
-  status: 'online' | 'offline';
+  status: 'online' | 'offline' | 'syncing';
+  currentSyncActivity?: string;
+  syncLogs?: ISyncLogEntry[];
+  lastSyncStartedAt?: Date;
+  lastSyncCompletedAt?: Date;
   lastSeenAt: Date;
   lastCheckpoint: number;
   policy: IDevicePolicy;

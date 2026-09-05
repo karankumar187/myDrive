@@ -14,6 +14,18 @@ export function formatDate(date: string | Date): string {
   });
 }
 
+export function formatDateTime(date: string | Date): string {
+  if (!date) return '';
+  return new Date(date).toLocaleString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  });
+}
+
 export function getStreamUrl(fileId: string): string {
   const token = localStorage.getItem('drive_token') || '';
   const rawApiUrl = (import.meta.env.VITE_API_URL || '').replace(/\/+$/, '');

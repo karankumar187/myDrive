@@ -29,6 +29,34 @@ class SyncWorker(
 
     private val client = com.drive.sync.sharedHttpClient
 
+    private fun reportStatus(
+        serverUrl: String,
+        deviceId: String,
+        deviceKey: String,
+        status: String,
+        activity: String,
+        logMessage: String? = null
+    ) {
+        if (serverUrl.isBlank() || deviceId.isBlank() || deviceKey.isBlank()) return
+        try {
+            val base = serverUrl.trimEnd('/')
+            val json = JSONObject().apply {
+                put("status", status)
+                put("activity", activity)
+                if (!logMessage.isNullOrBlank()) {
+                    put("logMessage", logMessage)
+                }
+            }
+            val req = Request.Builder()
+                .url("$base/api/v1/devices/sync-status")
+                .addHeader("x-device-id", deviceId)
+                .addHeader("x-device-key", deviceKey)
+                .post(json.toString().toRequestBody("application/json".toMediaType()))
+                .build()
+            client.newCall(req).execute().close()
+        } catch (_: Exception) {}
+    }
+
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         val serverUrl = (inputData.getString("server_url") ?: "http://10.0.2.2:5000").trimEnd('/')
         val deviceId = inputData.getString("device_id") ?: return@withContext Result.failure()
@@ -40,11 +68,20 @@ class SyncWorker(
         val prefs = applicationContext.getSharedPreferences("drive_prefs", Context.MODE_PRIVATE)
         val targetFolderId = inputData.getString("target_folder_id") ?: prefs.getString("target_folder_id", null)
 
+        // Prevent rapid repeated syncs (debounce 3 minutes unless run attempt is a legitimate single retry)
+        val lastSync = prefs.getLong("last_sync_timestamp", 0L)
+        if (System.currentTimeMillis() - lastSync < 3 * 60 * 1000L && runAttemptCount == 0) {
+            Log.d("SyncWorker", "Debouncing background sync - device synced recently.")
+            return@withContext Result.success()
+        }
+
         Log.d("SyncWorker", "Starting media sync for device $deviceId (photos=$syncPhotos, videos=$syncVideos, docs=$syncDocuments, targetFolderId=$targetFolderId)")
+        reportStatus(serverUrl, deviceId, deviceKey, "syncing", "Background auto-sync started", "Worker triggered")
 
         try {
             // 1. Sync Photos if enabled
             val imageCount = if (syncPhotos) {
+                reportStatus(serverUrl, deviceId, deviceKey, "syncing", "Scanning and backing up photos...")
                 syncCollection(
                     collectionUri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
                     serverUrl = serverUrl,
@@ -58,6 +95,7 @@ class SyncWorker(
 
             // 2. Sync Videos if enabled
             val videoCount = if (syncVideos) {
+                reportStatus(serverUrl, deviceId, deviceKey, "syncing", "Scanning and backing up videos...")
                 syncCollection(
                     collectionUri = MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
                     serverUrl = serverUrl,
@@ -71,6 +109,7 @@ class SyncWorker(
 
             // 3. Sync Documents if enabled
             val docCount = if (syncDocuments) {
+                reportStatus(serverUrl, deviceId, deviceKey, "syncing", "Scanning documents...")
                 val docSelection = "${MediaStore.MediaColumns.MIME_TYPE} LIKE ? OR ${MediaStore.MediaColumns.MIME_TYPE} LIKE ? OR ${MediaStore.MediaColumns.MIME_TYPE} LIKE ?"
                 val docArgs = arrayOf("application/%", "text/%", "%document%")
                 syncCollection(
@@ -87,18 +126,77 @@ class SyncWorker(
             } else 0
 
             val totalSynced = imageCount + videoCount + docCount
-            Log.d("SyncWorker", "Sync complete: $imageCount images, $videoCount videos, $docCount documents processed.")
+            Log.d("SyncWorker", "Outbound sync complete: $imageCount images, $videoCount videos, $docCount documents processed.")
+
+            // 4. Inbound Sync according to Paired Device Policy
+            var totalDownloaded = 0
+            try {
+                reportStatus(serverUrl, deviceId, deviceKey, "syncing", "Checking paired devices for incoming media...")
+                val inReq = Request.Builder()
+                    .url("$serverUrl/api/v1/files/device/$deviceId/inbound-sync")
+                    .addHeader("x-device-id", deviceId)
+                    .addHeader("x-device-key", deviceKey)
+                    .build()
+                val inRes = client.newCall(inReq).execute()
+                if (inRes.isSuccessful) {
+                    val inJson = JSONObject(inRes.body?.string() ?: "{}")
+                    val arr = inJson.optJSONArray("files")
+                    if (arr != null) {
+                        // Check local paired device rules to confirm autoDownloadToGallery
+                        val savedRulesJson = prefs.getString("paired_device_rules_json", null)
+                        val autoDlDeviceIds = mutableSetOf<String>()
+                        if (!savedRulesJson.isNullOrBlank()) {
+                            try {
+                                val rArr = org.json.JSONArray(savedRulesJson)
+                                for (ri in 0 until rArr.length()) {
+                                    val rObj = rArr.getJSONObject(ri)
+                                    if (rObj.optBoolean("autoDownloadToGallery", false)) {
+                                        autoDlDeviceIds.add(rObj.optString("sourceDeviceId"))
+                                    }
+                                }
+                            } catch (_: Exception) {}
+                        }
+
+                        for (i in 0 until arr.length()) {
+                            val fObj = arr.getJSONObject(i)
+                            val isDownloaded = fObj.optBoolean("isDownloadedLocally", false)
+                            val isForce = fObj.optBoolean("isForceDownload", false)
+                            val autoDl = fObj.optBoolean("autoDownloadToGallery", false) ||
+                                autoDlDeviceIds.contains(fObj.optString("sourceDeviceId"))
+
+                            if (!isDownloaded && (isForce || autoDl)) {
+                                val fId = fObj.optString("_id")
+                                val fName = fObj.optString("filename")
+                                val fMime = fObj.optString("mimeType")
+                                if (fId.isNotBlank() && fName.isNotBlank()) {
+                                    reportStatus(serverUrl, deviceId, deviceKey, "syncing", "Downloading $fName to phone storage")
+                                    val ok = downloadInboundItemInternal(serverUrl, deviceId, deviceKey, fId, fName, fMime)
+                                    if (ok) totalDownloaded++
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w("SyncWorker", "Inbound sync error in worker: ${e.message}")
+            }
 
             val prevTotal = prefs.getInt("total_synced_count", 0)
             val newTotal = prevTotal + totalSynced
+            val intervalHours = prefs.getInt("sync_interval_hours", 2).toLong()
+            val nextSync = System.currentTimeMillis() + (intervalHours * 3600 * 1000L)
+            val summary = "Auto-sync complete: $totalSynced uploaded, $totalDownloaded downloaded"
+
             prefs.edit().apply {
                 putLong("last_sync_timestamp", System.currentTimeMillis())
+                putLong("next_sync_timestamp", nextSync)
                 putInt("last_sync_count", totalSynced)
                 putInt("total_synced_count", newTotal)
-                putString("last_sync_status", "Synced $imageCount photos, $videoCount videos, $docCount docs")
+                putString("last_sync_status", summary)
                 apply()
             }
 
+            reportStatus(serverUrl, deviceId, deviceKey, "online", "Idle ($summary)", summary)
             Result.success()
         } catch (e: Exception) {
             Log.e("SyncWorker", "Sync worker error: ${e.message}", e)
@@ -108,7 +206,12 @@ class SyncWorker(
                 putString("last_sync_status", "Sync notice: ${e.localizedMessage ?: "Network error"}")
                 apply()
             }
-            Result.retry()
+            reportStatus(serverUrl, deviceId, deviceKey, "online", "Idle (Error: ${e.localizedMessage})", "Sync notice: ${e.message}")
+            if (runAttemptCount >= 1) {
+                Result.failure()
+            } else {
+                Result.retry()
+            }
         }
     }
 
@@ -319,5 +422,119 @@ class SyncWorker(
         }
 
         return processedCount
+    }
+
+    private fun downloadInboundItemInternal(
+        serverUrl: String,
+        deviceId: String,
+        deviceKey: String,
+        fileId: String,
+        filename: String,
+        mimeType: String
+    ): Boolean {
+        return try {
+            val streamUrl = "$serverUrl/api/v1/files/$fileId/stream?deviceId=$deviceId&deviceKey=$deviceKey"
+            val req = Request.Builder()
+                .url(streamUrl)
+                .addHeader("x-device-id", deviceId)
+                .addHeader("x-device-key", deviceKey)
+                .build()
+            val res = client.newCall(req).execute()
+            if (!res.isSuccessful) {
+                res.close()
+                return false
+            }
+            val body = res.body ?: return false
+
+            val isImage = mimeType.startsWith("image/")
+            val isVideo = mimeType.startsWith("video/")
+            val isMedia = isImage || isVideo
+
+            val contentResolver = applicationContext.contentResolver
+            var insertedUri: Uri? = null
+
+            if (isMedia) {
+                val contentValues = android.content.ContentValues().apply {
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
+                    put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        put(
+                            MediaStore.MediaColumns.RELATIVE_PATH,
+                            if (isVideo) android.os.Environment.DIRECTORY_MOVIES + "/myDrive" else android.os.Environment.DIRECTORY_PICTURES + "/myDrive"
+                        )
+                        put(MediaStore.MediaColumns.IS_PENDING, 1)
+                    }
+                }
+                val collection = if (isVideo) {
+                    MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                } else {
+                    MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                }
+                insertedUri = contentResolver.insert(collection, contentValues)
+            } else {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    val contentValues = android.content.ContentValues().apply {
+                        put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
+                        put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+                        put(MediaStore.MediaColumns.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOWNLOADS + "/myDrive")
+                        put(MediaStore.MediaColumns.IS_PENDING, 1)
+                    }
+                    insertedUri = contentResolver.insert(MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY), contentValues)
+                } else {
+                    val downloadsDir = java.io.File(android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS), "myDrive")
+                    downloadsDir.mkdirs()
+                    val targetFile = java.io.File(downloadsDir, filename)
+                    targetFile.outputStream().use { outStream ->
+                        body.byteStream().use { inStream ->
+                            inStream.copyTo(outStream)
+                        }
+                    }
+                }
+            }
+
+            if (insertedUri != null) {
+                contentResolver.openOutputStream(insertedUri)?.use { outStream ->
+                    body.byteStream().use { inStream ->
+                        inStream.copyTo(outStream)
+                    }
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    val updateValues = android.content.ContentValues().apply {
+                        put(MediaStore.MediaColumns.IS_PENDING, 0)
+                    }
+                    contentResolver.update(insertedUri, updateValues, null, null)
+                }
+            }
+
+            // Record in history file so outbound sync never re-uploads
+            val localId = insertedUri?.lastPathSegment?.toLongOrNull()
+            if (localId != null) {
+                val category = when {
+                    isImage -> "photos"
+                    isVideo -> "videos"
+                    else -> "documents"
+                }
+                appendHistory(category, localId)
+            }
+
+            // Mark synced with backend
+            val markJson = JSONObject().apply {
+                put("fileId", fileId)
+                if (localId != null) put("deviceAssetId", localId.toString())
+            }
+            val markReq = Request.Builder()
+                .url("$serverUrl/api/v1/files/device/$deviceId/mark-synced")
+                .addHeader("x-device-id", deviceId)
+                .addHeader("x-device-key", deviceKey)
+                .post(markJson.toString().toRequestBody("application/json".toMediaType()))
+                .build()
+            val markRes = client.newCall(markReq).execute()
+            markRes.close()
+
+            true
+        } catch (e: Exception) {
+            Log.w("SyncWorker", "Error downloading inbound item: ${e.message}")
+            false
+        }
     }
 }

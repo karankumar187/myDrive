@@ -82,7 +82,8 @@ export class DeviceController {
   }
 
   /**
-   * Fetches personalized policy for the calling device and lists all paired devices.
+   * Fetches personalized policy for the calling device, lists paired devices,
+   * and calculates an intelligent, collision-free auto-sync schedule so paired devices never sync simultaneously.
    */
   static async getMyPolicy(req: Request, res: Response): Promise<void> {
     try {
@@ -96,11 +97,111 @@ export class DeviceController {
         res.status(404).json({ error: 'Device not found' });
         return;
       }
-      const pairedDevices = await Device.find({ userId: req.user!._id, deviceId: { $ne: deviceId } })
-        .select('deviceId deviceName deviceType status lastSeenAt')
-        .sort({ lastSeenAt: -1 });
 
-      res.json({ success: true, policy: device.policy, device, pairedDevices });
+      // Fetch all registered physical devices for this user
+      const allDevices = await Device.find({ userId: req.user!._id })
+        .select('deviceId deviceName deviceType status lastSeenAt currentSyncActivity syncLogs lastSyncStartedAt lastSyncCompletedAt createdAt')
+        .sort({ createdAt: 1 });
+
+      const totalDevices = allDevices.length;
+      const deviceIndex = Math.max(0, allDevices.findIndex((d) => d.deviceId === deviceId));
+      const intervalHours = device.policy?.syncIntervalHours || 2;
+      const intervalMinutes = intervalHours * 60;
+      // Stagger auto-sync: evenly distribute sync slots across devices so they never collide
+      const staggerOffsetMinutes = totalDevices > 1 ? Math.round((deviceIndex * intervalMinutes) / totalDevices) : 0;
+
+      const schedule = {
+        intervalHours,
+        intervalMinutes,
+        staggerOffsetMinutes,
+        totalDevices,
+        deviceSlot: deviceIndex + 1,
+      };
+
+      const pairedDevices = allDevices.filter((d) => d.deviceId !== deviceId);
+
+      res.json({
+        success: true,
+        policy: device.policy,
+        schedule,
+        device,
+        pairedDevices,
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+
+  /**
+   * Updates live sync status (e.g. syncing, online), current activity message,
+   * and appends to syncLogs for real-time visibility across web and connected devices.
+   */
+  static async updateSyncStatus(req: Request, res: Response): Promise<void> {
+    try {
+      const deviceId = req.device?.deviceId || (req.headers['x-device-id'] as string) || req.body.deviceId;
+      if (!deviceId) {
+        res.status(400).json({ error: 'deviceId is required' });
+        return;
+      }
+
+      const { status, activity, logMessage } = req.body;
+      const updateFields: any = {
+        lastSeenAt: new Date(),
+      };
+
+      if (status) {
+        updateFields.status = status;
+        if (status === 'syncing') {
+          updateFields.lastSyncStartedAt = new Date();
+        } else if (status === 'online') {
+          updateFields.lastSyncCompletedAt = new Date();
+        }
+      }
+
+      if (activity !== undefined) {
+        updateFields.currentSyncActivity = activity;
+      }
+
+      const pushOps: any = {};
+      if (logMessage) {
+        pushOps.syncLogs = {
+          $each: [{ timestamp: new Date(), message: logMessage }],
+          $slice: -20, // Keep last 20 logs
+        };
+      }
+
+      const query: any = { $set: updateFields };
+      if (pushOps.syncLogs) {
+        query.$push = pushOps;
+      }
+
+      const device = await Device.findOneAndUpdate(
+        { deviceId, userId: req.user!._id },
+        query,
+        { new: true }
+      ).select('-apiKeyHash');
+
+      if (!device) {
+        res.status(404).json({ error: 'Device not found' });
+        return;
+      }
+
+      // Broadcast real-time sync status via Socket.IO if available
+      try {
+        const io = getSocketIoInstance();
+        if (io) {
+          io.emit('device:sync_status', {
+            deviceId: device.deviceId,
+            deviceName: device.deviceName,
+            status: device.status,
+            currentSyncActivity: device.currentSyncActivity,
+            syncLogs: device.syncLogs,
+            timestamp: Date.now(),
+          });
+        }
+      } catch (_: any) {}
+
+      res.json({ success: true, device });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }

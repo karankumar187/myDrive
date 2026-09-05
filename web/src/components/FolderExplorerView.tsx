@@ -1238,6 +1238,9 @@ export const FolderExplorerView: React.FC<Props> = ({
                 <div className="flex justify-between"><span className="text-zinc-500">Type</span><span className="text-zinc-300">{detailsFile.mimeType}</span></div>
                 <div className="flex justify-between"><span className="text-zinc-500">Size</span><span className="text-zinc-300">{formatBytes(detailsFile.sizeBytes)}</span></div>
                 <div className="flex justify-between"><span className="text-zinc-500">Created</span><span className="text-zinc-300">{new Date(detailsFile.createdAt).toLocaleString()}</span></div>
+                {detailsFile.metadata?.takenAt && (
+                  <div className="flex justify-between"><span className="text-purple-400 font-semibold">Taken Date & Time</span><span className="text-purple-300 font-medium">{new Date(detailsFile.metadata.takenAt).toLocaleString()}</span></div>
+                )}
                 <div className="flex justify-between"><span className="text-zinc-500">Modified</span><span className="text-zinc-300">{new Date(detailsFile.updatedAt).toLocaleString()}</span></div>
               </div>
               <div className="bg-[#18181f] rounded-xl p-3 space-y-2.5 border border-[#272733]">

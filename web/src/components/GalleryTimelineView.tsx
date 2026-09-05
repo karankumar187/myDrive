@@ -33,7 +33,7 @@ import {
 } from 'lucide-react';
 import { VaultCryptoService } from '../services/vault-crypto.js';
 import { mediaCache, mediaQueue } from '../services/media-cache.js';
-import { getStreamUrl, formatBytes, formatDate } from '../utils/format.js';
+import { getStreamUrl, formatBytes, formatDate, formatDateTime } from '../utils/format.js';
 import { api } from '../services/api.js';
 
 interface Props {
@@ -1622,12 +1622,12 @@ const PhotoDetailsModal: React.FC<{ item: FileItem; onClose: () => void }> = ({ 
 
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <p className="text-zinc-500 font-semibold text-[11px]">Taken</p>
-              <p className="text-zinc-200 mt-0.5">{dateFormatted}</p>
+              <p className="text-zinc-500 font-semibold text-[11px]">Taken Date & Time</p>
+              <p className="text-zinc-200 mt-0.5 font-medium">{dateFormatted}</p>
             </div>
             <div>
               <p className="text-zinc-500 font-semibold text-[11px]">Size</p>
-              <p className="text-zinc-200 mt-0.5">{sizeFormatted}</p>
+              <p className="text-zinc-200 mt-0.5 font-medium">{sizeFormatted}</p>
             </div>
           </div>
 

@@ -49,6 +49,14 @@ const DevicePolicySchema = new Schema(
       type: Boolean,
       default: false,
     },
+    autoDownloadToGallery: {
+      type: Boolean,
+      default: false,
+    },
+    syncIntervalHours: {
+      type: Number,
+      default: 2,
+    },
     pairedDeviceRules: {
       type: [
         {
@@ -102,8 +110,29 @@ const DeviceSchema = new Schema<IDeviceDocument>(
     appVersion: String,
     status: {
       type: String,
-      enum: ['online', 'offline'],
+      enum: ['online', 'offline', 'syncing'],
       default: 'offline',
+    },
+    currentSyncActivity: {
+      type: String,
+      default: '',
+    },
+    syncLogs: {
+      type: [
+        {
+          timestamp: { type: Date, default: Date.now },
+          message: { type: String, required: true },
+        },
+      ],
+      default: [],
+    },
+    lastSyncStartedAt: {
+      type: Date,
+      default: null,
+    },
+    lastSyncCompletedAt: {
+      type: Date,
+      default: null,
     },
     lastSeenAt: {
       type: Date,

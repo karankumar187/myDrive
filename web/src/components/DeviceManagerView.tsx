@@ -14,6 +14,9 @@ import {
   FolderOpen,
   X,
   RefreshCw,
+  Download,
+  Activity,
+  Clock,
 } from 'lucide-react';
 import { api } from '../services/api.js';
 import { formatBytes } from '../utils/format.js';
@@ -22,13 +25,29 @@ interface Props {
   devices: DeviceItem[];
   onRefresh: () => void;
   onOpenIPhoneModal: () => void;
+  selectedLogDevice?: DeviceItem | null;
+  onCloseLogModal?: () => void;
 }
 
-export const DeviceManagerView: React.FC<Props> = ({ devices, onRefresh, onOpenIPhoneModal }) => {
+export const DeviceManagerView: React.FC<Props> = ({
+  devices,
+  onRefresh,
+  onOpenIPhoneModal,
+  selectedLogDevice,
+  onCloseLogModal,
+}) => {
   const [loadingId, setLoadingId] = useState<string | null>(null);
   const [inspectDevice, setInspectDevice] = useState<DeviceItem | null>(null);
   const [inspectFiles, setInspectFiles] = useState<FileItem[]>([]);
   const [inspectLoading, setInspectLoading] = useState<boolean>(false);
+  const [viewingLogsDevice, setViewingLogsDevice] = useState<DeviceItem | null>(selectedLogDevice || null);
+
+  // Sync external log modal trigger
+  React.useEffect(() => {
+    if (selectedLogDevice) {
+      setViewingLogsDevice(selectedLogDevice);
+    }
+  }, [selectedLogDevice]);
 
   const getDeviceIcon = (type: string) => {
     switch (type) {
@@ -155,21 +174,33 @@ export const DeviceManagerView: React.FC<Props> = ({ devices, onRefresh, onOpenI
 
                 <span
                   className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-semibold border ${
-                    device.status === 'online'
+                    device.status === 'syncing'
+                      ? 'bg-purple-950/60 text-purple-300 border-purple-500/50 shadow-glow-purple animate-pulse'
+                      : device.status === 'online'
                       ? 'bg-emerald-950/40 text-emerald-400 border-emerald-800/50'
                       : 'bg-zinc-900 text-zinc-500 border-zinc-800'
                   }`}
                 >
                   <span
                     className={`w-1.5 h-1.5 rounded-full mr-1.5 ${
-                      device.status === 'online'
+                      device.status === 'syncing'
+                        ? 'bg-purple-400 animate-ping'
+                        : device.status === 'online'
                         ? 'bg-emerald-400 shadow-[0_0_6px_#34d399]'
                         : 'bg-zinc-600'
                     }`}
                   />
-                  {device.status}
+                  {device.status.toUpperCase()}
                 </span>
               </div>
+
+              {/* Live Sync Activity Pill if Active */}
+              {device.currentSyncActivity && (
+                <div className="flex items-center space-x-2 text-xs text-purple-300 font-medium bg-purple-950/30 px-3 py-1.5 rounded-xl border border-purple-800/40 shadow-sm">
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin text-purple-400 flex-shrink-0" />
+                  <span className="truncate">{device.currentSyncActivity}</span>
+                </div>
+              )}
 
               {/* Policy Controls */}
               <div className="bg-[#16161d] border border-[#22222c] rounded-2xl p-4 space-y-3 text-xs">
@@ -220,9 +251,9 @@ export const DeviceManagerView: React.FC<Props> = ({ devices, onRefresh, onOpenI
 
                 <div className="pt-2 border-t border-[#202029] space-y-2">
                   <div className="font-bold text-zinc-500 text-[10px] uppercase tracking-wider">
-                    Personalized Media & Doc Policy
+                    Personalized Media & Paired Policy
                   </div>
-                  <div className="grid grid-cols-3 gap-2">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                     <button
                       onClick={() => handleTogglePolicy(device, 'syncPhotos')}
                       disabled={loadingId === device._id}
@@ -259,19 +290,42 @@ export const DeviceManagerView: React.FC<Props> = ({ devices, onRefresh, onOpenI
                       <FileText className="w-3 h-3" />
                       <span>Docs</span>
                     </button>
+                    <button
+                      onClick={() => handleTogglePolicy(device, 'autoDownloadToGallery')}
+                      disabled={loadingId === device._id}
+                      title="Automatically download paired device media into native phone Gallery"
+                      className={`flex items-center justify-center space-x-1 py-1.5 px-2 rounded-xl text-[10px] font-bold border transition ${
+                        device.policy?.autoDownloadToGallery
+                          ? 'bg-purple-950/60 text-purple-300 border-purple-600/80 shadow-glow-purple'
+                          : 'bg-zinc-900 text-zinc-600 border-zinc-800'
+                      }`}
+                    >
+                      <Download className="w-3 h-3" />
+                      <span>Auto Gallery</span>
+                    </button>
                   </div>
                 </div>
               </div>
 
               {/* Action Buttons */}
               <div className="flex items-center justify-between pt-1">
-                <button
-                  onClick={() => handleOpenUploads(device)}
-                  className="flex items-center space-x-1.5 text-xs text-purple-400 hover:text-purple-300 font-semibold transition"
-                >
-                  <FolderOpen className="w-3.5 h-3.5" />
-                  <span>View Uploaded Docs</span>
-                </button>
+                <div className="flex items-center space-x-3">
+                  <button
+                    onClick={() => setViewingLogsDevice(device)}
+                    className="flex items-center space-x-1.5 text-xs text-purple-400 hover:text-purple-300 font-semibold transition"
+                  >
+                    <Activity className="w-3.5 h-3.5" />
+                    <span>Sync Activity & Logs</span>
+                  </button>
+
+                  <button
+                    onClick={() => handleOpenUploads(device)}
+                    className="flex items-center space-x-1.5 text-xs text-zinc-400 hover:text-white font-semibold transition"
+                  >
+                    <FolderOpen className="w-3.5 h-3.5" />
+                    <span>Uploaded Docs</span>
+                  </button>
+                </div>
 
                 <button
                   onClick={() => handleRevoke(device._id, device.deviceName)}
@@ -366,6 +420,129 @@ export const DeviceManagerView: React.FC<Props> = ({ devices, onRefresh, onOpenI
             <div className="p-4 border-t border-[#22222d] bg-[#101016] flex justify-end">
               <button
                 onClick={() => setInspectDevice(null)}
+                className="px-5 py-2 text-xs font-bold text-white bg-[#22222d] hover:bg-[#2c2c3d] rounded-full transition"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Live Sync Activity & Logs Modal */}
+      {viewingLogsDevice && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fade-in">
+          <div className="bg-[#13131a] border border-[#27273a] rounded-3xl w-full max-w-2xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden">
+            <div className="p-5 border-b border-[#22222d] flex items-center justify-between">
+              <div className="flex items-center space-x-3">
+                <div className="p-2.5 bg-[#1e1e28] border border-[#2e2e3e] rounded-xl text-purple-400">
+                  <Activity className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-white text-base flex items-center space-x-2">
+                    <span>{viewingLogsDevice.deviceName}</span>
+                    <span
+                      className={`text-[10px] px-2 py-0.5 rounded-full font-semibold border ${
+                        viewingLogsDevice.status === 'syncing'
+                          ? 'bg-purple-950/60 text-purple-300 border-purple-500/50 shadow-glow-purple animate-pulse'
+                          : viewingLogsDevice.status === 'online'
+                          ? 'bg-emerald-950/40 text-emerald-400 border-emerald-800/50'
+                          : 'bg-zinc-900 text-zinc-500 border-zinc-800'
+                      }`}
+                    >
+                      {viewingLogsDevice.status.toUpperCase()}
+                    </span>
+                  </h3>
+                  <p className="text-xs text-zinc-400">
+                    Device ID: <code className="text-purple-300">{viewingLogsDevice.deviceId}</code>
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setViewingLogsDevice(null);
+                  if (onCloseLogModal) onCloseLogModal();
+                }}
+                className="p-2 text-zinc-400 hover:text-white rounded-full hover:bg-zinc-800/60 transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-5 overflow-y-auto flex-1 space-y-4">
+              {/* Current Live Activity */}
+              <div className="bg-[#181822] border border-[#272738] rounded-2xl p-4 space-y-1.5">
+                <div className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider flex items-center space-x-1.5">
+                  <Clock className="w-3.5 h-3.5 text-purple-400" />
+                  <span>Current Activity</span>
+                </div>
+                <p className="text-sm font-semibold text-white flex items-center space-x-2">
+                  {viewingLogsDevice.status === 'syncing' && (
+                    <RefreshCw className="w-4 h-4 animate-spin text-purple-400 flex-shrink-0" />
+                  )}
+                  <span>{viewingLogsDevice.currentSyncActivity || 'Idle (Waiting for next scheduled sync)'}</span>
+                </p>
+                <p className="text-[11px] text-zinc-400">
+                  Last seen active: {new Date(viewingLogsDevice.lastSeenAt).toLocaleString()}
+                </p>
+              </div>
+
+              {/* Sync Schedule & Stagger Status */}
+              <div className="bg-[#181822] border border-[#272738] rounded-2xl p-4 space-y-2">
+                <div className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">
+                  Auto-Sync Schedule & Collision Prevention
+                </div>
+                <div className="grid grid-cols-2 gap-3 text-xs">
+                  <div className="bg-[#121219] p-2.5 rounded-xl border border-[#22222d]">
+                    <span className="text-zinc-500 block text-[10px]">Interval</span>
+                    <span className="font-bold text-zinc-200">
+                      Every {viewingLogsDevice.policy?.syncIntervalHours || 2} hours
+                    </span>
+                  </div>
+                  <div className="bg-[#121219] p-2.5 rounded-xl border border-[#22222d]">
+                    <span className="text-zinc-500 block text-[10px]">Collision Protection</span>
+                    <span className="font-bold text-emerald-400">
+                      Staggered Slot Active
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Live Logs List */}
+              <div className="space-y-2">
+                <div className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider px-1">
+                  Device Sync Log History
+                </div>
+                {(!viewingLogsDevice.syncLogs || viewingLogsDevice.syncLogs.length === 0) ? (
+                  <div className="p-8 text-center text-zinc-500 bg-[#14141d] rounded-2xl border border-[#22222e]">
+                    <Activity className="w-8 h-8 mx-auto text-zinc-600 mb-2" />
+                    <p className="text-xs font-semibold text-zinc-400">No sync logs recorded yet</p>
+                    <p className="text-[11px] text-zinc-600 mt-0.5">Logs will stream here in real time as the device syncs.</p>
+                  </div>
+                ) : (
+                  <div className="space-y-1.5 font-mono text-xs max-h-64 overflow-y-auto pr-1">
+                    {[...viewingLogsDevice.syncLogs].reverse().map((entry, i) => (
+                      <div
+                        key={i}
+                        className="bg-[#14141e] border border-[#232332] p-2.5 rounded-xl flex items-start space-x-2.5 text-zinc-300"
+                      >
+                        <span className="text-purple-400 text-[10px] flex-shrink-0 mt-0.5">
+                          {new Date(entry.timestamp).toLocaleTimeString()}
+                        </span>
+                        <span className="text-xs text-zinc-200 break-words">{entry.message}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="p-4 border-t border-[#22222d] bg-[#101016] flex justify-end">
+              <button
+                onClick={() => {
+                  setViewingLogsDevice(null);
+                  if (onCloseLogModal) onCloseLogModal();
+                }}
                 className="px-5 py-2 text-xs font-bold text-white bg-[#22222d] hover:bg-[#2c2c3d] rounded-full transition"
               >
                 Close

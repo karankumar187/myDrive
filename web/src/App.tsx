@@ -82,6 +82,7 @@ export const App: React.FC = () => {
   const [isSocketConnected, setIsSocketConnected] = useState(false);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
+  const [logModalDevice, setLogModalDevice] = useState<DeviceItem | null>(null);
 
   // Initial authentication check & OAuth callback handling
   useEffect(() => {
@@ -143,9 +144,37 @@ export const App: React.FC = () => {
       loadDashboardData();
     });
 
+    socket.on('device:sync_status', (data: any) => {
+      setDevices((prevDevices) =>
+        prevDevices.map((d) => {
+          if (d.deviceId === data.deviceId) {
+            return {
+              ...d,
+              status: data.status || d.status,
+              currentSyncActivity: data.currentSyncActivity !== undefined ? data.currentSyncActivity : d.currentSyncActivity,
+              syncLogs: data.syncLogs || d.syncLogs,
+              lastSeenAt: new Date().toISOString(),
+            };
+          }
+          return d;
+        })
+      );
+    });
+
     return () => {
       disconnectSocket();
     };
+  }, [currentUser]);
+
+  // Periodic device status poll to keep live sync status up to date
+  useEffect(() => {
+    if (!currentUser) return;
+    const interval = setInterval(() => {
+      api.listDevices().then((res) => {
+        if (res.devices) setDevices(res.devices);
+      }).catch(() => {});
+    }, 10000);
+    return () => clearInterval(interval);
   }, [currentUser]);
 
   // Local memory cache for instant (0ms) folder navigation
@@ -399,6 +428,27 @@ export const App: React.FC = () => {
 
           {/* Right Action Controls */}
           <div className="flex items-center space-x-3">
+            {/* Live Syncing Device Indicator Badge */}
+            {(() => {
+              const syncingDev = devices.find((d) => d.status === 'syncing');
+              if (!syncingDev) return null;
+              return (
+                <button
+                  onClick={() => {
+                    setLogModalDevice(syncingDev);
+                    setActiveTab('devices');
+                  }}
+                  className="flex items-center space-x-2 px-3 py-1 bg-purple-950/70 hover:bg-purple-900/80 border border-purple-500/60 text-purple-300 rounded-full text-xs font-semibold shadow-glow-purple transition animate-pulse"
+                  title={`Device syncing live: ${syncingDev.deviceName}`}
+                >
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin text-purple-400" />
+                  <span className="max-w-[130px] sm:max-w-[190px] truncate">
+                    {syncingDev.deviceName}: {syncingDev.currentSyncActivity || 'Syncing...'}
+                  </span>
+                </button>
+              );
+            })()}
+
             {/* Profile Avatar with Dropdown */}
             <div className="relative">
               <button
@@ -487,6 +537,8 @@ export const App: React.FC = () => {
             devices={devices}
             onRefresh={loadDashboardData}
             onOpenIPhoneModal={() => setIsIPhoneModalOpen(true)}
+            selectedLogDevice={logModalDevice}
+            onCloseLogModal={() => setLogModalDevice(null)}
           />
         )}
 
