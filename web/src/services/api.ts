@@ -3,38 +3,111 @@ import { StorageSummary, FileItem, FolderItem, DeviceItem, User, BreadcrumbItem 
 const rawApiUrl = (import.meta.env.VITE_API_URL || '').replace(/\/+$/, '');
 const API_BASE = rawApiUrl ? `${rawApiUrl}/api/v1` : '/api/v1';
 
-type LoadingListener = (isLoading: boolean) => void;
-let activeRequestCount = 0;
-const loadingListeners = new Set<LoadingListener>();
+export interface GlobalProgressState {
+  progress: number; // 0 to 100
+  isVisible: boolean;
+  isFading: boolean;
+  isLoading: boolean;
+}
 
-function notifyLoadingListeners() {
-  const isLoading = activeRequestCount > 0;
-  loadingListeners.forEach((listener) => {
+type ProgressListener = (state: GlobalProgressState) => void;
+
+let activeRequestCount = 0;
+const progressListeners = new Set<ProgressListener>();
+
+let currentProgress = 0;
+let isVisible = false;
+let isFading = false;
+let trickleInterval: any = null;
+let completeTimeout: any = null;
+let resetTimeout: any = null;
+
+function broadcastProgressState() {
+  const state: GlobalProgressState = {
+    progress: currentProgress,
+    isVisible,
+    isFading,
+    isLoading: activeRequestCount > 0,
+  };
+  progressListeners.forEach((listener) => {
     try {
-      listener(isLoading);
+      listener(state);
     } catch (e) {
-      console.error('Error in loading listener:', e);
+      console.error('Error in progress listener:', e);
     }
   });
 }
 
-export function subscribeToLoading(listener: LoadingListener): () => void {
-  loadingListeners.add(listener);
-  listener(activeRequestCount > 0);
+export function subscribeToProgress(listener: ProgressListener): () => void {
+  progressListeners.add(listener);
+  listener({
+    progress: currentProgress,
+    isVisible,
+    isFading,
+    isLoading: activeRequestCount > 0,
+  });
   return () => {
-    loadingListeners.delete(listener);
+    progressListeners.delete(listener);
   };
+}
+
+export function subscribeToLoading(listener: (isLoading: boolean) => void): () => void {
+  return subscribeToProgress((state) => listener(state.isLoading));
 }
 
 export function startGlobalLoading(): () => void {
   activeRequestCount++;
-  notifyLoadingListeners();
+
+  if (activeRequestCount === 1) {
+    if (completeTimeout) clearTimeout(completeTimeout);
+    if (resetTimeout) clearTimeout(resetTimeout);
+    if (trickleInterval) clearInterval(trickleInterval);
+
+    isVisible = true;
+    isFading = false;
+    currentProgress = 14;
+    broadcastProgressState();
+
+    // Trickle progress forward smoothly
+    trickleInterval = setInterval(() => {
+      if (currentProgress < 35) {
+        currentProgress += 7;
+      } else if (currentProgress < 65) {
+        currentProgress += 4;
+      } else if (currentProgress < 85) {
+        currentProgress += 2;
+      } else if (currentProgress < 94) {
+        currentProgress += 0.8;
+      }
+      broadcastProgressState();
+    }, 160);
+  }
+
   let stopped = false;
   return () => {
     if (!stopped) {
       stopped = true;
       activeRequestCount = Math.max(0, activeRequestCount - 1);
-      notifyLoadingListeners();
+      if (activeRequestCount === 0) {
+        if (trickleInterval) clearInterval(trickleInterval);
+
+        // Instantly run the single line to 100% (complete!)
+        currentProgress = 100;
+        broadcastProgressState();
+
+        // Keep line at 100% for 300ms so the user sees it reach the end
+        completeTimeout = setTimeout(() => {
+          isFading = true;
+          broadcastProgressState();
+
+          resetTimeout = setTimeout(() => {
+            isVisible = false;
+            isFading = false;
+            currentProgress = 0;
+            broadcastProgressState();
+          }, 280);
+        }, 300);
+      }
     }
   };
 }

@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { FileItem } from '../types.js';
 import { Trash2, RotateCcw, AlertTriangle, Loader2, Sparkles } from 'lucide-react';
-import { api } from '../services/api.js';
+import { api, subscribeToProgress, GlobalProgressState } from '../services/api.js';
 import { formatBytes } from '../utils/format.js';
 
 interface Props {
@@ -11,6 +11,16 @@ interface Props {
 
 export const TrashBinView: React.FC<Props> = ({ trashedFiles, onRefresh }) => {
   const [actionLoading, setActionLoading] = useState<'restore-all' | 'empty' | 'dedup' | null>(null);
+  const [globalProgress, setGlobalProgress] = useState<GlobalProgressState>({
+    progress: 0,
+    isVisible: false,
+    isFading: false,
+    isLoading: false,
+  });
+
+  useEffect(() => {
+    return subscribeToProgress(setGlobalProgress);
+  }, []);
 
   const handleRestore = async (id: string) => {
     try {
@@ -139,6 +149,18 @@ export const TrashBinView: React.FC<Props> = ({ trashedFiles, onRefresh }) => {
           )}
         </div>
       </div>
+
+      {/* Single Running Progress Line during actions like Empty Trash */}
+      {globalProgress.isVisible && actionLoading !== null && (
+        <div className="h-[3px] rounded-full overflow-hidden bg-purple-950/30 w-full relative">
+          <div
+            className="h-full bg-gradient-to-r from-purple-500 via-indigo-400 to-purple-400 single-progress-bar"
+            style={{
+              width: `${globalProgress.progress}%`,
+            }}
+          />
+        </div>
+      )}
 
       <div className="p-4 bg-amber-950/30 border border-amber-800/40 rounded-2xl text-xs text-amber-300 flex items-center space-x-2.5">
         <AlertTriangle className="w-4 h-4 flex-shrink-0 text-amber-400" />

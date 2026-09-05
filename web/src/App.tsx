@@ -13,7 +13,7 @@ import {
   Search,
   Bell,
 } from 'lucide-react';
-import { api, subscribeToLoading } from './services/api.js';
+import { api, subscribeToProgress, GlobalProgressState } from './services/api.js';
 import { getSocket, disconnectSocket } from './services/socket.js';
 import { StorageSummary, FileItem, FolderItem, DeviceItem, User, BreadcrumbItem } from './types.js';
 import { StorageSummaryView } from './components/StorageSummaryView.js';
@@ -74,10 +74,15 @@ export const App: React.FC = () => {
   const [devices, setDevices] = useState<DeviceItem[]>([]);
   const [trashedFiles, setTrashedFiles] = useState<FileItem[]>([]);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [isGlobalLoading, setIsGlobalLoading] = useState(false);
+  const [globalProgress, setGlobalProgress] = useState<GlobalProgressState>({
+    progress: 0,
+    isVisible: false,
+    isFading: false,
+    isLoading: false,
+  });
 
   useEffect(() => {
-    return subscribeToLoading(setIsGlobalLoading);
+    return subscribeToProgress(setGlobalProgress);
   }, []);
 
   // Zero-Knowledge Vault state
@@ -486,10 +491,18 @@ export const App: React.FC = () => {
           </div>
         </div>
 
-        {/* Indeterminate Loading Progress Line under Navbar */}
-        {(isGlobalLoading || isRefreshing) && (
-          <div className="absolute bottom-0 left-0 right-0 h-[2.5px] overflow-hidden bg-purple-950/20 z-50 pointer-events-none">
-            <div className="h-full bg-gradient-to-r from-purple-500 via-indigo-400 to-purple-400 w-full animate-loading-line shadow-glow-purple" />
+        {/* Single Running Progress Line under Navbar */}
+        {globalProgress.isVisible && (
+          <div
+            className="absolute bottom-0 left-0 right-0 h-[3px] overflow-hidden bg-purple-950/20 z-50 pointer-events-none transition-opacity duration-300"
+            style={{ opacity: globalProgress.isFading ? 0 : 1 }}
+          >
+            <div
+              className="h-full bg-gradient-to-r from-purple-500 via-indigo-400 to-purple-400 single-progress-bar"
+              style={{
+                width: `${globalProgress.progress}%`,
+              }}
+            />
           </div>
         )}
       </header>

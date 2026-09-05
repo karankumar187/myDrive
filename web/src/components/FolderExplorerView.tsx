@@ -34,7 +34,7 @@ import {
   XCircle,
   ExternalLink,
 } from 'lucide-react';
-import { api, startGlobalLoading } from '../services/api.js';
+import { api, startGlobalLoading, subscribeToProgress, GlobalProgressState } from '../services/api.js';
 import { VaultCryptoService } from '../services/vault-crypto.js';
 import { mediaCache, generateThumbnailFromVideoFile } from '../services/media-cache.js';
 import { formatBytes, getStreamUrl } from '../utils/format.js';
@@ -71,6 +71,16 @@ export const FolderExplorerView: React.FC<Props> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
   const dragCounter = useRef(0);
+  const [globalProgress, setGlobalProgress] = useState<GlobalProgressState>({
+    progress: 0,
+    isVisible: false,
+    isFading: false,
+    isLoading: false,
+  });
+
+  useEffect(() => {
+    return subscribeToProgress(setGlobalProgress);
+  }, []);
 
   // File Preview state
   const [previewFile, setPreviewFile] = useState<FileItem | null>(null);
@@ -1030,8 +1040,16 @@ export const FolderExplorerView: React.FC<Props> = ({
       {previewFile && (
         <div className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4 backdrop-blur-sm" onClick={closePreview}>
           {previewLoading && (
-            <div className="absolute top-0 left-0 right-0 h-[2.5px] overflow-hidden bg-purple-950/20 z-50 pointer-events-none">
-              <div className="h-full bg-gradient-to-r from-purple-500 via-indigo-400 to-purple-400 w-full animate-loading-line shadow-glow-purple" />
+            <div
+              className="absolute top-0 left-0 right-0 h-[3px] overflow-hidden bg-purple-950/20 z-50 pointer-events-none transition-opacity duration-300"
+              style={{ opacity: globalProgress.isFading ? 0 : 1 }}
+            >
+              <div
+                className="h-full bg-gradient-to-r from-purple-500 via-indigo-400 to-purple-400 single-progress-bar"
+                style={{
+                  width: `${globalProgress.progress}%`,
+                }}
+              />
             </div>
           )}
           <button onClick={closePreview} className="absolute top-4 right-4 z-50 w-10 h-10 rounded-full bg-zinc-800/80 hover:bg-zinc-700 flex items-center justify-center text-white transition">

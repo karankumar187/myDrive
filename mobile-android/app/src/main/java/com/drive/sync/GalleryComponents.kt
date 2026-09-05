@@ -13,6 +13,8 @@ import android.widget.Toast
 import android.widget.VideoView
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.animation.*
+import androidx.compose.animation.core.*
+import kotlinx.coroutines.delay
 import androidx.compose.foundation.*
 import androidx.compose.foundation.gestures.*
 import androidx.compose.foundation.layout.*
@@ -275,6 +277,25 @@ suspend fun apiTrashFile(
     }
 }
 
+suspend fun apiEmptyTrash(
+    serverUrl: String,
+    deviceId: String,
+    deviceKey: String
+): Boolean = withContext(Dispatchers.IO) {
+    try {
+        val req = Request.Builder()
+            .url("${serverUrl.trimEnd('/')}/api/v1/files/trash")
+            .addHeader("x-device-id", deviceId)
+            .addHeader("x-device-key", deviceKey)
+            .delete()
+            .build()
+        sharedHttpClient.newCall(req).execute().use { it.isSuccessful }
+    } catch (e: Exception) {
+        e.printStackTrace()
+        false
+    }
+}
+
 suspend fun apiBulkAction(
     serverUrl: String,
     deviceId: String,
@@ -343,6 +364,73 @@ suspend fun apiDeleteFolder(
     } catch (e: Exception) {
         e.printStackTrace()
         false
+    }
+}
+
+// ----------------------------------------------------
+// Single Running Progress Line from Start to Complete
+// ----------------------------------------------------
+@Composable
+fun SingleRunningProgressBar(
+    isLoading: Boolean,
+    modifier: Modifier = Modifier,
+    height: androidx.compose.ui.unit.Dp = 2.5.dp,
+    color: Color = Color(0xFFA855F7),
+    trackColor: Color = Color(0x22A855F7)
+) {
+    var isVisible by remember { mutableStateOf(false) }
+    var isFading by remember { mutableStateOf(false) }
+    var targetProgress by remember { mutableFloatStateOf(0f) }
+
+    val animatedProgress by animateFloatAsState(
+        targetValue = targetProgress,
+        animationSpec = tween(
+            durationMillis = if (targetProgress == 1f) 240 else if (targetProgress == 0f) 0 else 320,
+            easing = FastOutSlowInEasing
+        ),
+        label = "singleProgressBarAnim"
+    )
+
+    val animatedAlpha by animateFloatAsState(
+        targetValue = if (isFading) 0f else if (isVisible) 1f else 0f,
+        animationSpec = tween(durationMillis = 240),
+        label = "singleProgressBarAlpha"
+    )
+
+    LaunchedEffect(isLoading) {
+        if (isLoading) {
+            isFading = false
+            isVisible = true
+            targetProgress = 0.15f
+            delay(120)
+            if (targetProgress < 0.40f) targetProgress = 0.40f
+            delay(280)
+            if (targetProgress < 0.70f) targetProgress = 0.70f
+            delay(500)
+            if (targetProgress < 0.88f) targetProgress = 0.88f
+            delay(1000)
+            if (targetProgress < 0.94f) targetProgress = 0.94f
+        } else if (isVisible) {
+            targetProgress = 1.0f
+            delay(300)
+            isFading = true
+            delay(240)
+            isVisible = false
+            isFading = false
+            targetProgress = 0f
+        }
+    }
+
+    if (isVisible || animatedAlpha > 0f) {
+        LinearProgressIndicator(
+            progress = { animatedProgress.coerceIn(0f, 1f) },
+            modifier = modifier
+                .fillMaxWidth()
+                .height(height)
+                .graphicsLayer(alpha = animatedAlpha),
+            color = color,
+            trackColor = trackColor
+        )
     }
 }
 
@@ -557,6 +645,7 @@ fun FullGalleryScreen(
     var renameItem by remember { mutableStateOf<CloudMedia?>(null) }
     var isMoveDialogOpen by remember { mutableStateOf(false) }
     var isActionLoading by remember { mutableStateOf(false) }
+    var showEmptyTrashDialog by remember { mutableStateOf(false) }
 
     // Filter media
     val filteredList = remember(localList, filterType, searchQuery, selectedDeviceFilters.toList()) {
@@ -715,6 +804,15 @@ fun FullGalleryScreen(
                                         onClick = {
                                             onRefresh()
                                             isMoreMenuOpen = false
+                                        }
+                                    )
+                                    HorizontalDivider(color = Color(0xFF28283C))
+                                    DropdownMenuItem(
+                                        text = { Text("Empty Cloud Trash", color = Color(0xFFEF4444)) },
+                                        leadingIcon = { Icon(Icons.Default.DeleteSweep, contentDescription = null, tint = Color(0xFFEF4444)) },
+                                        onClick = {
+                                            isMoreMenuOpen = false
+                                            showEmptyTrashDialog = true
                                         }
                                     )
                                 }
@@ -944,15 +1042,9 @@ fun FullGalleryScreen(
             }
         }
 
-        if (isRefreshing || isActionLoading) {
-            LinearProgressIndicator(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(2.5.dp),
-                color = Color(0xFFA855F7),
-                trackColor = Color(0x22A855F7)
-            )
-        }
+        SingleRunningProgressBar(
+            isLoading = isRefreshing || isActionLoading
+        )
 
         // Floating Selection Action Bar
         AnimatedVisibility(visible = (isSelectionMode || selectedIds.isNotEmpty())) {
@@ -1366,6 +1458,51 @@ fun FullGalleryScreen(
             confirmButton = {},
             dismissButton = {
                 TextButton(onClick = { isMoveDialogOpen = false }) {
+                    Text("Cancel", color = Color.LightGray)
+                }
+            }
+        )
+    }
+
+    // 6. Empty Cloud Trash Confirmation Dialog
+    if (showEmptyTrashDialog) {
+        AlertDialog(
+            onDismissRequest = { showEmptyTrashDialog = false },
+            containerColor = Color(0xFF181824),
+            title = { Text("Empty Cloud Trash?", color = Color.White, fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    "Are you sure you want to permanently delete all items in Trash from Google Drive cloud storage? This action cannot be undone.",
+                    color = Color(0xFF94A3B8),
+                    fontSize = 13.sp
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showEmptyTrashDialog = false
+                        coroutineScope.launch {
+                            isActionLoading = true
+                            try {
+                                val ok = apiEmptyTrash(serverUrl, deviceId, deviceKey)
+                                if (ok) {
+                                    Toast.makeText(context, "Cloud Trash emptied successfully", Toast.LENGTH_SHORT).show()
+                                    onRefresh()
+                                } else {
+                                    Toast.makeText(context, "Failed to empty trash", Toast.LENGTH_SHORT).show()
+                                }
+                            } finally {
+                                isActionLoading = false
+                            }
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFDC2626))
+                ) {
+                    Text("Empty Trash", color = Color.White, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showEmptyTrashDialog = false }) {
                     Text("Cancel", color = Color.LightGray)
                 }
             }
@@ -1862,26 +1999,16 @@ fun FullScreenPhotoViewer(
                     }
                 }
 
-                if (isViewerMediaLoading) {
-                    LinearProgressIndicator(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(2.5.dp),
-                        color = Color(0xFFA855F7),
-                        trackColor = Color(0x22A855F7)
-                    )
-                }
+                SingleRunningProgressBar(
+                    isLoading = isViewerMediaLoading
+                )
             }
         }
 
-        if (!showControls && isViewerMediaLoading) {
-            LinearProgressIndicator(
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .fillMaxWidth()
-                    .height(2.5.dp),
-                color = Color(0xFFA855F7),
-                trackColor = Color(0x22A855F7)
+        if (!showControls) {
+            SingleRunningProgressBar(
+                isLoading = isViewerMediaLoading,
+                modifier = Modifier.align(Alignment.TopCenter)
             )
         }
 

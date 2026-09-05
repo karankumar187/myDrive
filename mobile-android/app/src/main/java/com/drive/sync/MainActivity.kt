@@ -1951,13 +1951,9 @@ fun MainAppScreen(
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color(0xFF0D0D11))
             )
-                    if (isGlobalLoading) {
-                        LinearProgressIndicator(
-                            modifier = Modifier.fillMaxWidth().height(2.5.dp),
-                            color = Color(0xFFA855F7),
-                            trackColor = Color(0x22A855F7)
-                        )
-                    }
+                    SingleRunningProgressBar(
+                        isLoading = isGlobalLoading
+                    )
                 }
         }
     },
@@ -2280,16 +2276,10 @@ fun FilesScreen(
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        if (isRefreshing || isActionLoading) {
-            LinearProgressIndicator(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(2.5.dp)
-                    .align(Alignment.TopCenter),
-                color = Color(0xFFA855F7),
-                trackColor = Color(0x22A855F7)
-            )
-        }
+        SingleRunningProgressBar(
+            isLoading = isRefreshing || isActionLoading,
+            modifier = Modifier.align(Alignment.TopCenter)
+        )
 
         LazyColumn(
             modifier = Modifier
@@ -4539,15 +4529,9 @@ fun MediaViewerDialog(
                     }
                 }
 
-                if (isResolvingUrl || isMediaLoading) {
-                    LinearProgressIndicator(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(2.5.dp),
-                        color = Color(0xFFA855F7),
-                        trackColor = Color(0x22A855F7)
-                    )
-                }
+                SingleRunningProgressBar(
+                    isLoading = isResolvingUrl || isMediaLoading
+                )
 
                 // Media Preview Body
                 Box(

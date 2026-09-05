@@ -34,7 +34,7 @@ import {
 import { VaultCryptoService } from '../services/vault-crypto.js';
 import { mediaCache, mediaQueue } from '../services/media-cache.js';
 import { getStreamUrl, formatBytes, formatDate, formatDateTime } from '../utils/format.js';
-import { api, startGlobalLoading } from '../services/api.js';
+import { api, startGlobalLoading, subscribeToProgress, GlobalProgressState } from '../services/api.js';
 
 interface Props {
   media: FileItem[];
@@ -1084,6 +1084,17 @@ const FullScreenViewer: React.FC<{
   const [videoError, setVideoError] = useState(false);
   const [imgError, setImgError] = useState(false);
 
+  const [globalProgress, setGlobalProgress] = useState<GlobalProgressState>({
+    progress: 0,
+    isVisible: false,
+    isFading: false,
+    isLoading: false,
+  });
+
+  useEffect(() => {
+    return subscribeToProgress(setGlobalProgress);
+  }, []);
+
   useEffect(() => {
     if (loading || (!isVideo && !isImageLoaded)) {
       const stop = startGlobalLoading();
@@ -1239,10 +1250,18 @@ const FullScreenViewer: React.FC<{
       onTouchEnd={handleTouchEnd}
       onClick={() => setShowControls(!showControls)}
     >
-      {/* Loading line across top of fullscreen viewer */}
+      {/* Single Running Progress line across top of fullscreen viewer */}
       {(loading || (!isVideo && !isImageLoaded)) && (
-        <div className="absolute top-0 left-0 right-0 h-[2.5px] overflow-hidden bg-purple-950/20 z-50 pointer-events-none">
-          <div className="h-full bg-gradient-to-r from-purple-500 via-indigo-400 to-purple-400 w-full animate-loading-line shadow-glow-purple" />
+        <div
+          className="absolute top-0 left-0 right-0 h-[3px] overflow-hidden bg-purple-950/20 z-50 pointer-events-none transition-opacity duration-300"
+          style={{ opacity: globalProgress.isFading ? 0 : 1 }}
+        >
+          <div
+            className="h-full bg-gradient-to-r from-purple-500 via-indigo-400 to-purple-400 single-progress-bar"
+            style={{
+              width: `${globalProgress.isVisible ? globalProgress.progress : 75}%`,
+            }}
+          />
         </div>
       )}
 
