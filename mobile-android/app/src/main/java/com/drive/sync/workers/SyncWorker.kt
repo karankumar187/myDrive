@@ -18,7 +18,10 @@ import android.util.Size
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
+import okio.BufferedSink
+import okio.source
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 
@@ -293,15 +296,15 @@ class SyncWorker(
 
                 val contentUri = ContentUris.withAppendedId(collectionUri, id)
 
-                // Read bytes & compute SHA-256 for instant deduplication
-                val byteStream = applicationContext.contentResolver.openInputStream(contentUri) ?: continue
-                val bytes = byteStream.use { input ->
-                    val buffer = ByteArrayOutputStream()
-                    input.copyTo(buffer)
-                    buffer.toByteArray()
-                }
-
-                val contentHash = VaultCrypto.calculateSha256(bytes.inputStream())
+                // Compute SHA-256 directly from stream for instant deduplication (zero heap buffer)
+                val contentHash = try {
+                    applicationContext.contentResolver.openInputStream(contentUri)?.use { stream ->
+                        VaultCrypto.calculateSha256(stream)
+                    }
+                } catch (e: Exception) {
+                    Log.w("SyncWorker", "Could not compute hash for $filename: ${e.message}")
+                    null
+                } ?: continue
 
                 // 1. Initiate Upload request with Backend
                 val initJson = JSONObject().apply {
@@ -335,14 +338,24 @@ class SyncWorker(
                     continue
                 }
 
-                // 2. Stream bytes directly to Google Drive Resumable Upload Session
+                // 2. Stream bytes directly to Google Drive Resumable Upload Session (zero memory footprint)
                 val uploadUrl = initResult.getString("uploadSessionUrl")
                 val storageAccountId = initResult.getString("storageAccountId")
                 val driveOpaqueName = initResult.optString("driveOpaqueName", "")
 
+                val streamingBody = object : RequestBody() {
+                    override fun contentType() = mimeType.toMediaType()
+                    override fun contentLength() = sizeBytes
+                    override fun writeTo(sink: BufferedSink) {
+                        applicationContext.contentResolver.openInputStream(contentUri)?.use { stream ->
+                            sink.writeAll(stream.source())
+                        }
+                    }
+                }
+
                 val putRequest = Request.Builder()
                     .url(uploadUrl)
-                    .put(bytes.toRequestBody(mimeType.toMediaType()))
+                    .put(streamingBody)
                     .build()
 
                 val putResponse = client.newCall(putRequest).execute()

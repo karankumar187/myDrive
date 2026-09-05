@@ -311,7 +311,71 @@ export class FileController {
         mediaFilter.filename = { $regex: search.trim(), $options: 'i' };
       }
 
-      const cacheKey = `cache:user:${userId}:gallery:${filter || 'all'}:${search || ''}`;
+      let parsedLimit: number | null = null;
+      if (req.query.limit) {
+        const pl = parseInt(req.query.limit as string, 10);
+        if (!isNaN(pl) && pl > 0) {
+          parsedLimit = pl;
+        }
+      }
+
+      const cursorStr = req.query.cursor as string | undefined;
+      if (cursorStr && typeof cursorStr === 'string' && cursorStr.trim()) {
+        try {
+          const cursorData = JSON.parse(Buffer.from(cursorStr.trim(), 'base64url').toString('utf8'));
+          const cTaken = cursorData.takenAt ? new Date(cursorData.takenAt) : null;
+          const cCreated = cursorData.createdAt ? new Date(cursorData.createdAt) : null;
+          const cId = cursorData.id && Types.ObjectId.isValid(cursorData.id) ? new Types.ObjectId(cursorData.id) : null;
+
+          const cursorConditions: any[] = [];
+          if (cTaken) {
+            cursorConditions.push({ 'metadata.takenAt': { $lt: cTaken } });
+            if (cCreated) {
+              cursorConditions.push({
+                'metadata.takenAt': cTaken,
+                createdAt: { $lt: cCreated },
+              });
+              if (cId) {
+                cursorConditions.push({
+                  'metadata.takenAt': cTaken,
+                  createdAt: cCreated,
+                  _id: { $lt: cId },
+                });
+              }
+            }
+            if (cCreated) {
+              cursorConditions.push({
+                'metadata.takenAt': null,
+                createdAt: { $lt: cCreated },
+              });
+            }
+          } else if (cCreated) {
+            cursorConditions.push({ createdAt: { $lt: cCreated } });
+            if (cId) {
+              cursorConditions.push({
+                createdAt: cCreated,
+                _id: { $lt: cId },
+              });
+            }
+          }
+
+          if (cursorConditions.length > 0) {
+            if (mediaFilter.$and) {
+              mediaFilter.$and.push({ $or: cursorConditions });
+            } else if (mediaFilter.$or) {
+              const existingOr = mediaFilter.$or;
+              delete mediaFilter.$or;
+              mediaFilter.$and = [{ $or: existingOr }, { $or: cursorConditions }];
+            } else {
+              mediaFilter.$or = cursorConditions;
+            }
+          }
+        } catch (err) {
+          console.warn('Failed to parse gallery cursor:', err);
+        }
+      }
+
+      const cacheKey = `cache:user:${userId}:gallery:${filter || 'all'}:${search || ''}:${parsedLimit || 'all'}:${cursorStr || 'first'}`;
       const cached = await CacheService.get(cacheKey);
       if (cached) {
         res.json(cached);
@@ -321,12 +385,12 @@ export class FileController {
       let galleryQuery = File.find(mediaFilter).sort({
         'metadata.takenAt': -1,
         createdAt: -1,
+        _id: -1,
       }).lean();
-      if (req.query.limit) {
-        const parsedLimit = parseInt(req.query.limit as string, 10);
-        if (!isNaN(parsedLimit) && parsedLimit > 0) {
-          galleryQuery = galleryQuery.limit(parsedLimit);
-        }
+
+      if (parsedLimit) {
+        // Fetch parsedLimit + 1 to detect if next page exists
+        galleryQuery = galleryQuery.limit(parsedLimit + 1);
       }
 
       const [mediaFiles, devices, folders, storageAccounts] = await Promise.all([
@@ -362,6 +426,24 @@ export class FileController {
         uniqueMediaFiles.push(file);
       }
 
+      let hasMore = false;
+      let nextCursor: string | null = null;
+      if (parsedLimit && uniqueMediaFiles.length > parsedLimit) {
+        hasMore = true;
+        uniqueMediaFiles.splice(parsedLimit); // Retain exactly parsedLimit
+      }
+
+      if (hasMore && uniqueMediaFiles.length > 0) {
+        const lastItem = uniqueMediaFiles[uniqueMediaFiles.length - 1];
+        nextCursor = Buffer.from(
+          JSON.stringify({
+            takenAt: lastItem.metadata?.takenAt || null,
+            createdAt: lastItem.createdAt,
+            id: lastItem._id.toString(),
+          })
+        ).toString('base64url');
+      }
+
       const enrichedMedia = uniqueMediaFiles.map((file: any) => {
         const obj: any = { ...file };
         obj.mimeType = getEffectiveMimeType(file.filename, file.mimeType);
@@ -392,6 +474,8 @@ export class FileController {
 
       const payload = {
         media: enrichedMedia,
+        nextCursor,
+        hasMore,
         devices: devices.map((d) => ({
           deviceId: d.deviceId,
           deviceName: d.deviceName,
@@ -476,26 +560,26 @@ export class FileController {
   static async streamFile(req: Request, res: Response): Promise<void> {
     try {
       const userId = req.user!._id;
-      const file = await File.findOne({
+      const file: any = await File.findOne({
         _id: req.params.id,
         userId, // Strict IDOR check
-      });
+      }).lean();
 
       if (!file) {
         res.status(404).json({ error: 'File not found or access denied' });
         return;
       }
 
-      const latestVersion = file.versions[file.versions.length - 1];
+      const latestVersion = file.versions?.[file.versions.length - 1];
       if (!latestVersion) {
         res.status(404).json({ error: 'No file versions available' });
         return;
       }
 
-      const account = await StorageAccount.findOne({
+      const account: any = await StorageAccount.findOne({
         _id: latestVersion.storageAccountId,
         userId,
-      });
+      }).lean();
 
       if (!account) {
         res.status(404).json({ error: 'Associated storage account not found' });
@@ -514,6 +598,7 @@ export class FileController {
       res.setHeader('Content-Type', responseMime);
       res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(file.filename)}"`);
       res.setHeader('Accept-Ranges', 'bytes');
+      res.setHeader('Cache-Control', 'private, max-age=86400, stale-while-revalidate=43200');
 
       const range = req.headers.range;
       const driveStream = await GoogleDriveService.getFileStream(account, latestVersion.providerFileId, range);

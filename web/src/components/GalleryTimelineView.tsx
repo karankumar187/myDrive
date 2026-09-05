@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { FileItem, FolderItem, DeviceItem } from '../types.js';
 import {
   Film,
@@ -42,6 +42,8 @@ interface Props {
   vaultKey: CryptoKey | null;
   onOpenVault?: () => void;
   onRefresh?: () => void;
+  initialCursor?: string | null;
+  initialHasMore?: boolean;
 }
 
 interface LoadedMediaState {
@@ -52,7 +54,28 @@ interface LoadedMediaState {
   error?: string | null;
 }
 
-export const GalleryTimelineView: React.FC<Props> = ({ media, vaultKey, onOpenVault, onRefresh }) => {
+const getLastCursor = (list: FileItem[]): string | null => {
+  if (!list || list.length === 0) return null;
+  const lastItem = list[list.length - 1];
+  const payload = {
+    takenAt: lastItem.metadata?.takenAt || null,
+    createdAt: lastItem.createdAt,
+    id: lastItem._id,
+  };
+  return btoa(unescape(encodeURIComponent(JSON.stringify(payload))))
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+};
+
+export const GalleryTimelineView: React.FC<Props> = ({
+  media,
+  vaultKey,
+  onOpenVault,
+  onRefresh,
+  initialCursor,
+  initialHasMore,
+}) => {
   // Filters & Search
   const [filterType, setFilterType] = useState<'all' | 'favorites' | 'videos' | 'photos'>('all');
   const [isFilterDropdownOpen, setIsFilterDropdownOpen] = useState(false);
@@ -86,12 +109,115 @@ export const GalleryTimelineView: React.FC<Props> = ({ media, vaultKey, onOpenVa
   const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
   const [isMoving, setIsMoving] = useState(false);
 
-  // Local mutable media list to reflect instant favorite / rename / trash
+  // Local mutable media list to reflect instant favorite / rename / trash & infinite scroll
   const [localMediaList, setLocalMediaList] = useState<FileItem[]>(media);
+  const [nextCursor, setNextCursor] = useState<string | null>(initialCursor ?? null);
+  const [hasMore, setHasMore] = useState<boolean>(initialHasMore ?? true);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const isFirstMountRef = useRef(true);
 
   useEffect(() => {
     setLocalMediaList(media);
-  }, [media]);
+    if (initialCursor !== undefined) setNextCursor(initialCursor);
+    if (initialHasMore !== undefined) setHasMore(initialHasMore);
+  }, [media, initialCursor, initialHasMore]);
+
+  // Load more media on infinite scroll
+  const loadMoreMedia = useCallback(async () => {
+    if (isLoadingMore || !hasMore) return;
+    setIsLoadingMore(true);
+    try {
+      const cursor = nextCursor || getLastCursor(localMediaList);
+      if (!cursor) {
+        setHasMore(false);
+        return;
+      }
+      const res = await api.getGallery({
+        limit: 60,
+        cursor,
+        filter: filterType !== 'all' ? filterType : undefined,
+        search: searchQuery.trim() || undefined,
+      });
+
+      if (res.media && res.media.length > 0) {
+        setLocalMediaList((prev) => {
+          const existingIds = new Set(prev.map((m) => m._id));
+          const newItems = res.media.filter((m) => !existingIds.has(m._id));
+          return [...prev, ...newItems];
+        });
+        setNextCursor(res.nextCursor || null);
+        setHasMore(Boolean(res.hasMore));
+      } else {
+        setHasMore(false);
+      }
+    } catch (err) {
+      console.error('Failed to load more gallery media:', err);
+      setHasMore(false);
+    } finally {
+      setIsLoadingMore(false);
+    }
+  }, [isLoadingMore, hasMore, nextCursor, localMediaList, filterType, searchQuery]);
+
+  // Infinite scroll IntersectionObserver
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    if (!sentinel) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && hasMore && !isLoadingMore) {
+          loadMoreMedia();
+        }
+      },
+      { rootMargin: '400px' }
+    );
+
+    observer.observe(sentinel);
+    return () => {
+      observer.disconnect();
+    };
+  }, [loadMoreMedia, hasMore, isLoadingMore]);
+
+  // Query server when filter or search changes
+  useEffect(() => {
+    if (isFirstMountRef.current) {
+      isFirstMountRef.current = false;
+      return;
+    }
+    let cancelled = false;
+    const fetchFiltered = async () => {
+      try {
+        setIsLoadingMore(true);
+        const res = await api.getGallery({
+          limit: 60,
+          filter: filterType !== 'all' ? filterType : undefined,
+          search: searchQuery.trim() || undefined,
+        });
+        if (!cancelled) {
+          setLocalMediaList(res.media || []);
+          setNextCursor(res.nextCursor || null);
+          setHasMore(Boolean(res.hasMore));
+        }
+      } catch (err) {
+        console.error('Error fetching filtered media:', err);
+      } finally {
+        if (!cancelled) setIsLoadingMore(false);
+      }
+    };
+
+    if (filterType !== 'all' || searchQuery.trim()) {
+      fetchFiltered();
+    } else {
+      setLocalMediaList(media);
+      setNextCursor(initialCursor ?? null);
+      setHasMore(initialHasMore ?? true);
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [filterType, searchQuery]);
 
   useEffect(() => {
     api.listDevices().then((res) => {
@@ -696,6 +822,15 @@ export const GalleryTimelineView: React.FC<Props> = ({ media, vaultKey, onOpenVa
           </div>
         ))
       )}
+
+      {/* Loading Indicator & Infinite Scroll Sentinel */}
+      {isLoadingMore && (
+        <div className="flex items-center justify-center py-6 space-x-2 text-zinc-400">
+          <Loader2 className="w-5 h-5 text-purple-500 animate-spin" />
+          <span className="text-xs font-medium">Loading more media...</span>
+        </div>
+      )}
+      {hasMore && <div ref={sentinelRef} className="h-6 w-full" />}
 
       {/* Full-Screen Photo Viewer */}
       {selectedMediaIndex !== null && currentMedia && (

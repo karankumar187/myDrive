@@ -90,7 +90,10 @@ import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
+import okio.BufferedSink
+import okio.source
 import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.*
@@ -302,7 +305,10 @@ class MainActivity : ComponentActivity() {
             }
             if (chargingOnly) {
                 setRequiresCharging(true)
+            } else {
+                setRequiresBatteryNotLow(true)
             }
+            setRequiresStorageNotLow(true)
         }.build()
 
         val syncRequestBuilder = PeriodicWorkRequestBuilder<SyncWorker>(intervalHours, TimeUnit.HOURS)
@@ -934,7 +940,8 @@ fun MainAppScreen(
                     "${android.provider.MediaStore.MediaColumns.DATE_ADDED} DESC"
                 ) ?: run { log("⚠ Could not read $label"); return }
 
-                val items = mutableListOf<Triple<Long, String, String>>() // id, name, mime
+                data class PendingSyncAsset(val id: Long, val filename: String, val mimeType: String, val sizeBytes: Long)
+                val items = mutableListOf<PendingSyncAsset>()
                 cursor.use {
                     val idCol = it.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns._ID)
                     val nameCol = it.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns.DISPLAY_NAME)
@@ -943,31 +950,39 @@ fun MainAppScreen(
                     while (it.moveToNext()) {
                         val sz = it.getLong(sizeCol)
                         if (sz <= 0) continue
-                        items.add(Triple(it.getLong(idCol), it.getString(nameCol) ?: "${namePrefix}_${it.getLong(idCol)}", it.getString(mimeCol) ?: defaultMime))
+                        items.add(PendingSyncAsset(it.getLong(idCol), it.getString(nameCol) ?: "${namePrefix}_${it.getLong(idCol)}", it.getString(mimeCol) ?: defaultMime, sz))
                     }
                 }
 
                 // Load local history to skip already-synced assets
                 val history = withContext(Dispatchers.IO) { loadHistory(label) }
-                val pending = items.filter { (id, _, _) -> id !in history }
+                val pending = items.filter { it.id !in history }
                 val total = items.size
                 val alreadyDone = total - pending.size
 
                 status("📂 $label — $total found, ${pending.size} pending, $alreadyDone already backed up")
                 log("Found $total $label — ${pending.size} to upload, $alreadyDone in history")
 
-                pending.forEachIndexed { idx, (id, filename, mimeType) ->
+                pending.forEachIndexed { idx, asset ->
+                    val id = asset.id
+                    val filename = asset.filename
+                    val mimeType = asset.mimeType
+                    val sizeBytes = asset.sizeBytes
                     val num = idx + 1
                     status("⬆ Uploading $filename  ($num/${pending.size})\n☁ Drive: $driveLabel")
                     withContext(Dispatchers.IO) {
                         try {
                             val contentUri = android.content.ContentUris.withAppendedId(collectionUri, id)
-                            val bytes = context.contentResolver.openInputStream(contentUri)?.use { stream ->
-                                val buf = java.io.ByteArrayOutputStream(); stream.copyTo(buf); buf.toByteArray()
-                            } ?: return@withContext
 
-                            val hash = com.drive.sync.crypto.VaultCrypto.calculateSha256(bytes.inputStream())
-                            val sizeBytes = bytes.size.toLong()
+                            // Compute SHA-256 directly from stream without memory allocation
+                            val hash = try {
+                                context.contentResolver.openInputStream(contentUri)?.use { stream ->
+                                    com.drive.sync.crypto.VaultCrypto.calculateSha256(stream)
+                                }
+                            } catch (e: Exception) {
+                                withContext(Dispatchers.Main) { log("✗ $filename — read error: ${e.message}") }
+                                null
+                            } ?: return@withContext
 
                             val initJson = org.json.JSONObject().apply {
                                 put("filename", filename); put("mimeType", mimeType)
@@ -999,8 +1014,18 @@ fun MainAppScreen(
                             val storageAccountId = initResult.getString("storageAccountId")
                             val driveOpaqueName = initResult.optString("driveOpaqueName", "")
 
+                            val streamingBody = object : RequestBody() {
+                                override fun contentType() = mimeType.toMediaType()
+                                override fun contentLength() = sizeBytes
+                                override fun writeTo(sink: BufferedSink) {
+                                    context.contentResolver.openInputStream(contentUri)?.use { stream ->
+                                        sink.writeAll(stream.source())
+                                    }
+                                }
+                            }
+
                             val putRes = httpClient.newCall(
-                                Request.Builder().url(uploadUrl).put(bytes.toRequestBody(mimeType.toMediaType())).build()
+                                Request.Builder().url(uploadUrl).put(streamingBody).build()
                             ).execute()
                             if (!putRes.isSuccessful && putRes.code != 200 && putRes.code != 201) {
                                 withContext(Dispatchers.Main) { log("✗ $filename — upload to drive failed (${putRes.code})") }
@@ -1813,15 +1838,14 @@ fun MainAppScreen(
                             }
                         }
 
-                        val bytes = context.contentResolver.openInputStream(uri)?.use { stream ->
-                            val buffer = ByteArrayOutputStream()
-                            stream.copyTo(buffer)
-                            buffer.toByteArray()
+                        val contentHash = try {
+                            context.contentResolver.openInputStream(uri)?.use { stream ->
+                                VaultCrypto.calculateSha256(stream)
+                            }
+                        } catch (e: Exception) {
+                            null
                         } ?: return@forEachIndexed
 
-                        if (sizeBytes <= 0) sizeBytes = bytes.size.toLong()
-
-                        val contentHash = VaultCrypto.calculateSha256(bytes.inputStream())
                         val baseUrl = serverUrl.trimEnd('/')
 
                         val initJson = JSONObject().apply {
@@ -1851,9 +1875,19 @@ fun MainAppScreen(
                                 val storageAccountId = initResult.getString("storageAccountId")
                                 val driveOpaqueName = initResult.optString("driveOpaqueName", "")
 
+                                val streamingBody = object : RequestBody() {
+                                    override fun contentType() = mimeType.toMediaType()
+                                    override fun contentLength() = sizeBytes
+                                    override fun writeTo(sink: BufferedSink) {
+                                        context.contentResolver.openInputStream(uri)?.use { stream ->
+                                            sink.writeAll(stream.source())
+                                        }
+                                    }
+                                }
+
                                 val putReq = Request.Builder()
                                     .url(uploadUrl)
-                                    .put(bytes.toRequestBody(mimeType.toMediaType()))
+                                    .put(streamingBody)
                                     .build()
 
                                 val putRes = httpClient.newCall(putReq).execute()

@@ -200,10 +200,12 @@ export const api = {
     return res.json();
   },
 
-  async getGallery(params?: { filter?: string; search?: string }): Promise<{ media: FileItem[] }> {
+  async getGallery(params?: { filter?: string; search?: string; limit?: number; cursor?: string }): Promise<{ media: FileItem[]; nextCursor?: string | null; hasMore?: boolean; devices?: any[] }> {
     const query = new URLSearchParams();
     if (params?.filter) query.append('filter', params.filter);
     if (params?.search) query.append('search', params.search);
+    if (params?.limit) query.append('limit', params.limit.toString());
+    if (params?.cursor) query.append('cursor', params.cursor);
     const qs = query.toString() ? `?${query.toString()}` : '';
     const res = await fetchWithLoading(`${API_BASE}/files/gallery${qs}`, { headers: getHeaders() });
     if (!res.ok) throw new Error('Failed to fetch media gallery');

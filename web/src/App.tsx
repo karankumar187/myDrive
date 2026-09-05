@@ -78,6 +78,8 @@ export const App: React.FC = () => {
       return saved ? JSON.parse(saved) : [];
     } catch { return []; }
   });
+  const [galleryCursor, setGalleryCursor] = useState<string | null>(null);
+  const [galleryHasMore, setGalleryHasMore] = useState<boolean>(true);
   const [devices, setDevices] = useState<DeviceItem[]>([]);
   const [trashedFiles, setTrashedFiles] = useState<FileItem[]>([]);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -278,7 +280,7 @@ export const App: React.FC = () => {
 
       const [storageRes, galleryRes, devicesRes, trashRes] = await Promise.all([
         api.getStorageSummary().catch(() => null),
-        api.getGallery().catch(() => ({ media: [] })),
+        api.getGallery({ limit: 60 }).catch(() => ({ media: [], nextCursor: null, hasMore: false })),
         api.listDevices().catch(() => ({ devices: [] })),
         api.listFiles(null, undefined, true).catch(() => ({ files: [], recentFiles: [] })),
       ]);
@@ -287,7 +289,9 @@ export const App: React.FC = () => {
         setSummary(storageRes);
         try { localStorage.setItem('drive_cache_summary', JSON.stringify(storageRes)); } catch {}
       }
-      setMedia(galleryRes.media);
+      setMedia(galleryRes.media || []);
+      setGalleryCursor(galleryRes.nextCursor || null);
+      setGalleryHasMore(Boolean(galleryRes.hasMore));
       try { localStorage.setItem('drive_cache_gallery', JSON.stringify(galleryRes.media)); } catch {}
       setDevices(devicesRes.devices);
       setTrashedFiles(trashRes.files);
@@ -572,6 +576,8 @@ export const App: React.FC = () => {
             vaultKey={vaultKey}
             onOpenVault={() => setIsVaultModalOpen(true)}
             onRefresh={loadDashboardData}
+            initialCursor={galleryCursor}
+            initialHasMore={galleryHasMore}
           />
         )}
 
