@@ -7,7 +7,8 @@ import { IUserDocument } from '../types/index.js';
 export function configurePassport(): void {
   const clientID = process.env.GOOGLE_AUTH_CLIENT_ID;
   const clientSecret = process.env.GOOGLE_AUTH_CLIENT_SECRET;
-  const callbackURL = process.env.GOOGLE_AUTH_CALLBACK_URL || 'http://localhost:5000/api/v1/auth/google/callback';
+  const rawCallback = process.env.GOOGLE_AUTH_CALLBACK_URL || 'http://localhost:5000/api/v1/auth/google/callback';
+  const callbackURL = rawCallback.split(',')[0].trim();
 
   if (!clientID || !clientSecret || clientID === 'mock_google_auth_client_id') {
     console.warn('⚠️ Google Auth credentials not configured or set to mock. Passport will register fallback handler.');

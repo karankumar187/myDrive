@@ -10,7 +10,8 @@ export class GoogleDriveService {
   static getOAuth2Client(account?: IStorageAccountDocument): OAuth2Client {
     const clientId = process.env.GDRIVE_CLIENT_ID || process.env.GOOGLE_AUTH_CLIENT_ID;
     const clientSecret = process.env.GDRIVE_CLIENT_SECRET || process.env.GOOGLE_AUTH_CLIENT_SECRET;
-    const redirectUri = process.env.GDRIVE_REDIRECT_URI || 'http://localhost:5000/api/v1/storage/connect/callback';
+    const rawRedirectUri = process.env.GDRIVE_REDIRECT_URI || 'http://localhost:5000/api/v1/storage/connect/callback';
+    const redirectUri = rawRedirectUri.split(',')[0].trim();
 
     const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
 
