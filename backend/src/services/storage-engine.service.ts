@@ -124,16 +124,55 @@ export class StorageEngineService {
   /**
    * Checks if an exact identical file already exists in the user's unified cloud.
    * Returns existing file document if found (Instant Deduplication!).
+   * Checks contentHash (case-insensitive), trashed status, and filename + sizeBytes fallback.
    */
   static async findExistingDuplicate(
     userId: Types.ObjectId,
-    contentHash: string
+    contentHash: string,
+    filename?: string,
+    sizeBytes?: number
   ): Promise<IFileDocument | null> {
-    return await File.findOne({
-      userId,
-      contentHash,
-      isTrash: false,
-    });
+    const cleanHash = contentHash ? contentHash.trim().toLowerCase() : '';
+
+    if (cleanHash) {
+      // 1. By contentHash (case-insensitive) among active files
+      const activeByHash = await File.findOne({
+        userId,
+        contentHash: { $regex: new RegExp(`^${cleanHash}$`, 'i') },
+        isTrash: false,
+      });
+      if (activeByHash) return activeByHash;
+
+      // 2. If it's already in Trash, treat as duplicate to avoid re-uploading trashed photos
+      const trashedByHash = await File.findOne({
+        userId,
+        contentHash: { $regex: new RegExp(`^${cleanHash}$`, 'i') },
+        isTrash: true,
+      });
+      if (trashedByHash) return trashedByHash;
+    }
+
+    // 3. Robust fallback: filename + sizeBytes matching!
+    if (filename && typeof sizeBytes === 'number' && sizeBytes > 0) {
+      const cleanName = filename.trim();
+      const byNameAndSize = await File.findOne({
+        userId,
+        filename: cleanName,
+        sizeBytes,
+        isTrash: false,
+      });
+      if (byNameAndSize) return byNameAndSize;
+
+      const trashedByNameAndSize = await File.findOne({
+        userId,
+        filename: cleanName,
+        sizeBytes,
+        isTrash: true,
+      });
+      if (trashedByNameAndSize) return trashedByNameAndSize;
+    }
+
+    return null;
   }
 
   /**
@@ -172,7 +211,7 @@ export class StorageEngineService {
     } = params;
 
     // Check for exact content duplicate
-    const existingFile = await this.findExistingDuplicate(userId, contentHash);
+    const existingFile = await this.findExistingDuplicate(userId, contentHash, filename, sizeBytes);
 
     if (existingFile) {
       // Content already exists! Link this device as a source without duplicate Drive storage

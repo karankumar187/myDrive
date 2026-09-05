@@ -33,8 +33,13 @@ export class FileController {
         return;
       }
 
-      // Check for exact content duplicate (Zero-Knowledge Deduplication)
-      const existingDuplicate = await StorageEngineService.findExistingDuplicate(userId, contentHash);
+      // Check for exact content duplicate (Zero-Knowledge Deduplication + Name/Size fallback)
+      const existingDuplicate = await StorageEngineService.findExistingDuplicate(
+        userId,
+        contentHash,
+        filename,
+        sizeBytes
+      );
       if (existingDuplicate) {
         // Instant deduplication: No bytes need to be uploaded to Google Drive!
         res.json({
@@ -260,7 +265,24 @@ export class FileController {
       const accountMap = new Map<string, string>();
       storageAccounts.forEach((a) => accountMap.set(a._id.toString(), `${a.accountName} (${a.accountEmail})`));
 
-      const enrichedMedia = mediaFiles.map((file) => {
+      // Filter out redundant duplicates so the gallery is 100% unique
+      const uniqueMediaFiles: typeof mediaFiles = [];
+      const seenHashes = new Set<string>();
+      const seenNameSizes = new Set<string>();
+
+      for (const file of mediaFiles) {
+        const cleanHash = file.contentHash?.trim().toLowerCase();
+        const nameSizeKey = `${file.filename?.trim()}_${file.sizeBytes}`;
+
+        if (cleanHash && seenHashes.has(cleanHash)) continue;
+        if (nameSizeKey && seenNameSizes.has(nameSizeKey)) continue;
+
+        if (cleanHash) seenHashes.add(cleanHash);
+        if (nameSizeKey) seenNameSizes.add(nameSizeKey);
+        uniqueMediaFiles.push(file);
+      }
+
+      const enrichedMedia = uniqueMediaFiles.map((file) => {
         const obj: any = file.toObject();
         obj.isFavorite = file.isFavorite || false;
         obj.sourceDeviceId = file.sourceDeviceIds?.length ? file.sourceDeviceIds[0] : 'web';
@@ -689,38 +711,100 @@ export class FileController {
     try {
       const userId = req.user!._id;
 
-      // Find all files in Trash for this user
+      // Find all files in Trash for this user before deletion
       const trashedFiles = await File.find({ userId, isTrash: true });
 
-      // Permanently purge physical files from Google Drive
-      for (const file of trashedFiles) {
-        for (const version of file.versions) {
-          try {
-            const account = await StorageAccount.findById(version.storageAccountId);
-            if (account) {
-              await GoogleDriveService.deleteFile(account, version.providerFileId);
-              await StorageAccount.findByIdAndUpdate(account._id, {
-                $inc: { usedStorageBytes: -version.sizeBytes },
-              });
-            }
-          } catch (delError) {
-            console.warn(`Failed to delete physical file ${version.providerFileId}:`, delError);
-          }
-        }
-      }
-
-      // Delete records from database
+      // 1. Delete records from database immediately so user sees empty trash instantly
       const [fileDeleteResult, folderDeleteResult] = await Promise.all([
         File.deleteMany({ userId, isTrash: true }),
         Folder.deleteMany({ userId, isTrash: true }),
       ]);
 
+      // 2. Invalidate user cache immediately
       await CacheService.invalidateUser(userId.toString());
+
+      // 3. Respond to client right away to avoid request timeouts
       res.json({
         success: true,
         purgedFiles: fileDeleteResult.deletedCount,
         purgedFolders: folderDeleteResult.deletedCount,
         message: 'Trash emptied permanently',
+      });
+
+      // 4. Clean up physical Google Drive files asynchronously in the background
+      (async () => {
+        for (const file of trashedFiles) {
+          for (const version of file.versions) {
+            try {
+              const account = await StorageAccount.findById(version.storageAccountId);
+              if (account) {
+                await GoogleDriveService.deleteFile(account, version.providerFileId);
+                await StorageAccount.findByIdAndUpdate(account._id, {
+                  $inc: { usedStorageBytes: -version.sizeBytes },
+                });
+              }
+            } catch (delError) {
+              // Ignore already purged or missing files
+            }
+          }
+        }
+      })().catch((err) => console.warn('Background Google Drive purge warning:', err));
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+
+  /**
+   * Scans and removes any redundant duplicate records in the user's cloud library.
+   * Keeps the primary copy and deletes duplicate entries.
+   */
+  static async deduplicateFiles(req: Request, res: Response): Promise<void> {
+    try {
+      const userId = req.user!._id;
+
+      const allFiles = await File.find({ userId, isTrash: false }).sort({ createdAt: 1 });
+
+      const seenHashes = new Set<string>();
+      const seenNameSizes = new Set<string>();
+      const duplicateFileIds: Types.ObjectId[] = [];
+
+      for (const file of allFiles) {
+        const cleanHash = file.contentHash?.trim().toLowerCase();
+        const nameSizeKey = `${file.filename?.trim()}_${file.sizeBytes}`;
+
+        let isDuplicate = false;
+
+        if (cleanHash && seenHashes.has(cleanHash)) {
+          isDuplicate = true;
+        } else if (cleanHash) {
+          seenHashes.add(cleanHash);
+        }
+
+        if (nameSizeKey && seenNameSizes.has(nameSizeKey)) {
+          isDuplicate = true;
+        } else if (nameSizeKey) {
+          seenNameSizes.add(nameSizeKey);
+        }
+
+        if (isDuplicate) {
+          duplicateFileIds.push(file._id);
+        }
+      }
+
+      let removedCount = 0;
+      if (duplicateFileIds.length > 0) {
+        const delResult = await File.deleteMany({
+          _id: { $in: duplicateFileIds },
+          userId,
+        });
+        removedCount = delResult.deletedCount;
+        await CacheService.invalidateUser(userId.toString());
+      }
+
+      res.json({
+        success: true,
+        removedDuplicates: removedCount,
+        message: `Removed ${removedCount} duplicate file(s) from your cloud library`,
       });
     } catch (error: any) {
       res.status(500).json({ error: error.message });

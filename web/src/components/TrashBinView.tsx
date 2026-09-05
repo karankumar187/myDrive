@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { FileItem } from '../types.js';
-import { Trash2, RotateCcw, AlertTriangle, Loader2 } from 'lucide-react';
+import { Trash2, RotateCcw, AlertTriangle, Loader2, Sparkles } from 'lucide-react';
 import { api } from '../services/api.js';
 import { formatBytes } from '../utils/format.js';
 
@@ -10,7 +10,7 @@ interface Props {
 }
 
 export const TrashBinView: React.FC<Props> = ({ trashedFiles, onRefresh }) => {
-  const [actionLoading, setActionLoading] = useState<'restore-all' | 'empty' | null>(null);
+  const [actionLoading, setActionLoading] = useState<'restore-all' | 'empty' | 'dedup' | null>(null);
 
   const handleRestore = async (id: string) => {
     try {
@@ -65,6 +65,22 @@ export const TrashBinView: React.FC<Props> = ({ trashedFiles, onRefresh }) => {
     }
   };
 
+  const handleDeduplicate = async () => {
+    if (!confirm('Scan and remove any duplicate files across your cloud library? Only 1 unique copy of each file will be kept.')) {
+      return;
+    }
+    try {
+      setActionLoading('dedup');
+      const res = await api.deduplicateFiles();
+      alert(res.message || 'Deduplication complete!');
+      onRefresh();
+    } catch (err: any) {
+      alert(err.message || 'Failed to clean duplicates');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
   return (
     <div className="space-y-5">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
@@ -75,37 +91,53 @@ export const TrashBinView: React.FC<Props> = ({ trashedFiles, onRefresh }) => {
           </p>
         </div>
 
-        {trashedFiles.length > 0 && (
-          <div className="flex items-center space-x-2.5 flex-shrink-0">
-            <button
-              onClick={handleRestoreAll}
-              disabled={actionLoading !== null}
-              className="inline-flex items-center space-x-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-purple-600/20 hover:bg-purple-600/30 text-purple-300 border border-purple-500/30 transition active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm shadow-purple-900/20"
-              title="Restore all files back to your cloud drive"
-            >
-              {actionLoading === 'restore-all' ? (
-                <Loader2 className="w-3.5 h-3.5 animate-spin text-purple-300" />
-              ) : (
-                <RotateCcw className="w-3.5 h-3.5" />
-              )}
-              <span>{actionLoading === 'restore-all' ? 'Restoring...' : `Recover All (${trashedFiles.length})`}</span>
-            </button>
+        <div className="flex items-center space-x-2.5 flex-shrink-0">
+          <button
+            onClick={handleDeduplicate}
+            disabled={actionLoading !== null}
+            className="inline-flex items-center space-x-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-blue-600/20 hover:bg-blue-600/30 text-blue-300 border border-blue-500/30 transition active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm shadow-blue-900/20"
+            title="Scan and remove redundant duplicate files across your library"
+          >
+            {actionLoading === 'dedup' ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-300" />
+            ) : (
+              <Sparkles className="w-3.5 h-3.5" />
+            )}
+            <span>{actionLoading === 'dedup' ? 'Cleaning...' : 'Clean Duplicates'}</span>
+          </button>
 
-            <button
-              onClick={handleEmptyTrash}
-              disabled={actionLoading !== null}
-              className="inline-flex items-center space-x-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-red-950/40 hover:bg-red-900/60 text-red-300 border border-red-800/50 transition active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm shadow-red-950/20"
-              title="Permanently delete all files in trash from Google Drive"
-            >
-              {actionLoading === 'empty' ? (
-                <Loader2 className="w-3.5 h-3.5 animate-spin text-red-300" />
-              ) : (
-                <Trash2 className="w-3.5 h-3.5" />
-              )}
-              <span>{actionLoading === 'empty' ? 'Emptying...' : 'Empty Trash'}</span>
-            </button>
-          </div>
-        )}
+          {trashedFiles.length > 0 && (
+            <>
+              <button
+                onClick={handleRestoreAll}
+                disabled={actionLoading !== null}
+                className="inline-flex items-center space-x-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-purple-600/20 hover:bg-purple-600/30 text-purple-300 border border-purple-500/30 transition active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm shadow-purple-900/20"
+                title="Restore all files back to your cloud drive"
+              >
+                {actionLoading === 'restore-all' ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-purple-300" />
+                ) : (
+                  <RotateCcw className="w-3.5 h-3.5" />
+                )}
+                <span>{actionLoading === 'restore-all' ? 'Restoring...' : `Recover All (${trashedFiles.length})`}</span>
+              </button>
+
+              <button
+                onClick={handleEmptyTrash}
+                disabled={actionLoading !== null}
+                className="inline-flex items-center space-x-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-red-950/40 hover:bg-red-900/60 text-red-300 border border-red-800/50 transition active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm shadow-red-950/20"
+                title="Permanently delete all files in trash from Google Drive"
+              >
+                {actionLoading === 'empty' ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-red-300" />
+                ) : (
+                  <Trash2 className="w-3.5 h-3.5" />
+                )}
+                <span>{actionLoading === 'empty' ? 'Emptying...' : 'Empty Trash'}</span>
+              </button>
+            </>
+          )}
+        </div>
       </div>
 
       <div className="p-4 bg-amber-950/30 border border-amber-800/40 rounded-2xl text-xs text-amber-300 flex items-center space-x-2.5">

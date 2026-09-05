@@ -204,6 +204,15 @@ export const api = {
     return res.json();
   },
 
+  async deduplicateFiles(): Promise<any> {
+    const res = await fetch(`${API_BASE}/files/deduplicate`, {
+      method: 'POST',
+      headers: getHeaders(),
+    });
+    if (!res.ok) throw new Error('Failed to clean duplicates');
+    return res.json();
+  },
+
   async listFolders(parentFolderId?: string | null): Promise<{
     folders: FolderItem[];
     currentFolder?: FolderItem | null;

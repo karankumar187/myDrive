@@ -23,13 +23,14 @@ router.post('/:id/rename', requireAnyAuth, FileController.renameFile);
 router.patch('/:id/move', requireAnyAuth, FileController.moveFile);
 router.post('/:id/move', requireAnyAuth, FileController.moveFile);
 router.post('/bulk', requireAnyAuth, FileController.bulkAction);
+router.post('/deduplicate', requireAnyAuth, FileController.deduplicateFiles);
 
 // Soft delete / Recycle bin
-router.post('/trash/empty', requireUserAuth, FileController.emptyTrash);
-router.post('/trash/restore-all', requireUserAuth, FileController.restoreAllFromTrash);
+router.post('/trash/empty', requireAnyAuth, FileController.emptyTrash);
+router.post('/trash/restore-all', requireAnyAuth, FileController.restoreAllFromTrash);
 router.post('/:id/trash', requireAnyAuth, FileController.moveToTrash);
-router.post('/:id/restore', requireUserAuth, FileController.restoreFromTrash);
-router.delete('/:id/permanent', requireUserAuth, FileController.permanentDelete);
+router.post('/:id/restore', requireAnyAuth, FileController.restoreFromTrash);
+router.delete('/:id/permanent', requireAnyAuth, FileController.permanentDelete);
 
 // Folders
 router.get('/folders/list', requireAnyAuth, FileController.listFolders);
