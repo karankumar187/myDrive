@@ -368,15 +368,40 @@ suspend fun apiDeleteFolder(
 }
 
 // ----------------------------------------------------
-// Single Running Progress Line from Start to Complete
+// Single Running Progress Line with Color Shades
 // ----------------------------------------------------
+enum class ProgressColorType {
+    DEFAULT,  // Purple
+    UPLOAD,   // Sky Blue / Cyan
+    SYNC,     // Emerald Green
+    TRASH,    // Rose Red
+    DECRYPT   // Violet
+}
+
+fun getProgressColor(type: ProgressColorType): Color = when (type) {
+    ProgressColorType.DEFAULT -> Color(0xFFA855F7)
+    ProgressColorType.UPLOAD -> Color(0xFF38BDF8)
+    ProgressColorType.SYNC -> Color(0xFF10B981)
+    ProgressColorType.TRASH -> Color(0xFFF43F5E)
+    ProgressColorType.DECRYPT -> Color(0xFF8B5CF6)
+}
+
+fun getProgressTrackColor(type: ProgressColorType): Color = when (type) {
+    ProgressColorType.DEFAULT -> Color(0x22A855F7)
+    ProgressColorType.UPLOAD -> Color(0x2238BDF8)
+    ProgressColorType.SYNC -> Color(0x2210B981)
+    ProgressColorType.TRASH -> Color(0x22F43F5E)
+    ProgressColorType.DECRYPT -> Color(0x228B5CF6)
+}
+
 @Composable
 fun SingleRunningProgressBar(
     isLoading: Boolean,
     modifier: Modifier = Modifier,
+    colorType: ProgressColorType = ProgressColorType.DEFAULT,
     height: androidx.compose.ui.unit.Dp = 2.5.dp,
-    color: Color = Color(0xFFA855F7),
-    trackColor: Color = Color(0x22A855F7)
+    color: Color = getProgressColor(colorType),
+    trackColor: Color = getProgressTrackColor(colorType)
 ) {
     var isVisible by remember { mutableStateOf(false) }
     var isFading by remember { mutableStateOf(false) }
@@ -1636,38 +1661,7 @@ fun FullScreenPhotoViewer(
                         var isBuffering by remember { mutableStateOf(true) }
                         var playbackError by remember { mutableStateOf<String?>(null) }
                         var videoViewRef by remember { mutableStateOf<VideoView?>(null) }
-                        var directVideoUrl by remember { mutableStateOf<String?>(null) }
-
-                        LaunchedEffect(currentItem.id) {
-                            withContext(Dispatchers.IO) {
-                                try {
-                                    val gdriveReqUrl = "${serverUrl.trimEnd('/')}/api/v1/files/${currentItem.id}/gdrive-url?deviceId=$deviceId&deviceKey=$deviceKey"
-                                    val req = Request.Builder()
-                                        .url(gdriveReqUrl)
-                                        .addHeader("x-device-id", deviceId)
-                                        .addHeader("x-device-key", deviceKey)
-                                        .get()
-                                        .build()
-                                    val res = sharedHttpClient.newCall(req).execute()
-                                    if (res.isSuccessful) {
-                                        val body = res.body?.string() ?: ""
-                                        val json = JSONObject(body)
-                                        val direct = json.optString("directUrl", "")
-                                        if (direct.isNotBlank()) {
-                                            withContext(Dispatchers.Main) {
-                                                directVideoUrl = direct
-                                            }
-                                            return@withContext
-                                        }
-                                    }
-                                } catch (e: Exception) {
-                                    // fallback
-                                }
-                                withContext(Dispatchers.Main) {
-                                    directVideoUrl = streamUrl
-                                }
-                            }
-                        }
+                        val playUrl = streamUrl
 
                         DisposableEffect(currentItem.id) {
                             onDispose {
@@ -1679,59 +1673,48 @@ fun FullScreenPhotoViewer(
                             modifier = Modifier.fillMaxSize(),
                             contentAlignment = Alignment.Center
                         ) {
-                            val playUrl = directVideoUrl
-                            if (playUrl != null) {
-                                AndroidView(
-                                    factory = { ctx ->
-                                        VideoView(ctx).apply {
-                                            videoViewRef = this
-                                            val mc = MediaController(ctx)
-                                            mc.setAnchorView(this)
-                                            setMediaController(mc)
+                            AndroidView(
+                                factory = { ctx ->
+                                    VideoView(ctx).apply {
+                                        videoViewRef = this
+                                        val mc = MediaController(ctx)
+                                        mc.setAnchorView(this)
+                                        setMediaController(mc)
 
-                                            setOnPreparedListener { mp ->
-                                                isBuffering = false
-                                                isViewerMediaLoading = false
-                                                playbackError = null
-                                                mp.isLooping = false
-                                                start()
-                                            }
-
-                                            setOnInfoListener { _, what, _ ->
-                                                if (what == MediaPlayer.MEDIA_INFO_BUFFERING_START) {
-                                                    isBuffering = true
-                                                    isViewerMediaLoading = true
-                                                } else if (what == MediaPlayer.MEDIA_INFO_BUFFERING_END) {
-                                                    isBuffering = false
-                                                    isViewerMediaLoading = false
-                                                }
-                                                true
-                                            }
-
-                                            setOnErrorListener { _, what, extra ->
-                                                isBuffering = false
-                                                isViewerMediaLoading = false
-                                                playbackError = "Unable to stream video ($what, $extra)"
-                                                true
-                                            }
-
-                                            setVideoURI(Uri.parse(playUrl))
+                                        setOnPreparedListener { mp ->
+                                            isBuffering = false
+                                            isViewerMediaLoading = false
+                                            playbackError = null
+                                            mp.isLooping = false
+                                            start()
                                         }
-                                    },
-                                    modifier = Modifier.fillMaxSize()
-                                )
-                            }
 
-                            if ((isBuffering || directVideoUrl == null) && playbackError == null) {
+                                        setOnInfoListener { _, what, _ ->
+                                            if (what == MediaPlayer.MEDIA_INFO_BUFFERING_START) {
+                                                isBuffering = true
+                                                isViewerMediaLoading = true
+                                            } else if (what == MediaPlayer.MEDIA_INFO_BUFFERING_END) {
+                                                isBuffering = false
+                                                isViewerMediaLoading = false
+                                            }
+                                            true
+                                        }
+
+                                        setOnErrorListener { _, what, extra ->
+                                            isBuffering = false
+                                            isViewerMediaLoading = false
+                                            playbackError = "Unable to stream video ($what, $extra)"
+                                            true
+                                        }
+
+                                        setVideoURI(Uri.parse(playUrl))
+                                    }
+                                },
+                                modifier = Modifier.fillMaxSize()
+                            )
+
+                            if (isBuffering && playbackError == null) {
                                 // Progress line at top handles buffering UX — no circular spinner
-                                if (directVideoUrl == null) {
-                                    Text(
-                                        "Connecting to Google Drive CDN...",
-                                        color = Color.White.copy(alpha = 0.6f),
-                                        fontSize = 12.sp,
-                                        modifier = Modifier.align(Alignment.Center)
-                                    )
-                                }
                             }
 
                             if (playbackError != null) {
@@ -1981,7 +1964,8 @@ fun FullScreenPhotoViewer(
                 }
 
                 SingleRunningProgressBar(
-                    isLoading = isViewerMediaLoading
+                    isLoading = isViewerMediaLoading,
+                    colorType = ProgressColorType.DECRYPT
                 )
             }
         }
@@ -1989,6 +1973,7 @@ fun FullScreenPhotoViewer(
         if (!showControls) {
             SingleRunningProgressBar(
                 isLoading = isViewerMediaLoading,
+                colorType = ProgressColorType.DECRYPT,
                 modifier = Modifier.align(Alignment.TopCenter)
             )
         }

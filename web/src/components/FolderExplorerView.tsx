@@ -35,6 +35,7 @@ import {
   ExternalLink,
 } from 'lucide-react';
 import { api, startGlobalLoading, subscribeToProgress, GlobalProgressState } from '../services/api.js';
+import { uploadService, UploadTask } from '../services/UploadService.js';
 import { VaultCryptoService } from '../services/vault-crypto.js';
 import { mediaCache, generateThumbnailFromVideoFile } from '../services/media-cache.js';
 import { formatBytes, getStreamUrl } from '../utils/format.js';
@@ -64,8 +65,6 @@ export const FolderExplorerView: React.FC<Props> = ({
   vaultKey,
   onOpenVault,
 }) => {
-  const [uploading, setUploading] = useState(false);
-  const [uploadMessage, setUploadMessage] = useState<string | null>(null);
   const [newFolderName, setNewFolderName] = useState('');
   const [showFolderModal, setShowFolderModal] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -76,7 +75,22 @@ export const FolderExplorerView: React.FC<Props> = ({
     isVisible: false,
     isFading: false,
     isLoading: false,
+    colorType: 'default',
   });
+
+  const [activeUploads, setActiveUploads] = useState<UploadTask[]>([]);
+  useEffect(() => {
+    return uploadService.subscribe(setActiveUploads);
+  }, []);
+
+  const isUploadingThisFolder = activeUploads.some(
+    (t) => (t.status === 'queued' || t.status === 'processing' || t.status === 'uploading') && t.folderId === currentFolderId
+  );
+  const activeTask = activeUploads.find(
+    (t) => (t.status === 'processing' || t.status === 'uploading') && t.folderId === currentFolderId
+  );
+  const uploading = isUploadingThisFolder;
+  const uploadMessage = activeTask ? activeTask.message || null : null;
 
   useEffect(() => {
     return subscribeToProgress(setGlobalProgress);
@@ -306,7 +320,7 @@ export const FolderExplorerView: React.FC<Props> = ({
 
     setPreviewLoading(true);
     setPreviewUrl(null);
-    const stopLoading = startGlobalLoading();
+    const stopLoading = startGlobalLoading('decrypt');
 
     const isEncrypted = file.versions && file.versions.length > 0 && file.versions[0].isEncrypted;
 
@@ -376,97 +390,10 @@ export const FolderExplorerView: React.FC<Props> = ({
     };
   }, []);
 
-  const uploadFiles = async (selectedFiles: FileList | File[]) => {
+  const uploadFiles = (selectedFiles: FileList | File[]) => {
     if (!selectedFiles || selectedFiles.length === 0) return;
-
-    setUploading(true);
-    setUploadMessage(null);
-
-    for (let i = 0; i < selectedFiles.length; i++) {
-      const file = selectedFiles[i];
-      try {
-        setUploadMessage(`Processing ${file.name}...`);
-
-        let videoThumb: string | null = null;
-        if (file.type.startsWith('video/')) {
-          setUploadMessage(`Extracting preview frame for ${file.name}...`);
-          try {
-            videoThumb = await generateThumbnailFromVideoFile(file);
-          } catch {
-            // ignore thumbnail failure
-          }
-        }
-
-        const buffer = await file.arrayBuffer();
-        const contentHash = await VaultCryptoService.calculateSha256(buffer);
-
-        setUploadMessage(`Allocating storage pool for ${file.name}...`);
-        const initResult = await api.initiateUpload({
-          filename: file.name,
-          mimeType: file.type || 'application/octet-stream',
-          sizeBytes: file.size,
-          contentHash,
-          folderId: currentFolderId,
-          isEncrypted: false,
-        });
-
-        if (initResult.isDuplicate) {
-          setUploadMessage(`✨ ${file.name} is an exact duplicate! Linked instantly without uploading bytes.`);
-          await new Promise((r) => setTimeout(r, 1500));
-          continue;
-        }
-
-        setUploadMessage(`Uploading to ${initResult.targetAccountEmail}...`);
-        const uploadUrl = initResult.uploadSessionUrl.startsWith('http')
-          ? initResult.uploadSessionUrl
-          : `${import.meta.env.VITE_API_URL || ''}${initResult.uploadSessionUrl}`;
-
-        const putRes = await fetch(uploadUrl, {
-          method: 'PUT',
-          headers: {
-            'Content-Type': file.type || 'application/octet-stream',
-          },
-          body: buffer,
-        });
-
-        if (!putRes.ok && putRes.status !== 200 && putRes.status !== 201) {
-          throw new Error(`Upload stream failed: ${putRes.statusText}`);
-        }
-
-        let realProviderFileId = initResult.driveOpaqueName || `file_${Date.now()}`;
-        try {
-          const putJson = await putRes.json();
-          if (putJson && putJson.id) {
-            realProviderFileId = putJson.id;
-          }
-        } catch {
-          // keep opaque name
-        }
-
-        const completeRes = await api.completeUpload({
-          filename: file.name,
-          mimeType: file.type || 'application/octet-stream',
-          sizeBytes: file.size,
-          contentHash,
-          storageAccountId: initResult.storageAccountId,
-          providerFileId: realProviderFileId,
-          folderId: currentFolderId,
-          isEncrypted: false,
-          metadata: videoThumb ? { thumbnail: videoThumb } : undefined,
-        });
-
-        if (videoThumb && completeRes?.file?._id) {
-          mediaCache.saveThumbnail(completeRes.file._id, videoThumb);
-        }
-
-        setUploadMessage(`✅ Successfully backed up ${file.name}`);
-      } catch (err: any) {
-        alert(`Failed to upload ${file.name}: ${err.message}`);
-      }
-    }
-
-    setUploading(false);
-    onRefresh();
+    const targetFolderName = currentFolder ? currentFolder.name : 'My Drive';
+    uploadService.enqueue(selectedFiles, currentFolderId, targetFolderName);
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
@@ -1045,7 +972,7 @@ export const FolderExplorerView: React.FC<Props> = ({
               style={{ opacity: globalProgress.isFading ? 0 : 1 }}
             >
               <div
-                className="h-full bg-gradient-to-r from-purple-500 via-indigo-400 to-purple-400 single-progress-bar"
+                className="h-full single-progress-bar progress-decrypt"
                 style={{
                   width: `${globalProgress.progress}%`,
                 }}

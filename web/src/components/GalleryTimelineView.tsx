@@ -1091,6 +1091,7 @@ const FullScreenViewer: React.FC<{
     isVisible: false,
     isFading: false,
     isLoading: false,
+    colorType: 'decrypt',
   });
 
   useEffect(() => {
@@ -1099,7 +1100,7 @@ const FullScreenViewer: React.FC<{
 
   useEffect(() => {
     if (loading || (!isVideo && !isImageLoaded)) {
-      const stop = startGlobalLoading();
+      const stop = startGlobalLoading('decrypt');
       return () => stop();
     }
   }, [loading, isImageLoaded, isVideo]);
@@ -1259,7 +1260,7 @@ const FullScreenViewer: React.FC<{
           style={{ opacity: globalProgress.isFading ? 0 : 1 }}
         >
           <div
-            className="h-full bg-gradient-to-r from-purple-500 via-indigo-400 to-purple-400 single-progress-bar"
+            className="h-full single-progress-bar progress-decrypt"
             style={{
               width: `${Math.max(14, globalProgress.progress)}%`,
             }}

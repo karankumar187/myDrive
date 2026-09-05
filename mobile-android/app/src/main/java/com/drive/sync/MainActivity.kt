@@ -82,6 +82,8 @@ import coil.size.Precision
 import coil.size.Size
 import com.drive.sync.workers.SyncWorker
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -1169,234 +1171,278 @@ fun MainAppScreen(
                     val baseUrl = serverUrl.trimEnd('/')
 
                     withContext(Dispatchers.IO) {
-                        // 1. Fetch Storage Pool Summary
-                        try {
-                            val req = Request.Builder()
-                                .url("$baseUrl/api/v1/storage/summary")
-                                .addHeader("x-device-id", deviceId)
-                                .addHeader("x-device-key", deviceKey)
-                                .build()
-                            val res = httpClient.newCall(req).execute()
-                            if (res.isSuccessful) {
-                                val json = JSONObject(res.body?.string() ?: "{}")
-                                val totalCap = json.optLong("totalCapacityBytes", 64424509440L)
-                                val usedCap = if (json.has("usedCapacityBytes")) json.optLong("usedCapacityBytes", 0L) else json.optLong("totalUsedBytes", 0L)
-                                val totalAcc = if (json.has("totalAccounts")) json.optInt("totalAccounts", 0) else json.optInt("connectedAccountsCount", 0)
-                                val pctUsed = if (json.has("percentUsed")) json.optDouble("percentUsed", 0.0) else json.optDouble("usagePercentage", 0.0)
+                        coroutineScope {
+                            // 1. Fetch Storage Pool Summary in parallel
+                            val dSummary = async {
+                                try {
+                                    val req = Request.Builder()
+                                        .url("$baseUrl/api/v1/storage/summary")
+                                        .addHeader("x-device-id", deviceId)
+                                        .addHeader("x-device-key", deviceKey)
+                                        .build()
+                                    val res = httpClient.newCall(req).execute()
+                                    if (res.isSuccessful) {
+                                        val json = JSONObject(res.body?.string() ?: "{}")
+                                        val totalCap = json.optLong("totalCapacityBytes", 64424509440L)
+                                        val usedCap = if (json.has("usedCapacityBytes")) json.optLong("usedCapacityBytes", 0L) else json.optLong("totalUsedBytes", 0L)
+                                        val totalAcc = if (json.has("totalAccounts")) json.optInt("totalAccounts", 0) else json.optInt("connectedAccountsCount", 0)
+                                        val pctUsed = if (json.has("percentUsed")) json.optDouble("percentUsed", 0.0) else json.optDouble("usagePercentage", 0.0)
 
-                                storageSummary = StoragePoolSummary(
-                                    totalCapacityBytes = totalCap,
-                                    totalUsedBytes = usedCap,
-                                    connectedAccountsCount = totalAcc,
-                                    usagePercentage = pctUsed
-                                )
-                            }
-                        } catch (e: Exception) {
-                            e.printStackTrace()
-                        }
-
-                        // 2. Fetch Files (fetch all library files, fallback to recentFiles)
-                        try {
-                            val req = Request.Builder()
-                                .url("$baseUrl/api/v1/files?all=true")
-                                .addHeader("x-device-id", deviceId)
-                                .addHeader("x-device-key", deviceKey)
-                                .build()
-                            val res = httpClient.newCall(req).execute()
-                            if (res.isSuccessful) {
-                                val json = JSONObject(res.body?.string() ?: "{}")
-                                var array = json.optJSONArray("files")
-                                if ((array == null || array.length() == 0) && json.has("recentFiles")) {
-                                    array = json.optJSONArray("recentFiles")
-                                }
-                                val list = mutableListOf<CloudFile>()
-                                if (array != null) {
-                                    for (i in 0 until array.length()) {
-                                        val item = array.getJSONObject(i)
-                                        val meta = item.optJSONObject("metadata")
-                                        list.add(
-                                            CloudFile(
-                                                id = item.optString("_id"),
-                                                filename = item.optString("filename"),
-                                                mimeType = item.optString("mimeType"),
-                                                sizeBytes = item.optLong("sizeBytes"),
-                                                createdAt = item.optString("createdAt"),
-                                                folderId = item.optString("folderId", ""),
-                                                takenAt = meta?.optString("takenAt")?.ifBlank { null }
-                                            )
+                                        StoragePoolSummary(
+                                            totalCapacityBytes = totalCap,
+                                            totalUsedBytes = usedCap,
+                                            connectedAccountsCount = totalAcc,
+                                            usagePercentage = pctUsed
                                         )
-                                    }
+                                    } else null
+                                } catch (e: Exception) {
+                                    null
                                 }
-                                filesList = list
                             }
-                        } catch (e: Exception) {
-                            e.printStackTrace()
-                        }
 
-                        // 3. Fetch Gallery Media
-                        try {
-                            val req = Request.Builder()
-                                .url("$baseUrl/api/v1/files/gallery")
-                                .addHeader("x-device-id", deviceId)
-                                .addHeader("x-device-key", deviceKey)
-                                .build()
-                            val res = httpClient.newCall(req).execute()
-                            if (res.isSuccessful) {
-                                val json = JSONObject(res.body?.string() ?: "{}")
-                                val array = json.optJSONArray("media")
-                                val list = mutableListOf<CloudMedia>()
-                                if (array != null) {
-                                    for (i in 0 until array.length()) {
-                                        val item = array.getJSONObject(i)
-                                        val meta = item.optJSONObject("metadata")
-                                        val sourceIds = item.optJSONArray("sourceDeviceIds")
-                                        list.add(
-                                            CloudMedia(
-                                                id = item.optString("_id"),
-                                                filename = item.optString("filename"),
-                                                mimeType = item.optString("mimeType"),
-                                                sizeBytes = item.optLong("sizeBytes"),
-                                                takenAt = meta?.optString("takenAt")?.ifBlank { null }
-                                                    ?: item.optString("createdAt"),
-                                                isFavorite = item.optBoolean("isFavorite", false),
-                                                width = if (meta != null && meta.has("width")) meta.optInt("width") else null,
-                                                height = if (meta != null && meta.has("height")) meta.optInt("height") else null,
-                                                duration = if (meta != null && meta.has("duration")) meta.optDouble("duration") else null,
-                                                cameraMake = meta?.optString("cameraMake")?.ifBlank { null },
-                                                cameraModel = meta?.optString("cameraModel")?.ifBlank { null },
-                                                latitude = if (meta != null && meta.has("latitude")) meta.optDouble("latitude") else null,
-                                                longitude = if (meta != null && meta.has("longitude")) meta.optDouble("longitude") else null,
-                                                sourceDeviceName = item.optString("sourceDeviceName").ifBlank { "Pixel 8" },
-                                                sourceDeviceId = item.optString("sourceDeviceId").ifBlank { null },
-                                                folderName = item.optString("folderName").ifBlank { null },
-                                                storageAccountName = item.optString("storageAccountName").ifBlank { "Google Drive • Account 1" },
-                                                isCloudOnly = (sourceIds == null || sourceIds.length() == 0),
-                                                status = "✓ Safely backed up"
-                                            )
-                                        )
-                                    }
+                            // 2. Fetch Files in parallel (handle null folderId properly)
+                            val dFiles = async {
+                                try {
+                                    val req = Request.Builder()
+                                        .url("$baseUrl/api/v1/files?all=true")
+                                        .addHeader("x-device-id", deviceId)
+                                        .addHeader("x-device-key", deviceKey)
+                                        .build()
+                                    val res = httpClient.newCall(req).execute()
+                                    if (res.isSuccessful) {
+                                        val json = JSONObject(res.body?.string() ?: "{}")
+                                        var array = json.optJSONArray("files")
+                                        if ((array == null || array.length() == 0) && json.has("recentFiles")) {
+                                            array = json.optJSONArray("recentFiles")
+                                        }
+                                        val list = mutableListOf<CloudFile>()
+                                        if (array != null) {
+                                            for (i in 0 until array.length()) {
+                                                val item = array.getJSONObject(i)
+                                                val meta = item.optJSONObject("metadata")
+                                                val fId = when {
+                                                    item.isNull("folderId") -> ""
+                                                    item.optJSONObject("folderId") != null -> item.optJSONObject("folderId")?.optString("_id", "") ?: ""
+                                                    else -> {
+                                                        val s = item.optString("folderId", "")
+                                                        if (s == "null") "" else s
+                                                    }
+                                                }
+                                                list.add(
+                                                    CloudFile(
+                                                        id = item.optString("_id"),
+                                                        filename = item.optString("filename"),
+                                                        mimeType = item.optString("mimeType"),
+                                                        sizeBytes = item.optLong("sizeBytes"),
+                                                        createdAt = item.optString("createdAt"),
+                                                        folderId = fId,
+                                                        takenAt = meta?.optString("takenAt")?.ifBlank { null }
+                                                    )
+                                                )
+                                            }
+                                        }
+                                        list
+                                    } else null
+                                } catch (e: Exception) {
+                                    null
                                 }
-                                galleryList = list
                             }
-                        } catch (e: Exception) {
-                            e.printStackTrace()
-                        }
 
-                        // 4. Fetch Folders (all folders including nested ones)
-                        try {
-                            val req = Request.Builder()
-                                .url("$baseUrl/api/v1/files/folders/list?all=true")
-                                .addHeader("x-device-id", deviceId)
-                                .addHeader("x-device-key", deviceKey)
-                                .build()
-                            val res = httpClient.newCall(req).execute()
-                            if (res.isSuccessful) {
-                                val json = JSONObject(res.body?.string() ?: "{}")
-                                val array = json.optJSONArray("folders")
-                                val list = mutableListOf<CloudFolder>()
-                                if (array != null) {
-                                    for (i in 0 until array.length()) {
-                                        val item = array.getJSONObject(i)
-                                        val parentId = item.optString("parentFolderId", "").ifBlank { null }
-                                        list.add(
-                                            CloudFolder(
-                                                id = item.optString("_id"),
-                                                name = item.optString("name"),
-                                                path = item.optString("path", ""),
-                                                parentFolderId = parentId
-                                            )
-                                        )
-                                    }
+                            // 3. Fetch Gallery Media in parallel
+                            val dGallery = async {
+                                try {
+                                    val req = Request.Builder()
+                                        .url("$baseUrl/api/v1/files/gallery")
+                                        .addHeader("x-device-id", deviceId)
+                                        .addHeader("x-device-key", deviceKey)
+                                        .build()
+                                    val res = httpClient.newCall(req).execute()
+                                    if (res.isSuccessful) {
+                                        val json = JSONObject(res.body?.string() ?: "{}")
+                                        val array = json.optJSONArray("media")
+                                        val list = mutableListOf<CloudMedia>()
+                                        if (array != null) {
+                                            for (i in 0 until array.length()) {
+                                                val item = array.getJSONObject(i)
+                                                val meta = item.optJSONObject("metadata")
+                                                val sourceIds = item.optJSONArray("sourceDeviceIds")
+                                                list.add(
+                                                    CloudMedia(
+                                                        id = item.optString("_id"),
+                                                        filename = item.optString("filename"),
+                                                        mimeType = item.optString("mimeType"),
+                                                        sizeBytes = item.optLong("sizeBytes"),
+                                                        takenAt = meta?.optString("takenAt")?.ifBlank { null }
+                                                            ?: item.optString("createdAt"),
+                                                        isFavorite = item.optBoolean("isFavorite", false),
+                                                        width = if (meta != null && meta.has("width")) meta.optInt("width") else null,
+                                                        height = if (meta != null && meta.has("height")) meta.optInt("height") else null,
+                                                        duration = if (meta != null && meta.has("duration")) meta.optDouble("duration") else null,
+                                                        cameraMake = meta?.optString("cameraMake")?.ifBlank { null },
+                                                        cameraModel = meta?.optString("cameraModel")?.ifBlank { null },
+                                                        latitude = if (meta != null && meta.has("latitude")) meta.optDouble("latitude") else null,
+                                                        longitude = if (meta != null && meta.has("longitude")) meta.optDouble("longitude") else null,
+                                                        sourceDeviceName = item.optString("sourceDeviceName").ifBlank { "Pixel 8" },
+                                                        sourceDeviceId = item.optString("sourceDeviceId").ifBlank { null },
+                                                        folderName = item.optString("folderName").ifBlank { null },
+                                                        storageAccountName = item.optString("storageAccountName").ifBlank { "Google Drive • Account 1" },
+                                                        isCloudOnly = (sourceIds == null || sourceIds.length() == 0),
+                                                        status = "✓ Safely backed up"
+                                                    )
+                                                )
+                                            }
+                                        }
+                                        list
+                                    } else null
+                                } catch (e: Exception) {
+                                    null
                                 }
-                                foldersList = list
                             }
-                        } catch (e: Exception) {
-                            e.printStackTrace()
-                        }
 
-                        // 5. Fetch Uploaded Files by This Device
-                        try {
-                            val req = Request.Builder()
-                                .url("$baseUrl/api/v1/files/device/$deviceId/uploads")
-                                .addHeader("x-device-id", deviceId)
-                                .addHeader("x-device-key", deviceKey)
-                                .build()
-                            val res = httpClient.newCall(req).execute()
-                            if (res.isSuccessful) {
-                                val json = JSONObject(res.body?.string() ?: "{}")
-                                val arr = json.optJSONArray("files")
-                                val list = mutableListOf<DeviceUploadItem>()
-                                if (arr != null) {
-                                    for (i in 0 until arr.length()) {
-                                        val item = arr.getJSONObject(i)
-                                        val fObj = item.optJSONObject("folderId")
-                                        list.add(
-                                            DeviceUploadItem(
-                                                id = item.optString("_id"),
-                                                filename = item.optString("filename"),
-                                                mimeType = item.optString("mimeType"),
-                                                sizeBytes = item.optLong("sizeBytes"),
-                                                folderName = fObj?.optString("name"),
-                                                createdAt = item.optString("createdAt")
-                                            )
-                                        )
-                                    }
+                            // 4. Fetch Folders in parallel (handle null parentFolderId properly)
+                            val dFolders = async {
+                                try {
+                                    val req = Request.Builder()
+                                        .url("$baseUrl/api/v1/files/folders/list?all=true")
+                                        .addHeader("x-device-id", deviceId)
+                                        .addHeader("x-device-key", deviceKey)
+                                        .build()
+                                    val res = httpClient.newCall(req).execute()
+                                    if (res.isSuccessful) {
+                                        val json = JSONObject(res.body?.string() ?: "{}")
+                                        val array = json.optJSONArray("folders")
+                                        val list = mutableListOf<CloudFolder>()
+                                        if (array != null) {
+                                            for (i in 0 until array.length()) {
+                                                val item = array.getJSONObject(i)
+                                                val parentId = when {
+                                                    item.isNull("parentFolderId") -> null
+                                                    item.optJSONObject("parentFolderId") != null -> item.optJSONObject("parentFolderId")?.optString("_id")?.ifBlank { null }
+                                                    else -> {
+                                                        val s = item.optString("parentFolderId", "")
+                                                        if (s.isBlank() || s == "null") null else s
+                                                    }
+                                                }
+                                                list.add(
+                                                    CloudFolder(
+                                                        id = item.optString("_id"),
+                                                        name = item.optString("name"),
+                                                        path = item.optString("path", ""),
+                                                        parentFolderId = parentId
+                                                    )
+                                                )
+                                            }
+                                        }
+                                        list
+                                    } else null
+                                } catch (e: Exception) {
+                                    null
                                 }
-                                uploadedFilesList = list
                             }
-                        } catch (e: Exception) {
-                            e.printStackTrace()
-                        }
 
-                        // 6. Fetch Inbound Synced Files from Paired Devices
-                        try {
-                            val req = Request.Builder()
-                                .url("$baseUrl/api/v1/files/device/$deviceId/inbound-sync")
-                                .addHeader("x-device-id", deviceId)
-                                .addHeader("x-device-key", deviceKey)
-                                .build()
-                            val res = httpClient.newCall(req).execute()
-                            if (res.isSuccessful) {
-                                val json = JSONObject(res.body?.string() ?: "{}")
-                                val arr = json.optJSONArray("files")
-                                val list = mutableListOf<InboundSyncItem>()
-                                if (arr != null) {
-                                    for (i in 0 until arr.length()) {
-                                        val item = arr.getJSONObject(i)
-                                        val fObj = item.optJSONObject("folderId")
-                                        list.add(
-                                            InboundSyncItem(
-                                                id = item.optString("_id"),
-                                                filename = item.optString("filename"),
-                                                mimeType = item.optString("mimeType"),
-                                                sizeBytes = item.optLong("sizeBytes"),
-                                                folderName = fObj?.optString("name"),
-                                                createdAt = item.optString("createdAt"),
-                                                sourceDeviceLabel = item.optString("sourceDeviceLabel", "Cloud Drive"),
-                                                sourceDeviceId = item.optString("sourceDeviceId").ifBlank { null },
-                                                isDownloadedLocally = item.optBoolean("isDownloadedLocally", false),
-                                                isForceDownload = item.optBoolean("isForceDownload", false),
-                                                autoDownloadToGallery = item.optBoolean("autoDownloadToGallery", false)
-                                            )
-                                        )
+                            // 5. Fetch Uploaded Files by This Device in parallel
+                            val dUploads = async {
+                                try {
+                                    val req = Request.Builder()
+                                        .url("$baseUrl/api/v1/files/device/$deviceId/uploads")
+                                        .addHeader("x-device-id", deviceId)
+                                        .addHeader("x-device-key", deviceKey)
+                                        .build()
+                                    val res = httpClient.newCall(req).execute()
+                                    if (res.isSuccessful) {
+                                        val json = JSONObject(res.body?.string() ?: "{}")
+                                        val arr = json.optJSONArray("files")
+                                        val list = mutableListOf<DeviceUploadItem>()
+                                        if (arr != null) {
+                                            for (i in 0 until arr.length()) {
+                                                val item = arr.getJSONObject(i)
+                                                val fObj = item.optJSONObject("folderId")
+                                                list.add(
+                                                    DeviceUploadItem(
+                                                        id = item.optString("_id"),
+                                                        filename = item.optString("filename"),
+                                                        mimeType = item.optString("mimeType"),
+                                                        sizeBytes = item.optLong("sizeBytes"),
+                                                        folderName = fObj?.optString("name"),
+                                                        createdAt = item.optString("createdAt")
+                                                    )
+                                                )
+                                            }
+                                        }
+                                        list
+                                    } else null
+                                } catch (e: Exception) {
+                                    null
+                                }
+                            }
+
+                            // 6. Fetch Inbound Synced Files in parallel
+                            val dInbound = async {
+                                try {
+                                    val req = Request.Builder()
+                                        .url("$baseUrl/api/v1/files/device/$deviceId/inbound-sync")
+                                        .addHeader("x-device-id", deviceId)
+                                        .addHeader("x-device-key", deviceKey)
+                                        .build()
+                                    val res = httpClient.newCall(req).execute()
+                                    if (res.isSuccessful) {
+                                        val json = JSONObject(res.body?.string() ?: "{}")
+                                        val arr = json.optJSONArray("files")
+                                        val list = mutableListOf<InboundSyncItem>()
+                                        if (arr != null) {
+                                            for (i in 0 until arr.length()) {
+                                                val item = arr.getJSONObject(i)
+                                                val fObj = item.optJSONObject("folderId")
+                                                list.add(
+                                                    InboundSyncItem(
+                                                        id = item.optString("_id"),
+                                                        filename = item.optString("filename"),
+                                                        mimeType = item.optString("mimeType"),
+                                                        sizeBytes = item.optLong("sizeBytes"),
+                                                        folderName = fObj?.optString("name"),
+                                                        createdAt = item.optString("createdAt"),
+                                                        sourceDeviceLabel = item.optString("sourceDeviceLabel", "Cloud Drive"),
+                                                        sourceDeviceId = item.optString("sourceDeviceId").ifBlank { null },
+                                                        isDownloadedLocally = item.optBoolean("isDownloadedLocally", false),
+                                                        isForceDownload = item.optBoolean("isForceDownload", false),
+                                                        autoDownloadToGallery = item.optBoolean("autoDownloadToGallery", false)
+                                                    )
+                                                )
+                                            }
+                                        }
+                                        list
+                                    } else null
+                                } catch (e: Exception) {
+                                    null
+                                }
+                            }
+
+                            // Await all parallel requests simultaneously
+                            val sRes = dSummary.await()
+                            val fRes = dFiles.await()
+                            val gRes = dGallery.await()
+                            val foRes = dFolders.await()
+                            val upRes = dUploads.await()
+                            val inRes = dInbound.await()
+
+                            withContext(Dispatchers.Main) {
+                                if (sRes != null) storageSummary = sRes
+                                if (fRes != null) filesList = fRes
+                                if (gRes != null) galleryList = gRes
+                                if (foRes != null) foldersList = foRes
+                                if (upRes != null) uploadedFilesList = upRes
+                                if (inRes != null) {
+                                    inboundSyncList = inRes
+                                    val autoPending = inRes.filter {
+                                        !it.isDownloadedLocally && (it.isForceDownload || it.autoDownloadToGallery || (it.sourceDeviceId != null && pairedRulesMap[it.sourceDeviceId]?.autoDownloadToGallery == true))
                                     }
-                                }
-                                inboundSyncList = list
-
-                                // Automatically trigger download for force-download items or autoDownloadToGallery matching paired rules
-                                val autoPending = list.filter {
-                                    !it.isDownloadedLocally && (it.isForceDownload || it.autoDownloadToGallery || (it.sourceDeviceId != null && pairedRulesMap[it.sourceDeviceId]?.autoDownloadToGallery == true))
-                                }
-                                if (autoPending.isNotEmpty()) {
-                                    withContext(Dispatchers.Main) {
+                                    if (autoPending.isNotEmpty()) {
                                         autoPending.forEach { fItem ->
                                             downloadInboundItem(fItem)
                                         }
                                     }
                                 }
                             }
-                        } catch (e: Exception) {
-                            e.printStackTrace()
                         }
 
                         // 7. Fetch Policy & Paired Devices
@@ -1951,8 +1997,15 @@ fun MainAppScreen(
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color(0xFF0D0D11))
             )
+                    val globalColorType = when {
+                        isManualUploading -> ProgressColorType.UPLOAD
+                        isSyncingNow -> ProgressColorType.SYNC
+                        isCrudOperating -> ProgressColorType.TRASH
+                        else -> ProgressColorType.DEFAULT
+                    }
                     SingleRunningProgressBar(
-                        isLoading = isGlobalLoading
+                        isLoading = isGlobalLoading,
+                        colorType = globalColorType
                     )
                 }
         }
@@ -2274,10 +2327,14 @@ fun FilesScreen(
             folders.filter { it.parentFolderId == selectedFolderId }
         }
     }
+    val chunkedFolders = remember(visibleSubfolders) {
+        visibleSubfolders.chunked(2)
+    }
 
     Box(modifier = Modifier.fillMaxSize()) {
         SingleRunningProgressBar(
             isLoading = isRefreshing || isActionLoading,
+            colorType = if (isActionLoading) ProgressColorType.TRASH else ProgressColorType.DEFAULT,
             modifier = Modifier.align(Alignment.TopCenter)
         )
 
@@ -2430,87 +2487,81 @@ fun FilesScreen(
             }
 
             // Visible Subfolders / Root Folders
-            if (visibleSubfolders.isNotEmpty() || selectedFolderId == null && folders.isNotEmpty()) {
+            if (visibleSubfolders.isNotEmpty()) {
                 item {
-                    Column(modifier = Modifier.padding(vertical = 4.dp)) {
-                        Text(
-                            text = if (selectedFolderId == null) "Cloud Folders" else "Subfolders (${visibleSubfolders.size})",
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = Color(0xFF94A3B8),
-                            modifier = Modifier.padding(bottom = 6.dp)
-                        )
-                        LazyRow(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            if (selectedFolderId == null) {
-                                item {
-                                    Surface(
-                                        shape = RoundedCornerShape(10.dp),
-                                        color = Color(0xFF26193E),
-                                        modifier = Modifier.clickable { onSelectFilterFolder(null) }
-                                    ) {
-                                        Row(
-                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Icon(
-                                                Icons.Default.CloudQueue,
-                                                contentDescription = null,
-                                                tint = Color(0xFFC084FC),
-                                                modifier = Modifier.size(16.dp)
-                                            )
-                                            Spacer(modifier = Modifier.width(6.dp))
-                                            Text(
-                                                text = "All Files",
-                                                color = Color.White,
-                                                fontSize = 12.sp,
-                                                fontWeight = FontWeight.Bold
-                                            )
-                                        }
-                                    }
-                                }
-                            }
+                    Text(
+                        text = if (selectedFolderId == null) "Folders (${visibleSubfolders.size})" else "Subfolders (${visibleSubfolders.size})",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color(0xFF94A3B8),
+                        modifier = Modifier.padding(top = 4.dp, bottom = 4.dp)
+                    )
+                }
 
-                            items(visibleSubfolders) { folder ->
-                                val subCount = folders.count { it.parentFolderId == folder.id }
-                                Surface(
-                                    shape = RoundedCornerShape(10.dp),
-                                    color = Color(0xFF181824),
-                                    modifier = Modifier.combinedClickable(
+                items(chunkedFolders) { pair ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        pair.forEach { folder ->
+                            val subCount = folders.count { it.parentFolderId == folder.id }
+                            val folderFileCount = files.count { it.folderId == folder.id }
+                            Card(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .combinedClickable(
                                         onClick = { onSelectFilterFolder(folder.id) },
                                         onLongClick = { selectedFolderForMenu = folder }
-                                    )
+                                    ),
+                                shape = RoundedCornerShape(14.dp),
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFF181824)),
+                                border = BorderStroke(1.dp, Color(0xFF27273A))
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Row(
-                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                                        verticalAlignment = Alignment.CenterVertically
+                                    Box(
+                                        modifier = Modifier
+                                            .size(38.dp)
+                                            .clip(RoundedCornerShape(10.dp))
+                                            .background(Color(0xFF261D12)),
+                                        contentAlignment = Alignment.Center
                                     ) {
                                         Icon(
                                             Icons.Default.Folder,
                                             contentDescription = null,
                                             tint = Color(0xFFFBBF24),
-                                            modifier = Modifier.size(16.dp)
+                                            modifier = Modifier.size(20.dp)
                                         )
-                                        Spacer(modifier = Modifier.width(6.dp))
+                                    }
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
                                         Text(
                                             text = folder.name,
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.SemiBold,
                                             color = Color.White,
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.Normal
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
                                         )
-                                        if (subCount > 0) {
-                                            Spacer(modifier = Modifier.width(4.dp))
-                                            Text(
-                                                text = "($subCount)",
-                                                color = Color(0xFF71717A),
-                                                fontSize = 10.sp
-                                            )
-                                        }
+                                        Spacer(modifier = Modifier.height(2.dp))
+                                        val subDesc = if (subCount > 0) "$subCount subs • $folderFileCount files" else "$folderFileCount files"
+                                        Text(
+                                            text = subDesc,
+                                            fontSize = 11.sp,
+                                            color = Color(0xFF71717A),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
                                     }
                                 }
                             }
+                        }
+                        if (pair.size == 1) {
+                            Spacer(modifier = Modifier.weight(1f))
                         }
                     }
                 }
@@ -4440,40 +4491,9 @@ fun MediaViewerDialog(
     val isVideo = file.mimeType.startsWith("video/")
     val isPdf = file.mimeType.contains("pdf") || file.filename.endsWith(".pdf", ignoreCase = true)
 
-    // For videos: resolve direct Google Drive CDN URL to bypass Render proxy buffering
-    var resolvedVideoUrl by remember { mutableStateOf<String?>(null) }
-    var isResolvingUrl by remember { mutableStateOf(false) }
+    // Direct video streaming via streamUrl for instant playback
+    val resolvedVideoUrl = streamUrl
     var isMediaLoading by remember { mutableStateOf(isImage) }
-
-    LaunchedEffect(file.id) {
-        if (isVideo) {
-            isResolvingUrl = true
-            withContext(Dispatchers.IO) {
-                try {
-                    val base = serverUrl.trimEnd('/')
-                    val req = Request.Builder()
-                        .url("$base/api/v1/files/${file.id}/gdrive-url?deviceId=$deviceId&deviceKey=$deviceKey")
-                        .addHeader("x-device-id", deviceId)
-                        .addHeader("x-device-key", deviceKey)
-                        .build()
-                    val res = sharedHttpClient.newCall(req).execute()
-                    if (res.isSuccessful) {
-                        val json = org.json.JSONObject(res.body?.string() ?: "{}")
-                        val direct = json.optString("directUrl", "")
-                        withContext(Dispatchers.Main) {
-                            resolvedVideoUrl = direct.ifBlank { streamUrl }
-                        }
-                    } else {
-                        withContext(Dispatchers.Main) { resolvedVideoUrl = streamUrl }
-                    }
-                } catch (_: Exception) {
-                    withContext(Dispatchers.Main) { resolvedVideoUrl = streamUrl }
-                } finally {
-                    withContext(Dispatchers.Main) { isResolvingUrl = false }
-                }
-            }
-        }
-    }
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -4530,7 +4550,8 @@ fun MediaViewerDialog(
                 }
 
                 SingleRunningProgressBar(
-                    isLoading = isResolvingUrl || isMediaLoading
+                    isLoading = isMediaLoading,
+                    colorType = ProgressColorType.DECRYPT
                 )
 
                 // Media Preview Body
@@ -4569,15 +4590,10 @@ fun MediaViewerDialog(
 
                         // Single running progress bar above preview modal handles loading indication — no circular spinner
                     } else if (isVideo) {
-                        when {
-                            isResolvingUrl -> {
-                                Text("Connecting to Google Drive…", color = Color(0xFF94A3B8), fontSize = 13.sp)
-                            }
-                            resolvedVideoUrl != null -> VideoPlayer(
-                                streamUrl = resolvedVideoUrl!!,
-                                filename = file.filename
-                            )
-                        }
+                        VideoPlayer(
+                            streamUrl = resolvedVideoUrl,
+                            filename = file.filename
+                        )
                     } else if (isPdf) {
                         PdfViewer(
                             file = file,

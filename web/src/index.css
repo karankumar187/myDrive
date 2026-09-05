@@ -35,9 +35,34 @@
   background: #3f3f46;
 }
 
-/* Glowing Single Running Progress Line */
+/* Glowing Single Running Progress Line with Purpose-Specific Color Shades */
 .single-progress-bar {
   transition: width 0.32s cubic-bezier(0.4, 0, 0.2, 1);
   box-shadow: 0 0 10px rgba(168, 85, 247, 0.8), 0 0 4px rgba(129, 140, 248, 0.9);
+}
+
+.single-progress-bar.progress-default {
+  background: linear-gradient(to right, #a855f7, #818cf8, #c084fc);
+  box-shadow: 0 0 10px rgba(168, 85, 247, 0.8), 0 0 4px rgba(129, 140, 248, 0.9);
+}
+
+.single-progress-bar.progress-upload {
+  background: linear-gradient(to right, #06b6d4, #38bdf8, #60a5fa);
+  box-shadow: 0 0 12px rgba(56, 189, 248, 0.85), 0 0 5px rgba(6, 182, 212, 0.9);
+}
+
+.single-progress-bar.progress-sync {
+  background: linear-gradient(to right, #10b981, #14b8a6, #34d399);
+  box-shadow: 0 0 12px rgba(16, 185, 129, 0.85), 0 0 5px rgba(20, 184, 166, 0.9);
+}
+
+.single-progress-bar.progress-trash {
+  background: linear-gradient(to right, #f43f5e, #ef4444, #fb7185);
+  box-shadow: 0 0 12px rgba(244, 63, 94, 0.85), 0 0 5px rgba(239, 68, 68, 0.9);
+}
+
+.single-progress-bar.progress-decrypt {
+  background: linear-gradient(to right, #8b5cf6, #a855f7, #d946ef);
+  box-shadow: 0 0 12px rgba(139, 92, 246, 0.85), 0 0 5px rgba(217, 70, 239, 0.9);
 }
 

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { FileItem } from '../types.js';
 import { Trash2, RotateCcw, AlertTriangle, Loader2, Sparkles } from 'lucide-react';
-import { api, subscribeToProgress, GlobalProgressState } from '../services/api.js';
+import { api, subscribeToProgress, startGlobalLoading, GlobalProgressState } from '../services/api.js';
 import { formatBytes } from '../utils/format.js';
 
 interface Props {
@@ -16,6 +16,7 @@ export const TrashBinView: React.FC<Props> = ({ trashedFiles, onRefresh }) => {
     isVisible: false,
     isFading: false,
     isLoading: false,
+    colorType: 'trash',
   });
 
   useEffect(() => {
@@ -48,6 +49,7 @@ export const TrashBinView: React.FC<Props> = ({ trashedFiles, onRefresh }) => {
     if (!confirm(`Are you sure you want to recover all ${trashedFiles.length} file(s) from Trash?`)) {
       return;
     }
+    const stop = startGlobalLoading('trash');
     try {
       setActionLoading('restore-all');
       await api.restoreAllTrash();
@@ -55,6 +57,7 @@ export const TrashBinView: React.FC<Props> = ({ trashedFiles, onRefresh }) => {
     } catch (err: any) {
       alert(err.message || 'Failed to restore all files');
     } finally {
+      stop();
       setActionLoading(null);
     }
   };
@@ -64,6 +67,7 @@ export const TrashBinView: React.FC<Props> = ({ trashedFiles, onRefresh }) => {
     if (!confirm(`Are you SURE you want to permanently delete ALL ${trashedFiles.length} file(s) from Google Drive? This action CANNOT be undone.`)) {
       return;
     }
+    const stop = startGlobalLoading('trash');
     try {
       setActionLoading('empty');
       await api.emptyTrash();
@@ -71,6 +75,7 @@ export const TrashBinView: React.FC<Props> = ({ trashedFiles, onRefresh }) => {
     } catch (err: any) {
       alert(err.message || 'Failed to empty trash');
     } finally {
+      stop();
       setActionLoading(null);
     }
   };
@@ -150,11 +155,11 @@ export const TrashBinView: React.FC<Props> = ({ trashedFiles, onRefresh }) => {
         </div>
       </div>
 
-      {/* Single Running Progress Line during actions like Empty Trash */}
+      {/* Single Running Progress Line during actions like Empty Trash (Rose/Red color) */}
       {globalProgress.isVisible && actionLoading !== null && (
-        <div className="h-[3px] rounded-full overflow-hidden bg-purple-950/30 w-full relative">
+        <div className="h-[3px] rounded-full overflow-hidden bg-rose-950/30 w-full relative">
           <div
-            className="h-full bg-gradient-to-r from-purple-500 via-indigo-400 to-purple-400 single-progress-bar"
+            className="h-full single-progress-bar progress-trash"
             style={{
               width: `${globalProgress.progress}%`,
             }}

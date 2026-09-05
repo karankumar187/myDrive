@@ -3,11 +3,14 @@ import { StorageSummary, FileItem, FolderItem, DeviceItem, User, BreadcrumbItem 
 const rawApiUrl = (import.meta.env.VITE_API_URL || '').replace(/\/+$/, '');
 const API_BASE = rawApiUrl ? `${rawApiUrl}/api/v1` : '/api/v1';
 
+export type ProgressColorType = 'default' | 'upload' | 'sync' | 'trash' | 'decrypt';
+
 export interface GlobalProgressState {
   progress: number; // 0 to 100
   isVisible: boolean;
   isFading: boolean;
   isLoading: boolean;
+  colorType: ProgressColorType;
 }
 
 type ProgressListener = (state: GlobalProgressState) => void;
@@ -18,6 +21,7 @@ const progressListeners = new Set<ProgressListener>();
 let currentProgress = 0;
 let isVisible = false;
 let isFading = false;
+let activeColorType: ProgressColorType = 'default';
 let trickleInterval: any = null;
 let completeTimeout: any = null;
 let resetTimeout: any = null;
@@ -28,6 +32,7 @@ function broadcastProgressState() {
     isVisible,
     isFading,
     isLoading: activeRequestCount > 0,
+    colorType: activeColorType,
   };
   progressListeners.forEach((listener) => {
     try {
@@ -45,6 +50,7 @@ export function subscribeToProgress(listener: ProgressListener): () => void {
     isVisible,
     isFading,
     isLoading: activeRequestCount > 0,
+    colorType: activeColorType,
   });
   return () => {
     progressListeners.delete(listener);
@@ -55,8 +61,9 @@ export function subscribeToLoading(listener: (isLoading: boolean) => void): () =
   return subscribeToProgress((state) => listener(state.isLoading));
 }
 
-export function startGlobalLoading(): () => void {
+export function startGlobalLoading(colorType: ProgressColorType = 'default'): () => void {
   activeRequestCount++;
+  activeColorType = colorType;
 
   if (activeRequestCount === 1) {
     if (completeTimeout) clearTimeout(completeTimeout);

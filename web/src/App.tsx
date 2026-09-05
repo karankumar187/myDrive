@@ -22,6 +22,8 @@ import { GalleryTimelineView } from './components/GalleryTimelineView.js';
 import { DeviceManagerView } from './components/DeviceManagerView.js';
 import { TrashBinView } from './components/TrashBinView.js';
 import { IPhoneShortcutModal } from './components/IPhoneShortcutModal.js';
+import { UploadDrawer } from './components/UploadDrawer.js';
+import { uploadService } from './services/UploadService.js';
 import { VaultModal } from './components/VaultModal.js';
 import { VaultCryptoService } from './services/vault-crypto.js';
 
@@ -63,6 +65,11 @@ export const App: React.FC = () => {
     } catch { return []; }
   });
   const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
+  const currentFolderIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    currentFolderIdRef.current = currentFolderId;
+  }, [currentFolderId]);
+
   const [currentFolder, setCurrentFolder] = useState<FolderItem | null>(null);
   const [breadcrumbs, setBreadcrumbs] = useState<BreadcrumbItem[]>([{ id: null, name: 'My Drive' }]);
   const [media, setMedia] = useState<FileItem[]>(() => {
@@ -79,6 +86,7 @@ export const App: React.FC = () => {
     isVisible: false,
     isFading: false,
     isLoading: false,
+    colorType: 'default',
   });
 
   useEffect(() => {
@@ -284,14 +292,22 @@ export const App: React.FC = () => {
       setDevices(devicesRes.devices);
       setTrashedFiles(trashRes.files);
 
-      // Load folder contents
-      await loadFolderData(currentFolderId);
+      // Load folder contents for currently selected folder (never throws out to root!)
+      await loadFolderData(currentFolderIdRef.current);
     } catch (err) {
       console.error('Error loading dashboard data:', err);
     } finally {
       setIsRefreshing(false);
     }
   };
+
+  // When background upload succeeds, refresh the current active folder
+  useEffect(() => {
+    uploadService.setOnUploadSuccess(() => {
+      loadFolderData(currentFolderIdRef.current);
+      api.getStorageSummary().then(setSummary).catch(() => {});
+    });
+  }, [loadFolderData]);
 
   // Full reload on initial login
   useEffect(() => {
@@ -491,14 +507,14 @@ export const App: React.FC = () => {
           </div>
         </div>
 
-        {/* Single Running Progress Line under Navbar */}
+        {/* Single Running Progress Line under Navbar with Purpose-Specific Colors */}
         {globalProgress.isVisible && (
           <div
             className="absolute bottom-0 left-0 right-0 h-[3px] overflow-hidden bg-purple-950/20 z-50 pointer-events-none transition-opacity duration-300"
             style={{ opacity: globalProgress.isFading ? 0 : 1 }}
           >
             <div
-              className="h-full bg-gradient-to-r from-purple-500 via-indigo-400 to-purple-400 single-progress-bar"
+              className={`h-full single-progress-bar progress-${globalProgress.colorType || 'default'}`}
               style={{
                 width: `${globalProgress.progress}%`,
               }}
@@ -605,6 +621,9 @@ export const App: React.FC = () => {
         onClose={() => setIsVaultModalOpen(false)}
         onVaultUnlocked={(key) => setVaultKey(key)}
       />
+
+      {/* Floating Background Upload Drawer */}
+      <UploadDrawer />
     </div>
   );
 };
