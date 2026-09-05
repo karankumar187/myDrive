@@ -1,6 +1,6 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { FileItem } from '../types.js';
-import { Trash2, RotateCcw, AlertTriangle } from 'lucide-react';
+import { Trash2, RotateCcw, AlertTriangle, Loader2 } from 'lucide-react';
 import { api } from '../services/api.js';
 import { formatBytes } from '../utils/format.js';
 
@@ -10,6 +10,8 @@ interface Props {
 }
 
 export const TrashBinView: React.FC<Props> = ({ trashedFiles, onRefresh }) => {
+  const [actionLoading, setActionLoading] = useState<'restore-all' | 'empty' | null>(null);
+
   const handleRestore = async (id: string) => {
     try {
       await api.restoreFromTrash(id);
@@ -31,19 +33,85 @@ export const TrashBinView: React.FC<Props> = ({ trashedFiles, onRefresh }) => {
     }
   };
 
+  const handleRestoreAll = async () => {
+    if (trashedFiles.length === 0) return;
+    if (!confirm(`Are you sure you want to recover all ${trashedFiles.length} file(s) from Trash?`)) {
+      return;
+    }
+    try {
+      setActionLoading('restore-all');
+      await api.restoreAllTrash();
+      onRefresh();
+    } catch (err: any) {
+      alert(err.message || 'Failed to restore all files');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleEmptyTrash = async () => {
+    if (trashedFiles.length === 0) return;
+    if (!confirm(`Are you SURE you want to permanently delete ALL ${trashedFiles.length} file(s) from Google Drive? This action CANNOT be undone.`)) {
+      return;
+    }
+    try {
+      setActionLoading('empty');
+      await api.emptyTrash();
+      onRefresh();
+    } catch (err: any) {
+      alert(err.message || 'Failed to empty trash');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
   return (
     <div className="space-y-5">
-      <div>
-        <h2 className="text-xl font-bold text-white tracking-tight">Recycle Bin (Trash)</h2>
-        <p className="text-xs text-zinc-400">
-          Files deleted from the web or synced devices are preserved safely here for 30 days before permanent purging.
-        </p>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div>
+          <h2 className="text-xl font-bold text-white tracking-tight">Recycle Bin (Trash)</h2>
+          <p className="text-xs text-zinc-400">
+            Files deleted from the web or synced devices are preserved safely here for 30 days before permanent purging.
+          </p>
+        </div>
+
+        {trashedFiles.length > 0 && (
+          <div className="flex items-center space-x-2.5 flex-shrink-0">
+            <button
+              onClick={handleRestoreAll}
+              disabled={actionLoading !== null}
+              className="inline-flex items-center space-x-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-purple-600/20 hover:bg-purple-600/30 text-purple-300 border border-purple-500/30 transition active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm shadow-purple-900/20"
+              title="Restore all files back to your cloud drive"
+            >
+              {actionLoading === 'restore-all' ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-purple-300" />
+              ) : (
+                <RotateCcw className="w-3.5 h-3.5" />
+              )}
+              <span>{actionLoading === 'restore-all' ? 'Restoring...' : `Recover All (${trashedFiles.length})`}</span>
+            </button>
+
+            <button
+              onClick={handleEmptyTrash}
+              disabled={actionLoading !== null}
+              className="inline-flex items-center space-x-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-red-950/40 hover:bg-red-900/60 text-red-300 border border-red-800/50 transition active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm shadow-red-950/20"
+              title="Permanently delete all files in trash from Google Drive"
+            >
+              {actionLoading === 'empty' ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-red-300" />
+              ) : (
+                <Trash2 className="w-3.5 h-3.5" />
+              )}
+              <span>{actionLoading === 'empty' ? 'Emptying...' : 'Empty Trash'}</span>
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="p-4 bg-amber-950/30 border border-amber-800/40 rounded-2xl text-xs text-amber-300 flex items-center space-x-2.5">
         <AlertTriangle className="w-4 h-4 flex-shrink-0 text-amber-400" />
         <span>
-          Files in Trash are still safely preserved on your Google Drive accounts until you explicitly choose &quot;Delete Permanently&quot;.
+          Files in Trash are still safely preserved on your Google Drive accounts until you explicitly choose &quot;Delete Permanently&quot; or &quot;Empty Trash&quot;.
         </span>
       </div>
 

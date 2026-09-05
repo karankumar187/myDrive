@@ -25,6 +25,8 @@ router.post('/:id/move', requireAnyAuth, FileController.moveFile);
 router.post('/bulk', requireAnyAuth, FileController.bulkAction);
 
 // Soft delete / Recycle bin
+router.post('/trash/empty', requireUserAuth, FileController.emptyTrash);
+router.post('/trash/restore-all', requireUserAuth, FileController.restoreAllFromTrash);
 router.post('/:id/trash', requireAnyAuth, FileController.moveToTrash);
 router.post('/:id/restore', requireUserAuth, FileController.restoreFromTrash);
 router.delete('/:id/permanent', requireUserAuth, FileController.permanentDelete);

@@ -653,6 +653,81 @@ export class FileController {
   }
 
   /**
+   * Restores all files and folders from Trash.
+   */
+  static async restoreAllFromTrash(req: Request, res: Response): Promise<void> {
+    try {
+      const userId = req.user!._id;
+
+      const [fileResult, folderResult] = await Promise.all([
+        File.updateMany(
+          { userId, isTrash: true },
+          { isTrash: false, trashedAt: null }
+        ),
+        Folder.updateMany(
+          { userId, isTrash: true },
+          { isTrash: false, trashedAt: null }
+        ),
+      ]);
+
+      await CacheService.invalidateUser(userId.toString());
+      res.json({
+        success: true,
+        restoredFiles: fileResult.modifiedCount,
+        restoredFolders: folderResult.modifiedCount,
+        message: `Restored ${fileResult.modifiedCount} files and ${folderResult.modifiedCount} folders from Trash`,
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+
+  /**
+   * Permanently empties the entire Trash: purges all trashed files from Google Drive and database.
+   */
+  static async emptyTrash(req: Request, res: Response): Promise<void> {
+    try {
+      const userId = req.user!._id;
+
+      // Find all files in Trash for this user
+      const trashedFiles = await File.find({ userId, isTrash: true });
+
+      // Permanently purge physical files from Google Drive
+      for (const file of trashedFiles) {
+        for (const version of file.versions) {
+          try {
+            const account = await StorageAccount.findById(version.storageAccountId);
+            if (account) {
+              await GoogleDriveService.deleteFile(account, version.providerFileId);
+              await StorageAccount.findByIdAndUpdate(account._id, {
+                $inc: { usedStorageBytes: -version.sizeBytes },
+              });
+            }
+          } catch (delError) {
+            console.warn(`Failed to delete physical file ${version.providerFileId}:`, delError);
+          }
+        }
+      }
+
+      // Delete records from database
+      const [fileDeleteResult, folderDeleteResult] = await Promise.all([
+        File.deleteMany({ userId, isTrash: true }),
+        Folder.deleteMany({ userId, isTrash: true }),
+      ]);
+
+      await CacheService.invalidateUser(userId.toString());
+      res.json({
+        success: true,
+        purgedFiles: fileDeleteResult.deletedCount,
+        purgedFolders: folderDeleteResult.deletedCount,
+        message: 'Trash emptied permanently',
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+
+  /**
    * Toggles or sets favorite status for a file.
    */
   static async toggleFavorite(req: Request, res: Response): Promise<void> {

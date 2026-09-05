@@ -177,12 +177,30 @@ export const api = {
     return res.json();
   },
 
+  async restoreAllTrash(): Promise<any> {
+    const res = await fetch(`${API_BASE}/files/trash/restore-all`, {
+      method: 'POST',
+      headers: getHeaders(),
+    });
+    if (!res.ok) throw new Error('Failed to restore all files from trash');
+    return res.json();
+  },
+
   async permanentDelete(fileId: string): Promise<any> {
     const res = await fetch(`${API_BASE}/files/${fileId}/permanent`, {
       method: 'DELETE',
       headers: getHeaders(),
     });
     if (!res.ok) throw new Error('Failed to delete file');
+    return res.json();
+  },
+
+  async emptyTrash(): Promise<any> {
+    const res = await fetch(`${API_BASE}/files/trash/empty`, {
+      method: 'POST',
+      headers: getHeaders(),
+    });
+    if (!res.ok) throw new Error('Failed to empty trash');
     return res.json();
   },
 
