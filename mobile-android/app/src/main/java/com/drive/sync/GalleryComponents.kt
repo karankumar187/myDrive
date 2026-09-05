@@ -1537,6 +1537,8 @@ fun FullScreenPhotoViewer(
     var offset by remember { mutableStateOf(Offset.Zero) }
     var isMoreMenuOpen by remember { mutableStateOf(false) }
     var isViewerMediaLoading by remember { mutableStateOf(true) }
+    // Persist last successfully loaded image URL — shown blurred while next image loads (no spinner/blank screen)
+    var prevImageUrl by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(currentItem.id) {
         isViewerMediaLoading = true
@@ -1721,21 +1723,14 @@ fun FullScreenPhotoViewer(
                             }
 
                             if ((isBuffering || directVideoUrl == null) && playbackError == null) {
-                                Column(
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                                ) {
-                                    CircularProgressIndicator(
-                                        color = Color(0xFFA855F7),
-                                        modifier = Modifier.size(44.dp)
+                                // Progress line at top handles buffering UX — no circular spinner
+                                if (directVideoUrl == null) {
+                                    Text(
+                                        "Connecting to Google Drive CDN...",
+                                        color = Color.White.copy(alpha = 0.6f),
+                                        fontSize = 12.sp,
+                                        modifier = Modifier.align(Alignment.Center)
                                     )
-                                    if (directVideoUrl == null) {
-                                        Text(
-                                            "Connecting to Google Drive CDN...",
-                                            color = Color.White.copy(alpha = 0.8f),
-                                            fontSize = 12.sp
-                                        )
-                                    }
                                 }
                             }
 
@@ -1787,12 +1782,24 @@ fun FullScreenPhotoViewer(
                             modifier = Modifier.fillMaxSize(),
                             contentAlignment = Alignment.Center
                         ) {
-                            // Instant blurred thumbnail preview + loading indicator while high-res loads
+                            // While high-res loads: show previous image (or thumbnail) — no spinner or loading screen
                             if (isImageLoading && !isImageError) {
-                                Box(
-                                    modifier = Modifier.fillMaxSize(),
-                                    contentAlignment = Alignment.Center
-                                ) {
+                                val prevUrl = prevImageUrl
+                                if (prevUrl != null) {
+                                    // Previous image kept clear and crisp — seamless transition without blank screen or loading spinner
+                                    AsyncImage(
+                                        model = ImageRequest.Builder(context)
+                                            .data(prevUrl)
+                                            .addHeader("x-device-id", deviceId)
+                                            .addHeader("x-device-key", deviceKey)
+                                            .crossfade(false)
+                                            .build(),
+                                        contentDescription = null,
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentScale = ContentScale.Fit
+                                    )
+                                } else {
+                                    // First-ever image: show thumbnail while full-res loads
                                     AsyncImage(
                                         model = ImageRequest.Builder(context)
                                             .data(thumbUrl)
@@ -1801,36 +1808,9 @@ fun FullScreenPhotoViewer(
                                             .crossfade(false)
                                             .build(),
                                         contentDescription = null,
-                                        modifier = Modifier
-                                            .fillMaxSize()
-                                            .graphicsLayer(alpha = 0.4f),
+                                        modifier = Modifier.fillMaxSize(),
                                         contentScale = ContentScale.Fit
                                     )
-
-                                    Surface(
-                                        shape = RoundedCornerShape(16.dp),
-                                        color = Color.Black.copy(alpha = 0.65f),
-                                        border = BorderStroke(1.dp, Color(0xFFA855F7).copy(alpha = 0.3f)),
-                                        modifier = Modifier.padding(16.dp)
-                                    ) {
-                                        Row(
-                                            modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                                        ) {
-                                            CircularProgressIndicator(
-                                                color = Color(0xFFA855F7),
-                                                strokeWidth = 2.5.dp,
-                                                modifier = Modifier.size(20.dp)
-                                            )
-                                            Text(
-                                                text = "Loading photo...",
-                                                color = Color.White,
-                                                fontSize = 13.sp,
-                                                fontWeight = FontWeight.Medium
-                                            )
-                                        }
-                                    }
                                 }
                             }
 
@@ -1843,6 +1823,7 @@ fun FullScreenPhotoViewer(
                                     .build(),
                                 contentDescription = currentItem.filename,
                                 onSuccess = {
+                                    prevImageUrl = streamUrl
                                     isImageLoading = false
                                     isViewerMediaLoading = false
                                 },

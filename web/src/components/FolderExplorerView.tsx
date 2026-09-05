@@ -1064,10 +1064,8 @@ export const FolderExplorerView: React.FC<Props> = ({
           </a>
           <div className="max-w-[90vw] max-h-[85vh] flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
             {previewLoading ? (
-              <div className="flex flex-col items-center space-y-3">
-                <Loader2 className="w-10 h-10 text-purple-400 animate-spin" />
-                <span className="text-sm text-zinc-400">Decrypting file...</span>
-              </div>
+              // Progress line at top of modal handles the loading UX — no spinner here
+              null
             ) : previewError ? (
               <div className="max-w-md p-6 bg-[#16161d] border border-purple-500/30 rounded-2xl text-center space-y-3 shadow-glow-purple">
                 <div className="w-12 h-12 rounded-full bg-purple-950/60 border border-purple-800/50 flex items-center justify-center mx-auto text-purple-400">

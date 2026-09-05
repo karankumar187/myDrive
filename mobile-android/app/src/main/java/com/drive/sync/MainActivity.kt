@@ -4567,20 +4567,11 @@ fun MediaViewerDialog(
                             contentScale = ContentScale.Fit
                         )
 
-                        if (isLoading) {
-                            CircularProgressIndicator(
-                                color = Color(0xFFA855F7),
-                                modifier = Modifier.size(44.dp)
-                            )
-                        }
+                        // Single running progress bar above preview modal handles loading indication — no circular spinner
                     } else if (isVideo) {
                         when {
                             isResolvingUrl -> {
-                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                    CircularProgressIndicator(color = Color(0xFFA855F7), modifier = Modifier.size(44.dp))
-                                    Spacer(modifier = Modifier.height(12.dp))
-                                    Text("Connecting to Google Drive…", color = Color(0xFF94A3B8), fontSize = 13.sp)
-                                }
+                                Text("Connecting to Google Drive…", color = Color(0xFF94A3B8), fontSize = 13.sp)
                             }
                             resolvedVideoUrl != null -> VideoPlayer(
                                 streamUrl = resolvedVideoUrl!!,
@@ -4710,12 +4701,7 @@ fun VideoPlayer(
             modifier = Modifier.fillMaxSize()
         )
 
-        if (isBuffering && playbackError == null) {
-            CircularProgressIndicator(
-                color = Color(0xFFA855F7),
-                modifier = Modifier.size(48.dp)
-            )
-        }
+        // Single running line above preview modal handles buffering indication — no circular spinner
 
         if (playbackError != null) {
             Column(
@@ -4852,17 +4838,7 @@ fun PdfViewer(
 
     Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         if (isLoading) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center
-            ) {
-                CircularProgressIndicator(
-                    color = Color(0xFFA855F7),
-                    modifier = Modifier.size(44.dp)
-                )
-                Spacer(modifier = Modifier.height(14.dp))
-                Text("Loading PDF...", color = Color(0xFF94A3B8), fontSize = 13.sp)
-            }
+            Text("Rendering document…", color = Color(0xFF94A3B8), fontSize = 13.sp)
         } else if (errorMessage != null) {
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,

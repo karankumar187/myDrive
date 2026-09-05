@@ -1083,6 +1083,8 @@ const FullScreenViewer: React.FC<{
   const [isImageLoaded, setIsImageLoaded] = useState(false);
   const [videoError, setVideoError] = useState(false);
   const [imgError, setImgError] = useState(false);
+  // Keep previous image URL so we can show it while the next image loads (no blank screen / spinner)
+  const prevUrlRef = useRef<string | null>(null);
 
   const [globalProgress, setGlobalProgress] = useState<GlobalProgressState>({
     progress: 0,
@@ -1259,7 +1261,7 @@ const FullScreenViewer: React.FC<{
           <div
             className="h-full bg-gradient-to-r from-purple-500 via-indigo-400 to-purple-400 single-progress-bar"
             style={{
-              width: `${globalProgress.isVisible ? globalProgress.progress : 75}%`,
+              width: `${Math.max(14, globalProgress.progress)}%`,
             }}
           />
         </div>
@@ -1411,11 +1413,16 @@ const FullScreenViewer: React.FC<{
           </button>
         )}
 
-        {loading ? (
-          <div className="flex flex-col items-center space-y-3 text-purple-400">
-            <Loader2 className="w-10 h-10 animate-spin" />
-            <span className="text-xs text-zinc-400">Loading full resolution...</span>
-          </div>
+        {/* Show previous image blurred as background while next image resolves — no spinner */}
+        {loading && prevUrlRef.current && !isVideo ? (
+          <img
+            src={prevUrlRef.current}
+            alt="Previous"
+            className="max-h-[82vh] max-w-full object-contain rounded-xl shadow-2xl pointer-events-none transition-all duration-200 filter blur-sm opacity-60 scale-95"
+          />
+        ) : loading && !prevUrlRef.current && !isVideo ? (
+          // Very first image ever — show nothing (progress line at top is enough)
+          <div className="w-32 h-32" />
         ) : isVideo && fullUrl && !videoError ? (
           <video
             src={fullUrl}
@@ -1456,31 +1463,32 @@ const FullScreenViewer: React.FC<{
           </div>
         ) : fullUrl && !imgError ? (
           <div className="relative flex items-center justify-center max-h-[82vh] max-w-full">
-            {/* Instant Thumbnail Placeholder with Blur while high-res loads */}
-            {!isImageLoaded && (
-              <div className="flex items-center justify-center">
-                <img
-                  key={`thumb-${item._id}`}
-                  src={
-                    item.metadata?.thumbnail && item.metadata.thumbnail.startsWith('data:image/')
-                      ? item.metadata.thumbnail
-                      : api.getThumbnailUrl(item._id)
-                  }
-                  alt="Loading placeholder"
-                  className="max-h-[82vh] max-w-full object-contain filter blur-md opacity-40 scale-95 transition-all duration-300 pointer-events-none"
-                />
-                <div className="absolute flex flex-col items-center justify-center space-y-2.5 bg-black/60 px-5 py-3 rounded-2xl backdrop-blur-md border border-purple-500/20 shadow-2xl pointer-events-none">
-                  <Loader2 className="w-8 h-8 animate-spin text-purple-400" />
-                  <span className="text-xs text-zinc-300 font-medium tracking-wide">Loading photo...</span>
-                </div>
-              </div>
-            )}
+            {/* Keep showing previous loaded image without loading screen while next image loads */}
+            {!isImageLoaded && prevUrlRef.current ? (
+              <img
+                src={prevUrlRef.current}
+                alt="Previous Loaded Image"
+                className="max-h-[82vh] max-w-full object-contain rounded-xl shadow-2xl pointer-events-none"
+              />
+            ) : !isImageLoaded ? (
+              <img
+                key={`thumb-${item._id}`}
+                src={
+                  item.metadata?.thumbnail && item.metadata.thumbnail.startsWith('data:image/')
+                    ? item.metadata.thumbnail
+                    : api.getThumbnailUrl(item._id)
+                }
+                alt="Loading placeholder"
+                className="max-h-[82vh] max-w-full object-contain filter blur-sm opacity-60 scale-95 transition-all duration-300 pointer-events-none"
+              />
+            ) : null}
 
             <img
               key={item._id}
               src={fullUrl}
               alt={item.filename}
               onLoad={() => {
+                if (fullUrl) prevUrlRef.current = fullUrl;
                 setIsImageLoaded(true);
                 setLoading(false);
               }}
