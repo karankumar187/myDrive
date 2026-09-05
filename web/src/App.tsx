@@ -13,7 +13,7 @@ import {
   Search,
   Bell,
 } from 'lucide-react';
-import { api } from './services/api.js';
+import { api, subscribeToLoading } from './services/api.js';
 import { getSocket, disconnectSocket } from './services/socket.js';
 import { StorageSummary, FileItem, FolderItem, DeviceItem, User, BreadcrumbItem } from './types.js';
 import { StorageSummaryView } from './components/StorageSummaryView.js';
@@ -74,6 +74,11 @@ export const App: React.FC = () => {
   const [devices, setDevices] = useState<DeviceItem[]>([]);
   const [trashedFiles, setTrashedFiles] = useState<FileItem[]>([]);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isGlobalLoading, setIsGlobalLoading] = useState(false);
+
+  useEffect(() => {
+    return subscribeToLoading(setIsGlobalLoading);
+  }, []);
 
   // Zero-Knowledge Vault state
   const [vaultKey, setVaultKey] = useState<CryptoKey | null>(null);
@@ -393,7 +398,7 @@ export const App: React.FC = () => {
       <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[300px] bg-purple-600/10 rounded-full blur-[160px] pointer-events-none" />
 
       {/* TOP FLOATING NAVBAR */}
-      <header className="sticky top-0 z-40 w-full backdrop-blur-xl bg-[#08080a]/75 border-b border-[#1c1c22]">
+      <header className="sticky top-0 z-40 w-full backdrop-blur-xl bg-[#08080a]/75 border-b border-[#1c1c22] relative">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           {/* Left Brand Logo */}
           <div className="flex items-center space-x-2.5">
@@ -480,6 +485,13 @@ export const App: React.FC = () => {
             </div>
           </div>
         </div>
+
+        {/* Indeterminate Loading Progress Line under Navbar */}
+        {(isGlobalLoading || isRefreshing) && (
+          <div className="absolute bottom-0 left-0 right-0 h-[2.5px] overflow-hidden bg-purple-950/20 z-50 pointer-events-none">
+            <div className="h-full bg-gradient-to-r from-purple-500 via-indigo-400 to-purple-400 w-full animate-loading-line shadow-glow-purple" />
+          </div>
+        )}
       </header>
 
       {/* HERO HEADER SECTION (Only displayed on Dashboard) */}

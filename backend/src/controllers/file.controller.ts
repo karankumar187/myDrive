@@ -4,6 +4,7 @@ import path from 'path';
 import { Types } from 'mongoose';
 import { File } from '../models/File.js';
 import { Folder } from '../models/Folder.js';
+import { Tombstone } from '../models/Tombstone.js';
 import { StorageAccount } from '../models/StorageAccount.js';
 import { Device } from '../models/Device.js';
 import { DeviceFileState } from '../models/DeviceFileState.js';
@@ -42,9 +43,13 @@ export class FileController {
       );
       if (existingDuplicate) {
         // Instant deduplication: No bytes need to be uploaded to Google Drive!
+        const isDeleted = Boolean((existingDuplicate as any).isTrash || (existingDuplicate as any).isTombstone);
         res.json({
           isDuplicate: true,
-          message: 'Exact duplicate already exists in your cloud library. Byte upload skipped!',
+          isDeletedOnCloud: isDeleted,
+          message: isDeleted
+            ? 'File was deleted from cloud storage. Sync will permanently skip re-uploading!'
+            : 'Exact duplicate already exists in your cloud library. Byte upload skipped!',
           fileId: existingDuplicate._id,
         });
         return;
@@ -618,6 +623,12 @@ export class FileController {
         return;
       }
 
+      // Remove any tombstone if existed
+      await Tombstone.deleteMany({
+        userId,
+        $or: [{ contentHash: file.contentHash }, { filename: file.filename, sizeBytes: file.sizeBytes }],
+      }).catch(() => {});
+
       await CacheService.invalidateUser(userId.toString());
       res.json({ success: true, message: 'Restored from Trash' });
     } catch (error: any) {
@@ -640,6 +651,15 @@ export class FileController {
         res.status(404).json({ error: 'File not found or access denied' });
         return;
       }
+
+      // Record tombstone so subsequent mobile or client syncs never re-upload this purged file
+      await Tombstone.create({
+        userId,
+        contentHash: file.contentHash,
+        filename: file.filename,
+        sizeBytes: file.sizeBytes,
+        deletedAt: new Date(),
+      }).catch((err) => console.warn('Failed to record tombstone:', err));
 
       // Delete each physical version from Google Drive
       for (const version of file.versions) {
@@ -671,6 +691,13 @@ export class FileController {
   static async restoreAllFromTrash(req: Request, res: Response): Promise<void> {
     try {
       const userId = req.user!._id;
+
+      // When restoring all from trash, remove tombstones for these files
+      const filesToRestore = await File.find({ userId, isTrash: true });
+      const hashes = filesToRestore.map((f) => f.contentHash).filter(Boolean);
+      if (hashes.length > 0) {
+        await Tombstone.deleteMany({ userId, contentHash: { $in: hashes } }).catch(() => {});
+      }
 
       const [fileResult, folderResult] = await Promise.all([
         File.updateMany(
@@ -704,6 +731,18 @@ export class FileController {
 
       // Find all files in Trash for this user before deletion
       const trashedFiles = await File.find({ userId, isTrash: true });
+
+      // Record tombstones so subsequent syncs never re-upload these files
+      if (trashedFiles.length > 0) {
+        const tombstones = trashedFiles.map((f) => ({
+          userId,
+          contentHash: f.contentHash,
+          filename: f.filename,
+          sizeBytes: f.sizeBytes,
+          deletedAt: new Date(),
+        }));
+        await Tombstone.insertMany(tombstones, { ordered: false }).catch(() => {});
+      }
 
       // 1. Delete records from database immediately so user sees empty trash instantly
       const [fileDeleteResult, folderDeleteResult] = await Promise.all([

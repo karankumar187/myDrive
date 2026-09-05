@@ -34,7 +34,7 @@ import {
   XCircle,
   ExternalLink,
 } from 'lucide-react';
-import { api } from '../services/api.js';
+import { api, startGlobalLoading } from '../services/api.js';
 import { VaultCryptoService } from '../services/vault-crypto.js';
 import { mediaCache, generateThumbnailFromVideoFile } from '../services/media-cache.js';
 import { formatBytes, getStreamUrl } from '../utils/format.js';
@@ -296,6 +296,7 @@ export const FolderExplorerView: React.FC<Props> = ({
 
     setPreviewLoading(true);
     setPreviewUrl(null);
+    const stopLoading = startGlobalLoading();
 
     const isEncrypted = file.versions && file.versions.length > 0 && file.versions[0].isEncrypted;
 
@@ -329,6 +330,7 @@ export const FolderExplorerView: React.FC<Props> = ({
       console.error('File load failed:', err);
       setPreviewError(err.message || 'Failed to load file preview');
     } finally {
+      stopLoading();
       setPreviewLoading(false);
     }
   }, [vaultKey]);
@@ -1027,6 +1029,11 @@ export const FolderExplorerView: React.FC<Props> = ({
       {/* ======== FILE PREVIEW LIGHTBOX ======== */}
       {previewFile && (
         <div className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4 backdrop-blur-sm" onClick={closePreview}>
+          {previewLoading && (
+            <div className="absolute top-0 left-0 right-0 h-[2.5px] overflow-hidden bg-purple-950/20 z-50 pointer-events-none">
+              <div className="h-full bg-gradient-to-r from-purple-500 via-indigo-400 to-purple-400 w-full animate-loading-line shadow-glow-purple" />
+            </div>
+          )}
           <button onClick={closePreview} className="absolute top-4 right-4 z-50 w-10 h-10 rounded-full bg-zinc-800/80 hover:bg-zinc-700 flex items-center justify-center text-white transition">
             <X className="w-5 h-5" />
           </button>

@@ -3,6 +3,51 @@ import { StorageSummary, FileItem, FolderItem, DeviceItem, User, BreadcrumbItem 
 const rawApiUrl = (import.meta.env.VITE_API_URL || '').replace(/\/+$/, '');
 const API_BASE = rawApiUrl ? `${rawApiUrl}/api/v1` : '/api/v1';
 
+type LoadingListener = (isLoading: boolean) => void;
+let activeRequestCount = 0;
+const loadingListeners = new Set<LoadingListener>();
+
+function notifyLoadingListeners() {
+  const isLoading = activeRequestCount > 0;
+  loadingListeners.forEach((listener) => {
+    try {
+      listener(isLoading);
+    } catch (e) {
+      console.error('Error in loading listener:', e);
+    }
+  });
+}
+
+export function subscribeToLoading(listener: LoadingListener): () => void {
+  loadingListeners.add(listener);
+  listener(activeRequestCount > 0);
+  return () => {
+    loadingListeners.delete(listener);
+  };
+}
+
+export function startGlobalLoading(): () => void {
+  activeRequestCount++;
+  notifyLoadingListeners();
+  let stopped = false;
+  return () => {
+    if (!stopped) {
+      stopped = true;
+      activeRequestCount = Math.max(0, activeRequestCount - 1);
+      notifyLoadingListeners();
+    }
+  };
+}
+
+export async function fetchWithLoading(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const stop = startGlobalLoading();
+  try {
+    return await fetch(input, init);
+  } finally {
+    stop();
+  }
+}
+
 function getHeaders(): HeadersInit {
   const token = localStorage.getItem('drive_token');
   return {
@@ -14,7 +59,7 @@ function getHeaders(): HeadersInit {
 export const api = {
   // Auth
   async getCurrentUser(): Promise<{ user: User }> {
-    const res = await fetch(`${API_BASE}/auth/me`, { headers: getHeaders() });
+    const res = await fetchWithLoading(`${API_BASE}/auth/me`, { headers: getHeaders() });
     if (!res.ok) {
       const errText = await res.text().catch(() => '');
       throw new Error(`Auth failed (${res.status}): ${errText || res.statusText}`);
@@ -29,19 +74,19 @@ export const api = {
 
   // Storage Pooling
   async getStorageSummary(): Promise<StorageSummary> {
-    const res = await fetch(`${API_BASE}/storage/summary`, { headers: getHeaders() });
+    const res = await fetchWithLoading(`${API_BASE}/storage/summary`, { headers: getHeaders() });
     if (!res.ok) throw new Error('Failed to fetch storage summary');
     return res.json();
   },
 
   async getConnectUrl(): Promise<{ url: string }> {
-    const res = await fetch(`${API_BASE}/storage/connect/url`, { headers: getHeaders() });
+    const res = await fetchWithLoading(`${API_BASE}/storage/connect/url`, { headers: getHeaders() });
     if (!res.ok) throw new Error('Failed to get Google Drive connection URL');
     return res.json();
   },
 
   async syncAccountQuota(id: string): Promise<any> {
-    const res = await fetch(`${API_BASE}/storage/accounts/${id}/sync`, {
+    const res = await fetchWithLoading(`${API_BASE}/storage/accounts/${id}/sync`, {
       method: 'POST',
       headers: getHeaders(),
     });
@@ -50,7 +95,7 @@ export const api = {
   },
 
   async removeAccount(id: string): Promise<any> {
-    const res = await fetch(`${API_BASE}/storage/accounts/${id}`, {
+    const res = await fetchWithLoading(`${API_BASE}/storage/accounts/${id}`, {
       method: 'DELETE',
       headers: getHeaders(),
     });
@@ -69,7 +114,7 @@ export const api = {
     if (search) params.append('search', search);
     if (isTrash) params.append('isTrash', 'true');
 
-    const res = await fetch(`${API_BASE}/files?${params.toString()}`, { headers: getHeaders() });
+    const res = await fetchWithLoading(`${API_BASE}/files?${params.toString()}`, { headers: getHeaders() });
     if (!res.ok) throw new Error('Failed to list files');
     return res.json();
   },
@@ -79,7 +124,7 @@ export const api = {
     if (params?.filter) query.append('filter', params.filter);
     if (params?.search) query.append('search', params.search);
     const qs = query.toString() ? `?${query.toString()}` : '';
-    const res = await fetch(`${API_BASE}/files/gallery${qs}`, { headers: getHeaders() });
+    const res = await fetchWithLoading(`${API_BASE}/files/gallery${qs}`, { headers: getHeaders() });
     if (!res.ok) throw new Error('Failed to fetch media gallery');
     return res.json();
   },
@@ -90,7 +135,7 @@ export const api = {
   },
 
   async toggleFavorite(fileId: string, isFavorite?: boolean): Promise<{ success: boolean; isFavorite: boolean }> {
-    const res = await fetch(`${API_BASE}/files/${fileId}/favorite`, {
+    const res = await fetchWithLoading(`${API_BASE}/files/${fileId}/favorite`, {
       method: 'PATCH',
       headers: getHeaders(),
       body: JSON.stringify({ isFavorite }),
@@ -100,7 +145,7 @@ export const api = {
   },
 
   async renameFile(fileId: string, filename: string): Promise<any> {
-    const res = await fetch(`${API_BASE}/files/${fileId}/rename`, {
+    const res = await fetchWithLoading(`${API_BASE}/files/${fileId}/rename`, {
       method: 'PATCH',
       headers: getHeaders(),
       body: JSON.stringify({ filename }),
@@ -110,7 +155,7 @@ export const api = {
   },
 
   async moveFile(fileId: string, folderId: string | null): Promise<any> {
-    const res = await fetch(`${API_BASE}/files/${fileId}/move`, {
+    const res = await fetchWithLoading(`${API_BASE}/files/${fileId}/move`, {
       method: 'PATCH',
       headers: getHeaders(),
       body: JSON.stringify({ folderId }),
@@ -120,7 +165,7 @@ export const api = {
   },
 
   async bulkAction(action: 'trash' | 'favorite' | 'unfavorite' | 'move', fileIds: string[], folderId?: string | null): Promise<any> {
-    const res = await fetch(`${API_BASE}/files/bulk`, {
+    const res = await fetchWithLoading(`${API_BASE}/files/bulk`, {
       method: 'POST',
       headers: getHeaders(),
       body: JSON.stringify({ action, fileIds, folderId }),
@@ -137,7 +182,7 @@ export const api = {
     folderId?: string | null;
     isEncrypted?: boolean;
   }) {
-    const res = await fetch(`${API_BASE}/files/upload/initiate`, {
+    const res = await fetchWithLoading(`${API_BASE}/files/upload/initiate`, {
       method: 'POST',
       headers: getHeaders(),
       body: JSON.stringify(payload),
@@ -150,7 +195,7 @@ export const api = {
   },
 
   async completeUpload(payload: any) {
-    const res = await fetch(`${API_BASE}/files/upload/complete`, {
+    const res = await fetchWithLoading(`${API_BASE}/files/upload/complete`, {
       method: 'POST',
       headers: getHeaders(),
       body: JSON.stringify(payload),
@@ -160,7 +205,7 @@ export const api = {
   },
 
   async moveToTrash(fileId: string): Promise<any> {
-    const res = await fetch(`${API_BASE}/files/${fileId}/trash`, {
+    const res = await fetchWithLoading(`${API_BASE}/files/${fileId}/trash`, {
       method: 'POST',
       headers: getHeaders(),
     });
@@ -169,7 +214,7 @@ export const api = {
   },
 
   async restoreFromTrash(fileId: string): Promise<any> {
-    const res = await fetch(`${API_BASE}/files/${fileId}/restore`, {
+    const res = await fetchWithLoading(`${API_BASE}/files/${fileId}/restore`, {
       method: 'POST',
       headers: getHeaders(),
     });
@@ -178,7 +223,7 @@ export const api = {
   },
 
   async restoreAllTrash(): Promise<any> {
-    const res = await fetch(`${API_BASE}/files/trash/restore-all`, {
+    const res = await fetchWithLoading(`${API_BASE}/files/trash/restore-all`, {
       method: 'POST',
       headers: getHeaders(),
     });
@@ -187,7 +232,7 @@ export const api = {
   },
 
   async permanentDelete(fileId: string): Promise<any> {
-    const res = await fetch(`${API_BASE}/files/${fileId}/permanent`, {
+    const res = await fetchWithLoading(`${API_BASE}/files/${fileId}/permanent`, {
       method: 'DELETE',
       headers: getHeaders(),
     });
@@ -196,7 +241,7 @@ export const api = {
   },
 
   async emptyTrash(): Promise<any> {
-    const res = await fetch(`${API_BASE}/files/trash/empty`, {
+    const res = await fetchWithLoading(`${API_BASE}/files/trash/empty`, {
       method: 'POST',
       headers: getHeaders(),
     });
@@ -205,7 +250,7 @@ export const api = {
   },
 
   async deduplicateFiles(): Promise<any> {
-    const res = await fetch(`${API_BASE}/files/deduplicate`, {
+    const res = await fetchWithLoading(`${API_BASE}/files/deduplicate`, {
       method: 'POST',
       headers: getHeaders(),
     });
@@ -221,13 +266,13 @@ export const api = {
     const params = new URLSearchParams();
     if (parentFolderId) params.append('parentFolderId', parentFolderId);
 
-    const res = await fetch(`${API_BASE}/files/folders/list?${params.toString()}`, { headers: getHeaders() });
+    const res = await fetchWithLoading(`${API_BASE}/files/folders/list?${params.toString()}`, { headers: getHeaders() });
     if (!res.ok) throw new Error('Failed to list folders');
     return res.json();
   },
 
   async createFolder(name: string, parentFolderId?: string | null): Promise<{ folder: FolderItem }> {
-    const res = await fetch(`${API_BASE}/files/folders/create`, {
+    const res = await fetchWithLoading(`${API_BASE}/files/folders/create`, {
       method: 'POST',
       headers: getHeaders(),
       body: JSON.stringify({ name, parentFolderId }),
@@ -237,7 +282,7 @@ export const api = {
   },
 
   async renameFolder(folderId: string, name: string): Promise<{ folder: FolderItem }> {
-    const res = await fetch(`${API_BASE}/files/folders/${folderId}/rename`, {
+    const res = await fetchWithLoading(`${API_BASE}/files/folders/${folderId}/rename`, {
       method: 'PATCH',
       headers: getHeaders(),
       body: JSON.stringify({ name }),
@@ -247,7 +292,7 @@ export const api = {
   },
 
   async deleteFolder(folderId: string): Promise<any> {
-    const res = await fetch(`${API_BASE}/files/folders/${folderId}`, {
+    const res = await fetchWithLoading(`${API_BASE}/files/folders/${folderId}`, {
       method: 'DELETE',
       headers: getHeaders(),
     });
@@ -257,13 +302,13 @@ export const api = {
 
   // Devices
   async listDevices(): Promise<{ devices: DeviceItem[] }> {
-    const res = await fetch(`${API_BASE}/devices`, { headers: getHeaders() });
+    const res = await fetchWithLoading(`${API_BASE}/devices`, { headers: getHeaders() });
     if (!res.ok) throw new Error('Failed to list devices');
     return res.json();
   },
 
   async registerDevice(payload: { deviceName: string; deviceType: string }): Promise<any> {
-    const res = await fetch(`${API_BASE}/devices/register`, {
+    const res = await fetchWithLoading(`${API_BASE}/devices/register`, {
       method: 'POST',
       headers: getHeaders(),
       body: JSON.stringify(payload),
@@ -273,7 +318,7 @@ export const api = {
   },
 
   async updateDevicePolicy(id: string, policy: any): Promise<any> {
-    const res = await fetch(`${API_BASE}/devices/${id}/policy`, {
+    const res = await fetchWithLoading(`${API_BASE}/devices/${id}/policy`, {
       method: 'PUT',
       headers: getHeaders(),
       body: JSON.stringify({ policy }),
@@ -283,7 +328,7 @@ export const api = {
   },
 
   async revokeDevice(id: string): Promise<any> {
-    const res = await fetch(`${API_BASE}/devices/${id}/revoke`, {
+    const res = await fetchWithLoading(`${API_BASE}/devices/${id}/revoke`, {
       method: 'DELETE',
       headers: getHeaders(),
     });
@@ -292,13 +337,13 @@ export const api = {
   },
 
   async getDeviceUploads(deviceId: string): Promise<{ files: FileItem[] }> {
-    const res = await fetch(`${API_BASE}/files/device/${deviceId}/uploads`, { headers: getHeaders() });
+    const res = await fetchWithLoading(`${API_BASE}/files/device/${deviceId}/uploads`, { headers: getHeaders() });
     if (!res.ok) throw new Error('Failed to fetch device uploads');
     return res.json();
   },
 
   async forceDownloadToDevice(targetDeviceId: string, fileIds: string[]): Promise<any> {
-    const res = await fetch(`${API_BASE}/devices/force-download`, {
+    const res = await fetchWithLoading(`${API_BASE}/devices/force-download`, {
       method: 'POST',
       headers: getHeaders(),
       body: JSON.stringify({ targetDeviceId, fileIds }),

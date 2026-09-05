@@ -556,6 +556,7 @@ fun FullGalleryScreen(
     var detailsItem by remember { mutableStateOf<CloudMedia?>(null) }
     var renameItem by remember { mutableStateOf<CloudMedia?>(null) }
     var isMoveDialogOpen by remember { mutableStateOf(false) }
+    var isActionLoading by remember { mutableStateOf(false) }
 
     // Filter media
     val filteredList = remember(localList, filterType, searchQuery, selectedDeviceFilters.toList()) {
@@ -943,6 +944,16 @@ fun FullGalleryScreen(
             }
         }
 
+        if (isRefreshing || isActionLoading) {
+            LinearProgressIndicator(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(2.5.dp),
+                color = Color(0xFFA855F7),
+                trackColor = Color(0x22A855F7)
+            )
+        }
+
         // Floating Selection Action Bar
         AnimatedVisibility(visible = (isSelectionMode || selectedIds.isNotEmpty())) {
             Surface(
@@ -1015,11 +1026,16 @@ fun FullGalleryScreen(
                             onClick = {
                                 val ids = selectedIds.toList()
                                 coroutineScope.launch {
-                                    apiBulkAction(serverUrl, deviceId, deviceKey, "favorite", ids)
-                                    localList = localList.map { if (ids.contains(it.id)) it.copy(isFavorite = true) else it }
-                                    selectedIds.clear()
-                                    isSelectionMode = false
-                                    Toast.makeText(context, "Marked as favorites", Toast.LENGTH_SHORT).show()
+                                    isActionLoading = true
+                                    try {
+                                        apiBulkAction(serverUrl, deviceId, deviceKey, "favorite", ids)
+                                        localList = localList.map { if (ids.contains(it.id)) it.copy(isFavorite = true) else it }
+                                        selectedIds.clear()
+                                        isSelectionMode = false
+                                        Toast.makeText(context, "Marked as favorites", Toast.LENGTH_SHORT).show()
+                                    } finally {
+                                        isActionLoading = false
+                                    }
                                 }
                             },
                             enabled = selectedIds.isNotEmpty()
@@ -1054,11 +1070,16 @@ fun FullGalleryScreen(
                             onClick = {
                                 val ids = selectedIds.toList()
                                 coroutineScope.launch {
-                                    apiBulkAction(serverUrl, deviceId, deviceKey, "trash", ids)
-                                    localList = localList.filter { !ids.contains(it.id) }
-                                    selectedIds.clear()
-                                    isSelectionMode = false
-                                    Toast.makeText(context, "Moved to Trash", Toast.LENGTH_SHORT).show()
+                                    isActionLoading = true
+                                    try {
+                                        apiBulkAction(serverUrl, deviceId, deviceKey, "trash", ids)
+                                        localList = localList.filter { !ids.contains(it.id) }
+                                        selectedIds.clear()
+                                        isSelectionMode = false
+                                        Toast.makeText(context, "Moved to Trash", Toast.LENGTH_SHORT).show()
+                                    } finally {
+                                        isActionLoading = false
+                                    }
                                 }
                             },
                             enabled = selectedIds.isNotEmpty()
@@ -1192,17 +1213,27 @@ fun FullGalleryScreen(
                 current.isFavorite = nextFav
                 localList = localList.map { if (it.id == current.id) it.copy(isFavorite = nextFav) else it }
                 coroutineScope.launch {
-                    apiToggleFavorite(serverUrl, deviceId, deviceKey, current.id, nextFav)
+                    isActionLoading = true
+                    try {
+                        apiToggleFavorite(serverUrl, deviceId, deviceKey, current.id, nextFav)
+                    } finally {
+                        isActionLoading = false
+                    }
                 }
             },
             onDelete = {
                 coroutineScope.launch {
-                    apiTrashFile(serverUrl, deviceId, deviceKey, current.id)
-                    localList = localList.filter { it.id != current.id }
-                    if (viewerIndex!! >= localList.size) {
-                        viewerIndex = if (localList.isNotEmpty()) localList.size - 1 else null
+                    isActionLoading = true
+                    try {
+                        apiTrashFile(serverUrl, deviceId, deviceKey, current.id)
+                        localList = localList.filter { it.id != current.id }
+                        if (viewerIndex!! >= localList.size) {
+                            viewerIndex = if (localList.isNotEmpty()) localList.size - 1 else null
+                        }
+                        Toast.makeText(context, "Moved to Trash", Toast.LENGTH_SHORT).show()
+                    } finally {
+                        isActionLoading = false
                     }
-                    Toast.makeText(context, "Moved to Trash", Toast.LENGTH_SHORT).show()
                 }
             },
             onOpenDetails = { detailsItem = current },
@@ -1244,9 +1275,14 @@ fun FullGalleryScreen(
                     onClick = {
                         val target = renameItem!!
                         coroutineScope.launch {
-                            apiRenameFile(serverUrl, deviceId, deviceKey, target.id, newName.trim())
-                            localList = localList.map { if (it.id == target.id) it.copy(filename = newName.trim()) else it }
-                            renameItem = null
+                            isActionLoading = true
+                            try {
+                                apiRenameFile(serverUrl, deviceId, deviceKey, target.id, newName.trim())
+                                localList = localList.map { if (it.id == target.id) it.copy(filename = newName.trim()) else it }
+                                renameItem = null
+                            } finally {
+                                isActionLoading = false
+                            }
                         }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFA855F7))
@@ -1280,12 +1316,17 @@ fun FullGalleryScreen(
                             .padding(vertical = 4.dp)
                             .clickable {
                                 coroutineScope.launch {
-                                    val ids = if (isSelectionMode) selectedIds.toList() else if (viewerIndex != null) listOf(filteredList[viewerIndex!!].id) else emptyList()
-                                    apiBulkAction(serverUrl, deviceId, deviceKey, "move", ids, null)
-                                    isMoveDialogOpen = false
-                                    selectedIds.clear()
-                                    isSelectionMode = false
-                                    Toast.makeText(context, "Moved to Root", Toast.LENGTH_SHORT).show()
+                                    isActionLoading = true
+                                    try {
+                                        val ids = if (isSelectionMode) selectedIds.toList() else if (viewerIndex != null) listOf(filteredList[viewerIndex!!].id) else emptyList()
+                                        apiBulkAction(serverUrl, deviceId, deviceKey, "move", ids, null)
+                                        isMoveDialogOpen = false
+                                        selectedIds.clear()
+                                        isSelectionMode = false
+                                        Toast.makeText(context, "Moved to Root", Toast.LENGTH_SHORT).show()
+                                    } finally {
+                                        isActionLoading = false
+                                    }
                                 }
                             },
                         color = Color(0xFF1F1F2F),
@@ -1301,12 +1342,17 @@ fun FullGalleryScreen(
                                 .padding(vertical = 4.dp)
                                 .clickable {
                                     coroutineScope.launch {
-                                        val ids = if (isSelectionMode) selectedIds.toList() else if (viewerIndex != null) listOf(filteredList[viewerIndex!!].id) else emptyList()
-                                        apiBulkAction(serverUrl, deviceId, deviceKey, "move", ids, folder.id)
-                                        isMoveDialogOpen = false
-                                        selectedIds.clear()
-                                        isSelectionMode = false
-                                        Toast.makeText(context, "Moved to ${folder.name}", Toast.LENGTH_SHORT).show()
+                                        isActionLoading = true
+                                        try {
+                                            val ids = if (isSelectionMode) selectedIds.toList() else if (viewerIndex != null) listOf(filteredList[viewerIndex!!].id) else emptyList()
+                                            apiBulkAction(serverUrl, deviceId, deviceKey, "move", ids, folder.id)
+                                            isMoveDialogOpen = false
+                                            selectedIds.clear()
+                                            isSelectionMode = false
+                                            Toast.makeText(context, "Moved to ${folder.name}", Toast.LENGTH_SHORT).show()
+                                        } finally {
+                                            isActionLoading = false
+                                        }
                                     }
                                 },
                             color = Color(0xFF1F1F2F),
@@ -1353,6 +1399,11 @@ fun FullScreenPhotoViewer(
     var scale by remember { mutableFloatStateOf(1f) }
     var offset by remember { mutableStateOf(Offset.Zero) }
     var isMoreMenuOpen by remember { mutableStateOf(false) }
+    var isViewerMediaLoading by remember { mutableStateOf(true) }
+
+    LaunchedEffect(currentItem.id) {
+        isViewerMediaLoading = true
+    }
 
     val isVideo = currentItem.mimeType.startsWith("video/")
     val streamUrl = "${serverUrl.trimEnd('/')}/api/v1/files/${currentItem.id}/stream?deviceId=$deviceId&deviceKey=$deviceKey"
@@ -1501,19 +1552,26 @@ fun FullScreenPhotoViewer(
 
                                             setOnPreparedListener { mp ->
                                                 isBuffering = false
+                                                isViewerMediaLoading = false
                                                 playbackError = null
                                                 mp.isLooping = false
                                                 start()
                                             }
 
                                             setOnInfoListener { _, what, _ ->
-                                                if (what == MediaPlayer.MEDIA_INFO_BUFFERING_START) isBuffering = true
-                                                else if (what == MediaPlayer.MEDIA_INFO_BUFFERING_END) isBuffering = false
+                                                if (what == MediaPlayer.MEDIA_INFO_BUFFERING_START) {
+                                                    isBuffering = true
+                                                    isViewerMediaLoading = true
+                                                } else if (what == MediaPlayer.MEDIA_INFO_BUFFERING_END) {
+                                                    isBuffering = false
+                                                    isViewerMediaLoading = false
+                                                }
                                                 true
                                             }
 
                                             setOnErrorListener { _, what, extra ->
                                                 isBuffering = false
+                                                isViewerMediaLoading = false
                                                 playbackError = "Unable to stream video ($what, $extra)"
                                                 true
                                             }
@@ -1649,10 +1707,12 @@ fun FullScreenPhotoViewer(
                                 contentDescription = currentItem.filename,
                                 onSuccess = {
                                     isImageLoading = false
+                                    isViewerMediaLoading = false
                                 },
                                 onError = {
                                     isImageLoading = false
                                     isImageError = true
+                                    isViewerMediaLoading = false
                                 },
                                 modifier = Modifier
                                     .fillMaxSize()
@@ -1695,15 +1755,16 @@ fun FullScreenPhotoViewer(
                 exit = fadeOut(),
                 modifier = Modifier.align(Alignment.TopCenter)
             ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(
-                            Brush.verticalGradient(
-                                listOf(Color.Black.copy(alpha = 0.8f), Color.Transparent)
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(
+                                Brush.verticalGradient(
+                                    listOf(Color.Black.copy(alpha = 0.8f), Color.Transparent)
+                                )
                             )
-                        )
-                        .padding(top = 36.dp, bottom = 12.dp, start = 12.dp, end = 12.dp),
+                            .padding(top = 36.dp, bottom = 12.dp, start = 12.dp, end = 12.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -1800,7 +1861,29 @@ fun FullScreenPhotoViewer(
                         }
                     }
                 }
+
+                if (isViewerMediaLoading) {
+                    LinearProgressIndicator(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(2.5.dp),
+                        color = Color(0xFFA855F7),
+                        trackColor = Color(0x22A855F7)
+                    )
+                }
             }
+        }
+
+        if (!showControls && isViewerMediaLoading) {
+            LinearProgressIndicator(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .fillMaxWidth()
+                    .height(2.5.dp),
+                color = Color(0xFFA855F7),
+                trackColor = Color(0x22A855F7)
+            )
+        }
 
             // Bottom Action Bar: Favorite ♡, Download ⬇, Share ↗, Delete 🗑, Details ℹ
             AnimatedVisibility(

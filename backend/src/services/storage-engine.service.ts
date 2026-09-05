@@ -3,6 +3,7 @@ import { StorageAccount } from '../models/StorageAccount.js';
 import { File } from '../models/File.js';
 import { DeviceFileState } from '../models/DeviceFileState.js';
 import { SyncEvent } from '../models/SyncEvent.js';
+import { Tombstone } from '../models/Tombstone.js';
 import { IStorageAccountDocument, IFileDocument, IFileMetadata } from '../types/index.js';
 import { GoogleDriveService } from './gdrive.service.js';
 
@@ -170,6 +171,39 @@ export class StorageEngineService {
         isTrash: true,
       });
       if (trashedByNameAndSize) return trashedByNameAndSize;
+    }
+
+    // 4. Check Tombstone records (permanently deleted files) so they are NEVER re-uploaded on sync
+    if (cleanHash) {
+      const tombstoneByHash = await Tombstone.findOne({
+        userId,
+        contentHash: { $regex: new RegExp(`^${cleanHash}$`, 'i') },
+      });
+      if (tombstoneByHash) {
+        return {
+          _id: tombstoneByHash._id,
+          filename: tombstoneByHash.filename,
+          isTrash: true,
+          isTombstone: true,
+        } as any;
+      }
+    }
+
+    if (filename && typeof sizeBytes === 'number' && sizeBytes > 0) {
+      const cleanName = filename.trim();
+      const tombstoneByNameAndSize = await Tombstone.findOne({
+        userId,
+        filename: cleanName,
+        sizeBytes,
+      });
+      if (tombstoneByNameAndSize) {
+        return {
+          _id: tombstoneByNameAndSize._id,
+          filename: tombstoneByNameAndSize.filename,
+          isTrash: true,
+          isTombstone: true,
+        } as any;
+      }
     }
 
     return null;

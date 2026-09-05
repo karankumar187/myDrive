@@ -808,6 +808,7 @@ fun MainAppScreen(
     val syncLogLines = remember { mutableStateListOf<String>() }   // live per-file log
 
     var isRefreshing by remember { mutableStateOf(false) }
+    var isCrudOperating by remember { mutableStateOf(false) }
     var fetchError by remember { mutableStateOf<String?>(null) }
 
     // Dialog States
@@ -1860,11 +1861,14 @@ fun MainAppScreen(
         )
     }
 
+    val isGlobalLoading = isRefreshing || isManualUploading || isSyncingNow || isSavingPolicy || isCrudOperating
+
     Scaffold(
         topBar = {
             if (selectedTab != 1) {
-                TopAppBar(
-                    title = {
+                Column {
+                    TopAppBar(
+                        title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Image(
                             painter = painterResource(R.drawable.ic_mydrive_logo),
@@ -1947,6 +1951,14 @@ fun MainAppScreen(
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color(0xFF0D0D11))
             )
+                    if (isGlobalLoading) {
+                        LinearProgressIndicator(
+                            modifier = Modifier.fillMaxWidth().height(2.5.dp),
+                            color = Color(0xFFA855F7),
+                            trackColor = Color(0x22A855F7)
+                        )
+                    }
+                }
         }
     },
     bottomBar = {
@@ -2101,6 +2113,7 @@ fun MainAppScreen(
                         isSelectionMode = isFilesSelectionMode,
                         onSelectionModeChange = { isFilesSelectionMode = it },
                         onOpenFile = { file -> previewItem = file },
+                        onActionLoadingChange = { isCrudOperating = it },
                         onRefresh = refreshData
                     )
                     1 -> FullGalleryScreen(
@@ -2209,10 +2222,17 @@ fun FilesScreen(
     isSelectionMode: Boolean = false,
     onSelectionModeChange: (Boolean) -> Unit = {},
     onOpenFile: (CloudFile) -> Unit,
+    onActionLoadingChange: (Boolean) -> Unit = {},
     onRefresh: () -> Unit
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val coroutineScope = rememberCoroutineScope()
+
+    var isActionLoading by remember { mutableStateOf(false) }
+    val setActionLoading: (Boolean) -> Unit = { loading ->
+        isActionLoading = loading
+        onActionLoadingChange(loading)
+    }
 
     val selectedFileIds = remember { mutableStateListOf<String>() }
 
@@ -2260,6 +2280,17 @@ fun FilesScreen(
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
+        if (isRefreshing || isActionLoading) {
+            LinearProgressIndicator(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(2.5.dp)
+                    .align(Alignment.TopCenter),
+                color = Color(0xFFA855F7),
+                trackColor = Color(0x22A855F7)
+            )
+        }
+
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
@@ -2722,10 +2753,15 @@ fun FilesScreen(
                         }
                         IconButton(onClick = {
                             coroutineScope.launch {
-                                apiBulkAction(serverUrl, deviceId, deviceKey, "favorite", selectedFileIds.toList())
-                                onRefresh()
-                                onSelectionModeChange(false)
-                                selectedFileIds.clear()
+                                setActionLoading(true)
+                                try {
+                                    apiBulkAction(serverUrl, deviceId, deviceKey, "favorite", selectedFileIds.toList())
+                                    onRefresh()
+                                    onSelectionModeChange(false)
+                                    selectedFileIds.clear()
+                                } finally {
+                                    setActionLoading(false)
+                                }
                             }
                         }) {
                             Icon(Icons.Default.Star, contentDescription = "Favorite", tint = Color.White)
@@ -2735,10 +2771,15 @@ fun FilesScreen(
                         }
                         IconButton(onClick = {
                             coroutineScope.launch {
-                                apiBulkAction(serverUrl, deviceId, deviceKey, "trash", selectedFileIds.toList())
-                                onRefresh()
-                                onSelectionModeChange(false)
-                                selectedFileIds.clear()
+                                setActionLoading(true)
+                                try {
+                                    apiBulkAction(serverUrl, deviceId, deviceKey, "trash", selectedFileIds.toList())
+                                    onRefresh()
+                                    onSelectionModeChange(false)
+                                    selectedFileIds.clear()
+                                } finally {
+                                    setActionLoading(false)
+                                }
                             }
                         }) {
                             Icon(Icons.Default.Delete, contentDescription = "Trash", tint = Color.Red)
@@ -2808,8 +2849,13 @@ fun FilesScreen(
                         leadingIcon = { Icon(Icons.Default.Star, contentDescription = null, tint = Color.White) },
                         onClick = {
                             coroutineScope.launch {
-                                apiToggleFavorite(serverUrl, deviceId, deviceKey, file.id, true)
-                                onRefresh()
+                                setActionLoading(true)
+                                try {
+                                    apiToggleFavorite(serverUrl, deviceId, deviceKey, file.id, true)
+                                    onRefresh()
+                                } finally {
+                                    setActionLoading(false)
+                                }
                             }
                             selectedFileForMenu = null
                         }
@@ -2819,8 +2865,13 @@ fun FilesScreen(
                         leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = Color.White) },
                         onClick = {
                             coroutineScope.launch {
-                                apiTrashFile(serverUrl, deviceId, deviceKey, file.id)
-                                onRefresh()
+                                setActionLoading(true)
+                                try {
+                                    apiTrashFile(serverUrl, deviceId, deviceKey, file.id)
+                                    onRefresh()
+                                } finally {
+                                    setActionLoading(false)
+                                }
                             }
                             selectedFileForMenu = null
                         }
@@ -2865,8 +2916,13 @@ fun FilesScreen(
                 TextButton(onClick = {
                     val f = fileToRename!!
                     coroutineScope.launch {
-                        apiRenameFile(serverUrl, deviceId, deviceKey, f.id, newFileName)
-                        onRefresh()
+                        setActionLoading(true)
+                        try {
+                            apiRenameFile(serverUrl, deviceId, deviceKey, f.id, newFileName)
+                            onRefresh()
+                        } finally {
+                            setActionLoading(false)
+                        }
                     }
                     fileToRename = null
                 }) {
@@ -2915,17 +2971,23 @@ fun FilesScreen(
             currentFolderId = "", 
             onSelectFolder = { folderId, _ ->
                 coroutineScope.launch {
-                    if (selectedFileIds.isNotEmpty()) {
-                        apiBulkAction(serverUrl, deviceId, deviceKey, "move", selectedFileIds.toList(), folderId)
+                    setActionLoading(true)
+                    try {
+                        if (selectedFileIds.isNotEmpty()) {
+                            apiBulkAction(serverUrl, deviceId, deviceKey, "move", selectedFileIds.toList(), folderId)
+                        }
+                        onRefresh()
+                        onSelectionModeChange(false)
+                        selectedFileIds.clear()
+                    } finally {
+                        setActionLoading(false)
                     }
-                    onRefresh()
-                    onSelectionModeChange(false)
-                    selectedFileIds.clear()
                 }
                 showMoveDialog = false
             },
             onCreateFolder = { folderName, parentId ->
                 coroutineScope.launch {
+                    setActionLoading(true)
                     try {
                         val baseUrl = serverUrl.trimEnd('/')
                         val body = JSONObject().apply {
@@ -2944,6 +3006,8 @@ fun FilesScreen(
                         onRefresh()
                     } catch (e: Exception) {
                         e.printStackTrace()
+                    } finally {
+                        setActionLoading(false)
                     }
                 }
             },
@@ -3021,8 +3085,13 @@ fun FilesScreen(
                         val newName = renameFolderNameInput.trim()
                         if (newName.isNotEmpty() && newName != f.name) {
                             coroutineScope.launch {
-                                apiRenameFolder(serverUrl, deviceId, deviceKey, f.id, newName)
-                                onRefresh()
+                                setActionLoading(true)
+                                try {
+                                    apiRenameFolder(serverUrl, deviceId, deviceKey, f.id, newName)
+                                    onRefresh()
+                                } finally {
+                                    setActionLoading(false)
+                                }
                             }
                         }
                         folderToRename = null
@@ -3050,8 +3119,13 @@ fun FilesScreen(
             confirmButton = {
                 TextButton(onClick = {
                     coroutineScope.launch {
-                        apiDeleteFolder(serverUrl, deviceId, deviceKey, f.id)
-                        onRefresh()
+                        setActionLoading(true)
+                        try {
+                            apiDeleteFolder(serverUrl, deviceId, deviceKey, f.id)
+                            onRefresh()
+                        } finally {
+                            setActionLoading(false)
+                        }
                     }
                     folderToDelete = null
                 }) {
@@ -4379,6 +4453,7 @@ fun MediaViewerDialog(
     // For videos: resolve direct Google Drive CDN URL to bypass Render proxy buffering
     var resolvedVideoUrl by remember { mutableStateOf<String?>(null) }
     var isResolvingUrl by remember { mutableStateOf(false) }
+    var isMediaLoading by remember { mutableStateOf(isImage) }
 
     LaunchedEffect(file.id) {
         if (isVideo) {
@@ -4464,6 +4539,16 @@ fun MediaViewerDialog(
                     }
                 }
 
+                if (isResolvingUrl || isMediaLoading) {
+                    LinearProgressIndicator(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(2.5.dp),
+                        color = Color(0xFFA855F7),
+                        trackColor = Color(0x22A855F7)
+                    )
+                }
+
                 // Media Preview Body
                 Box(
                     modifier = Modifier
@@ -4481,8 +4566,14 @@ fun MediaViewerDialog(
                                 .addHeader("x-device-key", deviceKey)
                                 .crossfade(true)
                                 .listener(
-                                    onSuccess = { _, _ -> isLoading = false },
-                                    onError = { _, _ -> isLoading = false }
+                                    onSuccess = { _, _ ->
+                                        isLoading = false
+                                        isMediaLoading = false
+                                    },
+                                    onError = { _, _ ->
+                                        isLoading = false
+                                        isMediaLoading = false
+                                    }
                                 )
                                 .build(),
                             contentDescription = file.filename,
