@@ -52,7 +52,7 @@ app.use(
 // Enable Gzip / Brotli compression for all JSON and text responses
 app.use(
   compression({
-    filter: (req, res) => {
+    filter: (req: express.Request, res: express.Response) => {
       if (req.headers['x-no-compression']) return false;
       return compression.filter(req, res);
     },
