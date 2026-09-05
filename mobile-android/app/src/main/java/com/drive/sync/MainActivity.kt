@@ -223,7 +223,7 @@ class MainActivity : ComponentActivity() {
                     MainAppScreen(
                         prefs = prefs,
                         onScheduleSync = { serverUrl, deviceId, deviceKey, targetFolderId, wifiOnly, chargingOnly, syncPhotos, syncVideos, syncDocuments ->
-                            scheduleBackupWork(serverUrl, deviceId, deviceKey, targetFolderId, wifiOnly, chargingOnly, syncPhotos, syncVideos, syncDocuments)
+                            scheduleBackupWork(serverUrl, deviceId, deviceKey, targetFolderId, wifiOnly, chargingOnly, syncPhotos, syncVideos, syncDocuments, forceUpdate = true)
                             Toast.makeText(this, "Periodic background backup scheduled!", Toast.LENGTH_SHORT).show()
                         },
                         onSyncNow = { serverUrl, deviceId, deviceKey, targetFolderId, syncPhotos, syncVideos, syncDocuments, onComplete ->
@@ -250,7 +250,7 @@ class MainActivity : ComponentActivity() {
         val syncDocuments = prefs.getBoolean("sync_documents", true)
 
         if (deviceId.isNotBlank() && deviceKey.isNotBlank()) {
-            scheduleBackupWork(serverUrl, deviceId, deviceKey, targetFolderId, wifiOnly, chargingOnly, syncPhotos, syncVideos, syncDocuments)
+            scheduleBackupWork(serverUrl, deviceId, deviceKey, targetFolderId, wifiOnly, chargingOnly, syncPhotos, syncVideos, syncDocuments, forceUpdate = false)
         }
     }
 
@@ -263,7 +263,8 @@ class MainActivity : ComponentActivity() {
         chargingOnly: Boolean,
         syncPhotos: Boolean,
         syncVideos: Boolean,
-        syncDocuments: Boolean
+        syncDocuments: Boolean,
+        forceUpdate: Boolean = false
     ) {
         val constraints = Constraints.Builder().apply {
             if (wifiOnly) {
@@ -291,9 +292,11 @@ class MainActivity : ComponentActivity() {
             )
             .build()
 
+        val policy = if (forceUpdate) ExistingPeriodicWorkPolicy.UPDATE else ExistingPeriodicWorkPolicy.KEEP
+
         WorkManager.getInstance(applicationContext).enqueueUniquePeriodicWork(
             "UnifiedDriveSync",
-            ExistingPeriodicWorkPolicy.UPDATE,
+            policy,
             syncRequest
         )
     }
@@ -3284,6 +3287,11 @@ fun DeviceAndPolicyScreen(
     syncLogLines: List<String> = emptyList()
 ) {
     val scrollState = rememberScrollState()
+    val context = LocalContext.current
+    val powerManager = remember { context.getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager }
+    var isIgnoringBatteryOptimizations by remember {
+        mutableStateOf(powerManager?.isIgnoringBatteryOptimizations(context.packageName) ?: false)
+    }
     val isPaired = deviceId.isNotBlank() && deviceKey.isNotBlank()
     var showCredentials by remember { mutableStateOf(false) }
 
@@ -3524,6 +3532,57 @@ fun DeviceAndPolicyScreen(
                     color = Color(0xFF9CA3AF),
                     lineHeight = 17.sp
                 )
+            }
+        }
+
+        // Battery Optimization Card (Crucial for Realme / Oppo / Xiaomi devices)
+        if (!isIgnoringBatteryOptimizations) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF261D12)),
+                border = BorderStroke(1.dp, Color(0xFFF59E0B).copy(alpha = 0.45f))
+            ) {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Warning, contentDescription = null, tint = Color(0xFFFBBF24), modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Background Auto-Sync Optimization",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFFFDE68A)
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "Realme / ColorOS freezes background apps to save power. Tap below to allow unrestricted background activity so scheduled auto-sync triggers reliably.",
+                        fontSize = 11.sp,
+                        color = Color(0xFFD1D5DB),
+                        lineHeight = 16.sp
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Button(
+                        onClick = {
+                            try {
+                                val intent = Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                                    data = Uri.parse("package:${context.packageName}")
+                                }
+                                context.startActivity(intent)
+                            } catch (_: Exception) {
+                                val fallback = Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                                    data = Uri.parse("package:${context.packageName}")
+                                }
+                                context.startActivity(fallback)
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD97706)),
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text("Allow Unrestricted Background Sync", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
+                    }
+                }
             }
         }
         // ──────────────────────────────────────────────────────────────────
