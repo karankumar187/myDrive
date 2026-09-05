@@ -324,9 +324,10 @@ export const App: React.FC = () => {
   }, [currentUser, currentFolderId, loadFolderData]);
 
   const handleGoogleLogin = () => {
-    const apiBase = import.meta.env.VITE_API_URL || '';
+    const isLocal = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+    const authBase = isLocal ? (import.meta.env.VITE_API_URL || 'http://localhost:5001') : 'https://mydrive-sti3.onrender.com';
     const currentOrigin = typeof window !== 'undefined' ? encodeURIComponent(window.location.origin) : '';
-    window.location.href = `${apiBase}/api/v1/auth/google?client_url=${currentOrigin}`;
+    window.location.href = `${authBase}/api/v1/auth/google?client_url=${currentOrigin}`;
   };
 
   const handleConnectDrive = async () => {
