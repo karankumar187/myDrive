@@ -256,8 +256,12 @@ class MainActivity : ComponentActivity() {
         val prefs = getSharedPreferences("drive_prefs", Context.MODE_PRIVATE)
         val deviceId = prefs.getString("device_id", "") ?: ""
         val deviceKey = prefs.getString("device_key", "") ?: ""
-        val serverUrl = prefs.getString("server_url", "https://mydrive-sti3.onrender.com") ?: "https://mydrive-sti3.onrender.com"
         val targetFolderId = prefs.getString("target_folder_id", "") ?: ""
+        val rawServerUrl = prefs.getString("server_url", "https://drive-edge-cache.karan9302451907.workers.dev") ?: "https://drive-edge-cache.karan9302451907.workers.dev"
+        val serverUrl = if (rawServerUrl == "https://mydrive-sti3.onrender.com") {
+            prefs.edit().putString("server_url", "https://drive-edge-cache.karan9302451907.workers.dev").apply()
+            "https://drive-edge-cache.karan9302451907.workers.dev"
+        } else rawServerUrl
         val wifiOnly = prefs.getBoolean("wifi_only", false)
         val chargingOnly = prefs.getBoolean("charging_only", false)
         val syncPhotos = prefs.getBoolean("sync_photos", true)
@@ -372,7 +376,7 @@ fun DeviceSetupScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    var serverUrl by remember { mutableStateOf("https://mydrive-sti3.onrender.com") }
+    var serverUrl by remember { mutableStateOf("https://drive-edge-cache.karan9302451907.workers.dev") }
     var deviceId by remember { mutableStateOf("") }
     var deviceKey by remember { mutableStateOf("") }
 
@@ -745,7 +749,14 @@ fun MainAppScreen(
     var selectedTab by remember { mutableIntStateOf(0) }
     var isFilesSelectionMode by remember { mutableStateOf(false) }
 
-    var serverUrl by remember { mutableStateOf(prefs.getString("server_url", "https://mydrive-sti3.onrender.com") ?: "https://mydrive-sti3.onrender.com") }
+    val initialServerUrl = remember {
+        val raw = prefs.getString("server_url", "https://drive-edge-cache.karan9302451907.workers.dev") ?: "https://drive-edge-cache.karan9302451907.workers.dev"
+        if (raw == "https://mydrive-sti3.onrender.com") {
+            prefs.edit().putString("server_url", "https://drive-edge-cache.karan9302451907.workers.dev").apply()
+            "https://drive-edge-cache.karan9302451907.workers.dev"
+        } else raw
+    }
+    var serverUrl by remember { mutableStateOf(initialServerUrl) }
     var deviceId by remember { mutableStateOf(prefs.getString("device_id", "") ?: "") }
     var deviceKey by remember { mutableStateOf(prefs.getString("device_key", "") ?: "") }
     var targetFolderId by remember { mutableStateOf(prefs.getString("target_folder_id", "") ?: "") }

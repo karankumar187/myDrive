@@ -58,7 +58,7 @@ class SyncWorker(
     }
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
-        val serverUrl = (inputData.getString("server_url") ?: "http://10.0.2.2:5000").trimEnd('/')
+        val serverUrl = (inputData.getString("server_url") ?: "https://drive-edge-cache.karan9302451907.workers.dev").trimEnd('/')
         val deviceId = inputData.getString("device_id") ?: return@withContext Result.failure()
         val deviceKey = inputData.getString("device_key") ?: return@withContext Result.failure()
         val syncVideos = inputData.getBoolean("sync_videos", true)
