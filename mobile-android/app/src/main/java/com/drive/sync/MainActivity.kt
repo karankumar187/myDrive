@@ -830,6 +830,23 @@ fun MainAppScreen(
             var totalUploaded = 0
             var totalSkipped = 0
 
+            // ── Local sync history helpers ────────────────────────────────
+            // Keyed by collection label → file in app internal storage.
+            // Each file holds one asset ID (Long) per line.
+            fun historyFile(label: String): java.io.File =
+                java.io.File(context.filesDir, "synced_${label.lowercase()}.txt")
+
+            fun loadHistory(label: String): MutableSet<Long> {
+                val f = historyFile(label)
+                if (!f.exists()) return mutableSetOf()
+                return f.readLines().mapNotNull { it.trim().toLongOrNull() }.toMutableSet()
+            }
+
+            fun appendHistory(label: String, id: Long) {
+                historyFile(label).appendText("$id\n")
+            }
+            // ─────────────────────────────────────────────────────────────
+
             suspend fun syncMediaCollection(
                 collectionUri: android.net.Uri,
                 label: String,
@@ -865,13 +882,18 @@ fun MainAppScreen(
                     }
                 }
 
+                // Load local history to skip already-synced assets
+                val history = withContext(Dispatchers.IO) { loadHistory(label) }
+                val pending = items.filter { (id, _, _) -> id !in history }
                 val total = items.size
-                status("📂 $label — $total file(s) found")
-                log("Found $total $label file(s)")
+                val alreadyDone = total - pending.size
 
-                items.take(100).forEachIndexed { idx, (id, filename, mimeType) ->
+                status("📂 $label — $total found, ${pending.size} pending, $alreadyDone already backed up")
+                log("Found $total $label — ${pending.size} to upload, $alreadyDone in history")
+
+                pending.forEachIndexed { idx, (id, filename, mimeType) ->
                     val num = idx + 1
-                    status("⬆ Uploading $filename  ($num/$total)\n☁ Drive: $driveLabel")
+                    status("⬆ Uploading $filename  ($num/${pending.size})\n☁ Drive: $driveLabel")
                     withContext(Dispatchers.IO) {
                         try {
                             val contentUri = android.content.ContentUris.withAppendedId(collectionUri, id)
@@ -900,8 +922,10 @@ fun MainAppScreen(
                             }
                             val initResult = org.json.JSONObject(initRes.body?.string() ?: "{}")
                             if (initResult.optBoolean("isDuplicate", false)) {
+                                // Content hash match — already in cloud; record in local history
+                                appendHistory(label, id)
                                 withContext(Dispatchers.Main) {
-                                    log("⏩ $filename — already backed up")
+                                    log("⏩ $filename — already backed up (hash match)")
                                     totalSkipped++
                                 }
                                 return@withContext
@@ -939,6 +963,9 @@ fun MainAppScreen(
                                     .build()
                             ).execute().close()
 
+                            // Record in local history so this asset is never re-uploaded
+                            appendHistory(label, id)
+
                             withContext(Dispatchers.Main) {
                                 log("✓ $filename → $driveLabel")
                                 totalUploaded++
@@ -948,7 +975,7 @@ fun MainAppScreen(
                         }
                     }
                 }
-                log("── $label done: ${items.take(100).size} processed ──")
+                log("── $label done: ${pending.size} processed ──")
             }
 
             try {
@@ -3878,10 +3905,45 @@ fun MediaViewerDialog(
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val streamUrl = "${serverUrl.trimEnd('/')}/api/v1/files/${file.id}/stream?deviceId=$deviceId&deviceKey=$deviceKey"
     val isImage = file.mimeType.startsWith("image/")
     val isVideo = file.mimeType.startsWith("video/")
     val isPdf = file.mimeType.contains("pdf") || file.filename.endsWith(".pdf", ignoreCase = true)
+
+    // For videos: resolve direct Google Drive CDN URL to bypass Render proxy buffering
+    var resolvedVideoUrl by remember { mutableStateOf<String?>(null) }
+    var isResolvingUrl by remember { mutableStateOf(false) }
+
+    LaunchedEffect(file.id) {
+        if (isVideo) {
+            isResolvingUrl = true
+            withContext(Dispatchers.IO) {
+                try {
+                    val base = serverUrl.trimEnd('/')
+                    val req = Request.Builder()
+                        .url("$base/api/v1/files/${file.id}/gdrive-url?deviceId=$deviceId&deviceKey=$deviceKey")
+                        .addHeader("x-device-id", deviceId)
+                        .addHeader("x-device-key", deviceKey)
+                        .build()
+                    val res = sharedHttpClient.newCall(req).execute()
+                    if (res.isSuccessful) {
+                        val json = org.json.JSONObject(res.body?.string() ?: "{}")
+                        val direct = json.optString("directUrl", "")
+                        withContext(Dispatchers.Main) {
+                            resolvedVideoUrl = direct.ifBlank { streamUrl }
+                        }
+                    } else {
+                        withContext(Dispatchers.Main) { resolvedVideoUrl = streamUrl }
+                    }
+                } catch (_: Exception) {
+                    withContext(Dispatchers.Main) { resolvedVideoUrl = streamUrl }
+                } finally {
+                    withContext(Dispatchers.Main) { isResolvingUrl = false }
+                }
+            }
+        }
+    }
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -3972,10 +4034,19 @@ fun MediaViewerDialog(
                             )
                         }
                     } else if (isVideo) {
-                        VideoPlayer(
-                            streamUrl = streamUrl,
-                            filename = file.filename
-                        )
+                        when {
+                            isResolvingUrl -> {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    CircularProgressIndicator(color = Color(0xFFA855F7), modifier = Modifier.size(44.dp))
+                                    Spacer(modifier = Modifier.height(12.dp))
+                                    Text("Connecting to Google Drive…", color = Color(0xFF94A3B8), fontSize = 13.sp)
+                                }
+                            }
+                            resolvedVideoUrl != null -> VideoPlayer(
+                                streamUrl = resolvedVideoUrl!!,
+                                filename = file.filename
+                            )
+                        }
                     } else if (isPdf) {
                         PdfViewer(
                             file = file,

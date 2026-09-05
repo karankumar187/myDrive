@@ -107,6 +107,28 @@ class SyncWorker(
         }
     }
 
+    private fun getHistoryFile(category: String): java.io.File {
+        return java.io.File(applicationContext.filesDir, "synced_${category.lowercase()}.txt")
+    }
+
+    private fun loadHistory(category: String): MutableSet<Long> {
+        val file = getHistoryFile(category)
+        if (!file.exists()) return mutableSetOf()
+        return try {
+            file.readLines().mapNotNull { it.trim().toLongOrNull() }.toMutableSet()
+        } catch (e: Exception) {
+            mutableSetOf()
+        }
+    }
+
+    private fun appendHistory(category: String, id: Long) {
+        try {
+            getHistoryFile(category).appendText("$id\n")
+        } catch (e: Exception) {
+            Log.w("SyncWorker", "Failed to append history for $id: ${e.message}")
+        }
+    }
+
     private fun syncCollection(
         collectionUri: Uri,
         serverUrl: String,
@@ -118,6 +140,13 @@ class SyncWorker(
         selection: String? = null,
         selectionArgs: Array<String>? = null
     ): Int {
+        val category = when (namePrefix) {
+            "photo" -> "photos"
+            "video" -> "videos"
+            else -> "documents"
+        }
+        val history = loadHistory(category)
+
         val projection = arrayOf(
             MediaStore.MediaColumns._ID,
             MediaStore.MediaColumns.DISPLAY_NAME,
@@ -142,8 +171,12 @@ class SyncWorker(
             val mimeColumn = it.getColumnIndexOrThrow(MediaStore.MediaColumns.MIME_TYPE)
             val sizeColumn = it.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE)
 
-            while (it.moveToNext() && processedCount < 100) {
+            while (it.moveToNext()) {
                 val id = it.getLong(idColumn)
+                if (id in history) {
+                    continue
+                }
+
                 val filename = it.getString(nameColumn) ?: "${namePrefix}_$id"
                 val mimeType = it.getString(mimeColumn) ?: defaultMime
                 val sizeBytes = it.getLong(sizeColumn)
@@ -188,6 +221,8 @@ class SyncWorker(
 
                 if (isDuplicate) {
                     Log.d("SyncWorker", "Exact duplicate detected for $filename. Upload skipped!")
+                    appendHistory(category, id)
+                    history.add(id)
                     processedCount++
                     continue
                 }
@@ -245,6 +280,8 @@ class SyncWorker(
 
                 client.newCall(completeRequest).execute().close()
                 Log.d("SyncWorker", "Successfully backed up $filename to pooled storage (ID: $providerFileId)")
+                appendHistory(category, id)
+                history.add(id)
                 processedCount++
             }
         }

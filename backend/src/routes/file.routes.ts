@@ -13,6 +13,7 @@ router.get('/', requireAnyAuth, FileController.listFiles);
 router.get('/gallery', requireAnyAuth, FileController.getGallery);
 router.get('/:id/stream', requireAnyAuth, FileController.streamFile);
 router.get('/:id/thumbnail', requireAnyAuth, FileController.streamThumbnail);
+router.get('/:id/gdrive-url', requireAnyAuth, FileController.getDirectStreamUrl);
 
 // File management & Gallery interactions
 router.patch('/:id/favorite', requireAnyAuth, FileController.toggleFavorite);

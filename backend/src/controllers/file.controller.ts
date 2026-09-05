@@ -285,6 +285,80 @@ export class FileController {
   }
 
   /**
+   * Returns a short-lived direct Google Drive stream URL for the file.
+   * Android video player uses this URL to bypass the Render proxy server,
+   * streaming directly from Google's CDN for far lower buffering.
+   */
+  static async getDirectStreamUrl(req: Request, res: Response): Promise<void> {
+    try {
+      const userId = req.user!._id;
+      const file = await File.findOne({ _id: req.params.id, userId });
+      if (!file) {
+        res.status(404).json({ error: 'File not found or access denied' });
+        return;
+      }
+
+      const latestVersion = file.versions[file.versions.length - 1];
+      if (!latestVersion) {
+        res.status(404).json({ error: 'No file versions available' });
+        return;
+      }
+
+      const account = await StorageAccount.findOne({
+        _id: latestVersion.storageAccountId,
+        userId,
+      });
+      if (!account) {
+        res.status(404).json({ error: 'Storage account not found' });
+        return;
+      }
+
+      const oauth2Client = GoogleDriveService.getOAuth2Client(account);
+      const tokenResponse = await oauth2Client.getAccessToken();
+      const accessToken = tokenResponse.token;
+      if (!accessToken) {
+        res.status(503).json({ error: 'Could not obtain access token' });
+        return;
+      }
+
+      // Resolve the real Google Drive file ID if stored as an opaque name
+      let driveFileId = latestVersion.providerFileId;
+      if (
+        driveFileId.startsWith('blob_') ||
+        driveFileId.startsWith('file_') ||
+        driveFileId.includes('.enc')
+      ) {
+        const drive = google.drive({ version: 'v3', auth: oauth2Client });
+        const lastUnderscore = driveFileId.lastIndexOf('_');
+        const baseName =
+          lastUnderscore !== -1 ? driveFileId.substring(lastUnderscore + 1) : driveFileId;
+        const q = baseName.includes('.')
+          ? `name contains '${baseName}' and trashed = false`
+          : `name = '${driveFileId}' and trashed = false`;
+        const listRes = await drive.files.list({ q, fields: 'files(id)', pageSize: 1 });
+        if (listRes.data.files?.[0]?.id) {
+          driveFileId = listRes.data.files[0].id;
+        }
+      }
+
+      // Direct Google Drive API download URL with embedded access token.
+      // This URL is valid for ~1 hour (access token lifetime) and served
+      // from Google's CDN — no Render proxy, no buffering.
+      const directUrl = `https://www.googleapis.com/drive/v3/files/${driveFileId}?alt=media&access_token=${accessToken}`;
+
+      res.json({
+        directUrl,
+        mimeType: file.mimeType,
+        filename: file.filename,
+        sizeBytes: latestVersion.sizeBytes,
+        expiresInSeconds: 3500, // conservative; tokens last ~3600s
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+
+  /**
    * Streams a file from Google Drive for client download or browser decryption.
    */
   static async streamFile(req: Request, res: Response): Promise<void> {
