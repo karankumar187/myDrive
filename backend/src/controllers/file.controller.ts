@@ -170,7 +170,14 @@ export class FileController {
         filter.filename = { $regex: search, $options: 'i' };
       }
 
-      const files = await File.find(filter).sort({ createdAt: -1 }).limit(200);
+      let fileQuery = File.find(filter).sort({ createdAt: -1 });
+      if (req.query.limit) {
+        const parsedLimit = parseInt(req.query.limit as string, 10);
+        if (!isNaN(parsedLimit) && parsedLimit > 0) {
+          fileQuery = fileQuery.limit(parsedLimit);
+        }
+      }
+      const files = await fileQuery;
 
       let recentFiles: any[] = [];
       if ((!folderId || folderId === 'root') && !search && !isTrash) {
@@ -226,11 +233,19 @@ export class FileController {
         return;
       }
 
+      let galleryQuery = File.find(mediaFilter).sort({
+        'metadata.takenAt': -1,
+        createdAt: -1,
+      });
+      if (req.query.limit) {
+        const parsedLimit = parseInt(req.query.limit as string, 10);
+        if (!isNaN(parsedLimit) && parsedLimit > 0) {
+          galleryQuery = galleryQuery.limit(parsedLimit);
+        }
+      }
+
       const [mediaFiles, devices, folders, storageAccounts] = await Promise.all([
-        File.find(mediaFilter).sort({
-          'metadata.takenAt': -1,
-          createdAt: -1,
-        }).limit(500),
+        galleryQuery,
         Device.find({ userId }).select('deviceId deviceName deviceType status'),
         Folder.find({ userId }).select('_id name'),
         StorageAccount.find({ userId }).select('_id accountName accountEmail'),
@@ -969,14 +984,22 @@ export class FileController {
       const states = await DeviceFileState.find({ userId, deviceId });
       const stateFileIds = states.map((s) => s.fileId);
 
-      const files = await File.find({
+      let deviceFilesQuery = File.find({
         userId,
         isTrash: false,
         $or: [{ sourceDeviceIds: deviceId }, { _id: { $in: stateFileIds } }],
       })
         .populate('folderId', 'name path')
-        .sort({ createdAt: -1 })
-        .limit(250);
+        .sort({ createdAt: -1 });
+
+      if (req.query.limit) {
+        const parsedLimit = parseInt(req.query.limit as string, 10);
+        if (!isNaN(parsedLimit) && parsedLimit > 0) {
+          deviceFilesQuery = deviceFilesQuery.limit(parsedLimit);
+        }
+      }
+
+      const files = await deviceFilesQuery;
 
       res.json({ success: true, count: files.length, files });
     } catch (error: any) {
@@ -1002,13 +1025,21 @@ export class FileController {
       const pairedRules = policy?.pairedDeviceRules || [];
 
       // Find all files belonging to the user that were uploaded by other devices or in cloud
-      const candidateFiles = await File.find({
+      let candidateQuery = File.find({
         userId,
         isTrash: false,
       })
         .populate('folderId', 'name path')
-        .sort({ createdAt: -1 })
-        .limit(200);
+        .sort({ createdAt: -1 });
+
+      if (req.query.limit) {
+        const parsedLimit = parseInt(req.query.limit as string, 10);
+        if (!isNaN(parsedLimit) && parsedLimit > 0) {
+          candidateQuery = candidateQuery.limit(parsedLimit);
+        }
+      }
+
+      const candidateFiles = await candidateQuery;
 
       // Fetch DeviceFileState records for this device to determine local sync and force-download status
       const localStates = await DeviceFileState.find({ userId, deviceId });
