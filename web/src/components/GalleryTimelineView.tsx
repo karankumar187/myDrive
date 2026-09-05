@@ -25,6 +25,7 @@ import {
   ZoomIn,
   ZoomOut,
   RotateCcw,
+  RotateCw,
   Cloud,
   ChevronDown,
   Check,
@@ -946,11 +947,11 @@ const GalleryGridTile: React.FC<{
   const [loadError, setLoadError] = useState(false);
 
   const hasRealThumb = item.metadata?.thumbnail && (
-    item.metadata.thumbnail.startsWith('data:image/') ||
+    (item.metadata.thumbnail.startsWith('data:image/') && item.metadata.thumbnail.length > 10000) ||
     item.metadata.thumbnail.startsWith('http')
   );
 
-  // If local base64 thumbnail exists, use it. Otherwise, use cached blob or fast /thumbnail endpoint.
+  // If authoritative thumbnail exists in metadata, use it first!
   const initialThumb = (hasRealThumb && item.metadata?.thumbnail)
     ? item.metadata.thumbnail
     : (mediaCache.getThumbnail(item._id) || mediaCache.get(item._id) || api.getThumbnailUrl(item._id));
@@ -960,15 +961,19 @@ const GalleryGridTile: React.FC<{
 
   useEffect(() => {
     setLoadError(false);
-    const cached = mediaCache.getThumbnail(item._id) || mediaCache.get(item._id);
-    if (cached) {
-      setThumbUrl(cached);
+
+    // 1. Authoritative server metadata thumbnail
+    if (hasRealThumb && item.metadata?.thumbnail) {
+      setThumbUrl(item.metadata.thumbnail);
+      mediaCache.saveThumbnail(item._id, item.metadata.thumbnail);
       setLoading(false);
       return;
     }
 
-    if (hasRealThumb && item.metadata?.thumbnail) {
-      setThumbUrl(item.metadata.thumbnail);
+    // 2. Client cache (localStorage or in-memory)
+    const cached = mediaCache.getThumbnail(item._id) || mediaCache.get(item._id);
+    if (cached) {
+      setThumbUrl(cached);
       setLoading(false);
       return;
     }
@@ -1135,6 +1140,7 @@ const FullScreenViewer: React.FC<{
   const [showControls, setShowControls] = useState(true);
   const [isOptionsOpen, setIsOptionsOpen] = useState(false);
   const [scale, setScale] = useState(1);
+  const [rotation, setRotation] = useState(0);
 
   // Decrypted or stream URL
   const [fullUrl, setFullUrl] = useState<string | null>(null);
@@ -1169,11 +1175,13 @@ const FullScreenViewer: React.FC<{
 
   const handlePrev = () => {
     setScale(1);
+    setRotation(0);
     if (currentIndex > 0) onIndexChange(currentIndex - 1);
   };
 
   const handleNext = () => {
     setScale(1);
+    setRotation(0);
     if (currentIndex < mediaList.length - 1) onIndexChange(currentIndex + 1);
   };
 
@@ -1208,6 +1216,7 @@ const FullScreenViewer: React.FC<{
   useEffect(() => {
     let active = true;
     setScale(1);
+    setRotation(0);
     setLoading(true);
     setIsImageLoaded(false);
     setVideoError(false);
@@ -1366,11 +1375,21 @@ const FullScreenViewer: React.FC<{
               >
                 <ZoomIn className="w-5 h-5" />
               </button>
-              {scale !== 1 && (
+              <button
+                onClick={() => setRotation((r) => (r + 90) % 360)}
+                className="p-2 rounded-full hover:bg-white/10 transition text-white hover:text-purple-400"
+                title="Rotate 90°"
+              >
+                <RotateCw className="w-5 h-5" />
+              </button>
+              {(scale !== 1 || rotation !== 0) && (
                 <button
-                  onClick={() => setScale(1)}
+                  onClick={() => {
+                    setScale(1);
+                    setRotation(0);
+                  }}
                   className="p-2 rounded-full hover:bg-white/10 transition text-purple-400"
-                  title="Reset Zoom"
+                  title="Reset Zoom & Rotation"
                 >
                   <RotateCcw className="w-4 h-4" />
                 </button>
@@ -1561,7 +1580,7 @@ const FullScreenViewer: React.FC<{
                 e.stopPropagation();
                 setScale((s) => (s === 1 ? 2 : 1));
               }}
-              style={{ transform: `scale(${scale})`, transition: 'transform 0.2s ease-out, opacity 0.25s ease-in' }}
+              style={{ transform: `scale(${scale}) rotate(${rotation}deg)`, transition: 'transform 0.2s ease-out, opacity 0.25s ease-in' }}
               className={`max-h-[82vh] max-w-full object-contain rounded-xl shadow-2xl cursor-zoom-in ${
                 isImageLoaded ? 'opacity-100' : 'opacity-0 absolute'
               }`}

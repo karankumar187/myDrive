@@ -52,6 +52,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -4550,6 +4551,7 @@ fun MediaViewerDialog(
     // Direct video streaming via streamUrl for instant playback
     val resolvedVideoUrl = streamUrl
     var isMediaLoading by remember { mutableStateOf(isImage) }
+    var rotation by remember { mutableFloatStateOf(0f) }
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -4596,12 +4598,20 @@ fun MediaViewerDialog(
                         )
                     }
 
-                    IconButton(
-                        onClick = {
-                            downloadFileToDevice(context, streamUrl, file.filename, deviceId, deviceKey)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (isImage) {
+                            IconButton(onClick = { rotation = (rotation + 90f) % 360f }) {
+                                Icon(Icons.Default.RotateRight, contentDescription = "Rotate", tint = Color.White)
+                            }
                         }
-                    ) {
-                        Icon(Icons.Default.Download, contentDescription = "Download", tint = Color(0xFFA855F7))
+
+                        IconButton(
+                            onClick = {
+                                downloadFileToDevice(context, streamUrl, file.filename, deviceId, deviceKey)
+                            }
+                        ) {
+                            Icon(Icons.Default.Download, contentDescription = "Download", tint = Color(0xFFA855F7))
+                        }
                     }
                 }
 
@@ -4640,7 +4650,8 @@ fun MediaViewerDialog(
                             contentDescription = file.filename,
                             modifier = Modifier
                                 .fillMaxSize()
-                                .padding(12.dp),
+                                .padding(12.dp)
+                                .graphicsLayer(rotationZ = rotation),
                             contentScale = ContentScale.Fit
                         )
 

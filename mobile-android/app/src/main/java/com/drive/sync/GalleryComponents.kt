@@ -1561,6 +1561,7 @@ fun FullScreenPhotoViewer(
     var showControls by remember { mutableStateOf(true) }
     var scale by remember { mutableFloatStateOf(1f) }
     var offset by remember { mutableStateOf(Offset.Zero) }
+    var rotation by remember(currentItem.id) { mutableFloatStateOf(0f) }
     var isMoreMenuOpen by remember { mutableStateOf(false) }
     var isViewerMediaLoading by remember { mutableStateOf(true) }
     // Persist last successfully loaded image URL — shown blurred while next image loads (no spinner/blank screen)
@@ -1785,7 +1786,9 @@ fun FullScreenPhotoViewer(
                                         .crossfade(false)
                                         .build(),
                                     contentDescription = null,
-                                    modifier = Modifier.fillMaxSize(),
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .graphicsLayer(rotationZ = rotation),
                                     contentScale = ContentScale.Fit
                                 )
                             }
@@ -1812,6 +1815,7 @@ fun FullScreenPhotoViewer(
                                     .graphicsLayer(
                                         scaleX = scale,
                                         scaleY = scale,
+                                        rotationZ = rotation,
                                         translationX = offset.x,
                                         translationY = offset.y
                                     ),
@@ -1882,74 +1886,82 @@ fun FullScreenPhotoViewer(
                         }
                     }
 
-                    Box {
-                        IconButton(onClick = { isMoreMenuOpen = true }) {
-                            Icon(Icons.Default.MoreVert, contentDescription = "Options", tint = Color.White)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (!isVideo) {
+                            IconButton(onClick = { rotation = (rotation + 90f) % 360f }) {
+                                Icon(Icons.Default.RotateRight, contentDescription = "Rotate", tint = Color.White)
+                            }
                         }
 
-                        DropdownMenu(
-                            expanded = isMoreMenuOpen,
-                            onDismissRequest = { isMoreMenuOpen = false },
-                            modifier = Modifier.background(Color(0xFF1B1B26))
-                        ) {
-                            DropdownMenuItem(
-                                text = { Text("Details", color = Color.White) },
-                                leadingIcon = { Icon(Icons.Default.Info, contentDescription = null, tint = Color(0xFFA855F7)) },
-                                onClick = {
-                                    isMoreMenuOpen = false
-                                    onOpenDetails()
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Rename", color = Color.White) },
-                                leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null, tint = Color(0xFF38BDF8)) },
-                                onClick = {
-                                    isMoreMenuOpen = false
-                                    onOpenRename()
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Move to Folder", color = Color.White) },
-                                leadingIcon = { Icon(Icons.Default.DriveFileMove, contentDescription = null, tint = Color(0xFF34D399)) },
-                                onClick = {
-                                    isMoreMenuOpen = false
-                                    onOpenMove()
-                                }
-                            )
-                            if (isVideo) {
+                        Box {
+                            IconButton(onClick = { isMoreMenuOpen = true }) {
+                                Icon(Icons.Default.MoreVert, contentDescription = "Options", tint = Color.White)
+                            }
+
+                            DropdownMenu(
+                                expanded = isMoreMenuOpen,
+                                onDismissRequest = { isMoreMenuOpen = false },
+                                modifier = Modifier.background(Color(0xFF1B1B26))
+                            ) {
                                 DropdownMenuItem(
-                                    text = { Text("Open in External Player", color = Color.White) },
-                                    leadingIcon = { Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null, tint = Color(0xFFA855F7)) },
+                                    text = { Text("Details", color = Color.White) },
+                                    leadingIcon = { Icon(Icons.Default.Info, contentDescription = null, tint = Color(0xFFA855F7)) },
                                     onClick = {
                                         isMoreMenuOpen = false
-                                        try {
-                                            val intent = Intent(Intent.ACTION_VIEW).apply {
-                                                setDataAndType(Uri.parse(streamUrl), "video/*")
-                                                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION
+                                        onOpenDetails()
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Rename", color = Color.White) },
+                                    leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null, tint = Color(0xFF38BDF8)) },
+                                    onClick = {
+                                        isMoreMenuOpen = false
+                                        onOpenRename()
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Move to Folder", color = Color.White) },
+                                    leadingIcon = { Icon(Icons.Default.DriveFileMove, contentDescription = null, tint = Color(0xFF34D399)) },
+                                    onClick = {
+                                        isMoreMenuOpen = false
+                                        onOpenMove()
+                                    }
+                                )
+                                if (isVideo) {
+                                    DropdownMenuItem(
+                                        text = { Text("Open in External Player", color = Color.White) },
+                                        leadingIcon = { Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null, tint = Color(0xFFA855F7)) },
+                                        onClick = {
+                                            isMoreMenuOpen = false
+                                            try {
+                                                val intent = Intent(Intent.ACTION_VIEW).apply {
+                                                    setDataAndType(Uri.parse(streamUrl), "video/*")
+                                                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION
+                                                }
+                                                context.startActivity(intent)
+                                            } catch (e: Exception) {
+                                                Toast.makeText(context, "No video player available", Toast.LENGTH_SHORT).show()
                                             }
-                                            context.startActivity(intent)
-                                        } catch (e: Exception) {
-                                            Toast.makeText(context, "No video player available", Toast.LENGTH_SHORT).show()
                                         }
+                                    )
+                                }
+                                DropdownMenuItem(
+                                    text = { Text("Share", color = Color.White) },
+                                    leadingIcon = { Icon(Icons.Default.Share, contentDescription = null, tint = Color.LightGray) },
+                                    onClick = {
+                                        isMoreMenuOpen = false
+                                        shareMedia(context, currentItem, serverUrl, deviceId, deviceKey)
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Delete", color = Color(0xFFEF4444)) },
+                                    leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = Color(0xFFEF4444)) },
+                                    onClick = {
+                                        isMoreMenuOpen = false
+                                        onDelete()
                                     }
                                 )
                             }
-                            DropdownMenuItem(
-                                text = { Text("Share", color = Color.White) },
-                                leadingIcon = { Icon(Icons.Default.Share, contentDescription = null, tint = Color.LightGray) },
-                                onClick = {
-                                    isMoreMenuOpen = false
-                                    shareMedia(context, currentItem, serverUrl, deviceId, deviceKey)
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Delete", color = Color(0xFFEF4444)) },
-                                leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = Color(0xFFEF4444)) },
-                                onClick = {
-                                    isMoreMenuOpen = false
-                                    onDelete()
-                                }
-                            )
                         }
                     }
                 }

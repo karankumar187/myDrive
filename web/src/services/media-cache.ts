@@ -44,6 +44,13 @@ class MediaBlobCache {
     try {
       const stored = localStorage.getItem(`drive_thumb_${fileId}`);
       if (stored) {
+        // Discard and clean up solid black frames or corrupted captures (< 12000 chars)
+        if (stored.length < 12000) {
+          try {
+            localStorage.removeItem(`drive_thumb_${fileId}`);
+          } catch {}
+          return null;
+        }
         if (stored.startsWith('data:image')) {
           try {
             const arr = stored.split(',');
@@ -73,6 +80,7 @@ class MediaBlobCache {
   }
 
   saveThumbnail(fileId: string, dataUrl: string): void {
+    if (!dataUrl || dataUrl.length < 12000) return;
     try {
       if (dataUrl.startsWith('data:image')) {
         const arr = dataUrl.split(',');
@@ -243,7 +251,20 @@ export async function generateThumbnailFromVideoFile(file: File): Promise<string
             const ctx = canvas.getContext('2d');
             if (ctx) {
               ctx.drawImage(video, 0, 0, w, h);
+              // Reject solid black frames captured before video rendering
+              try {
+                const imgData = ctx.getImageData(0, 0, Math.min(w, 30), Math.min(h, 30)).data;
+                let hasColor = false;
+                for (let i = 0; i < imgData.length; i += 4) {
+                  if (imgData[i] > 15 || imgData[i + 1] > 15 || imgData[i + 2] > 15) {
+                    hasColor = true;
+                    break;
+                  }
+                }
+                if (!hasColor) return false;
+              } catch {}
               const thumbData = canvas.toDataURL('image/jpeg', 0.8);
+              if (thumbData.length < 12000) return false;
               cleanup();
               resolve(thumbData);
               return true;
@@ -344,7 +365,20 @@ export async function extractVideoThumbnailFromUrl(streamUrl: string): Promise<s
           const ctx = canvas.getContext('2d');
           if (ctx) {
             ctx.drawImage(video, 0, 0, w, h);
+            // Reject solid black frames captured before video decoding completes
+            try {
+              const imgData = ctx.getImageData(0, 0, Math.min(w, 30), Math.min(h, 30)).data;
+              let hasColor = false;
+              for (let i = 0; i < imgData.length; i += 4) {
+                if (imgData[i] > 15 || imgData[i + 1] > 15 || imgData[i + 2] > 15) {
+                  hasColor = true;
+                  break;
+                }
+              }
+              if (!hasColor) return false;
+            } catch {}
             const thumb = canvas.toDataURL('image/jpeg', 0.8);
+            if (thumb.length < 12000) return false;
             cleanup();
             resolve(thumb);
             return true;

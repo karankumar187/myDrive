@@ -33,6 +33,7 @@ import {
   CheckCircle2,
   XCircle,
   ExternalLink,
+  RotateCw,
 } from 'lucide-react';
 import { api, startGlobalLoading, subscribeToProgress, GlobalProgressState } from '../services/api.js';
 import { uploadService, UploadTask } from '../services/UploadService.js';
@@ -99,6 +100,7 @@ export const FolderExplorerView: React.FC<Props> = ({
   // File Preview state
   const [previewFile, setPreviewFile] = useState<FileItem | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewRotation, setPreviewRotation] = useState(0);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
 
@@ -310,6 +312,7 @@ export const FolderExplorerView: React.FC<Props> = ({
 
     setPreviewFile(file);
     setPreviewError(null);
+    setPreviewRotation(0);
 
     const cachedUrl = mediaCache.get(file._id);
     if (cachedUrl) {
@@ -363,6 +366,7 @@ export const FolderExplorerView: React.FC<Props> = ({
     setPreviewFile(null);
     setPreviewUrl(null);
     setPreviewError(null);
+    setPreviewRotation(0);
   }, []);
 
   useEffect(() => {
@@ -986,6 +990,18 @@ export const FolderExplorerView: React.FC<Props> = ({
             <span className="text-sm font-semibold text-white truncate">{previewFile.filename}</span>
             <span className="text-xs text-zinc-400">{formatBytes(previewFile.sizeBytes)}</span>
           </div>
+          {previewFile.mimeType.startsWith('image/') && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setPreviewRotation((r) => (r + 90) % 360);
+              }}
+              className="absolute top-4 right-28 z-50 w-10 h-10 rounded-full bg-zinc-800/80 hover:bg-purple-700 flex items-center justify-center text-white transition"
+              title="Rotate 90°"
+            >
+              <RotateCw className="w-5 h-5" />
+            </button>
+          )}
           <a href={getStreamUrl(previewFile._id)} download={previewFile.filename} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} className="absolute top-4 right-16 z-50 w-10 h-10 rounded-full bg-zinc-800/80 hover:bg-purple-700 flex items-center justify-center text-white transition" title="Download">
             <Download className="w-5 h-5" />
           </a>
@@ -1009,7 +1025,13 @@ export const FolderExplorerView: React.FC<Props> = ({
               </div>
             ) : previewUrl ? (
               previewFile.mimeType.startsWith('image/') ? (
-                <img src={previewUrl} alt={previewFile.filename} className="max-w-[90vw] max-h-[85vh] object-contain rounded-lg shadow-2xl" onError={() => setPreviewError('Unable to display image. The file may be corrupt or encrypted without a valid key.')} />
+                <img
+                  src={previewUrl}
+                  alt={previewFile.filename}
+                  style={{ transform: `rotate(${previewRotation}deg)`, transition: 'transform 0.2s ease-out' }}
+                  className="max-w-[90vw] max-h-[85vh] object-contain rounded-lg shadow-2xl"
+                  onError={() => setPreviewError('Unable to display image. The file may be corrupt or encrypted without a valid key.')}
+                />
               ) : previewFile.mimeType.startsWith('video/') ? (
                 <video src={previewUrl} controls autoPlay className="max-w-[90vw] max-h-[85vh] rounded-lg shadow-2xl" onError={() => setPreviewError('Unable to play video format in this browser.')}>
                   Your browser does not support the video tag.
