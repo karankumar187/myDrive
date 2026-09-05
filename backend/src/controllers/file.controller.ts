@@ -49,6 +49,15 @@ export function getEffectiveMimeType(filename: string, mimeType?: string): strin
   }
 }
 
+// In-memory LRU thumbnail cache (serves hot thumbnails in 0-1ms without hitting MongoDB or Google Drive)
+interface CachedThumbnail {
+  buffer: Buffer;
+  contentType: string;
+  etag: string;
+}
+const memoryThumbnailCache = new Map<string, CachedThumbnail>();
+const MAX_MEMORY_THUMBNAILS = 400;
+
 export class FileController {
   /**
    * Step 1 of Upload: Checks for duplicates and requests a direct Google Drive Resumable Upload Session URL.
@@ -214,20 +223,34 @@ export class FileController {
         filter.filename = { $regex: search, $options: 'i' };
       }
 
-      let fileQuery = File.find(filter).sort({ createdAt: -1 });
+      let fileQuery = File.find(filter).sort({ createdAt: -1 }).lean();
       if (req.query.limit) {
         const parsedLimit = parseInt(req.query.limit as string, 10);
         if (!isNaN(parsedLimit) && parsedLimit > 0) {
           fileQuery = fileQuery.limit(parsedLimit);
         }
       }
-      const files = await fileQuery;
+      const rawFiles: any[] = await fileQuery;
+
+      const cleanFile = (f: any) => {
+        const obj = { ...f };
+        obj.hasThumbnail = !!(obj.metadata?.thumbnail && obj.metadata.thumbnail.length > 0);
+        obj.thumbnailUrl = `/api/v1/files/${obj._id}/thumbnail`;
+        if (obj.metadata?.thumbnail) {
+          delete obj.metadata.thumbnail;
+        }
+        return obj;
+      };
+
+      const files = rawFiles.map(cleanFile);
 
       let recentFiles: any[] = [];
       if ((!folderId || folderId === 'root') && !search && !isTrash) {
-        recentFiles = await File.find({ userId, isTrash: false })
+        const rawRecent: any[] = await File.find({ userId, isTrash: false })
           .sort({ createdAt: -1 })
-          .limit(20);
+          .limit(20)
+          .lean();
+        recentFiles = rawRecent.map(cleanFile);
       }
 
       const responsePayload = { files, recentFiles };
@@ -298,7 +321,7 @@ export class FileController {
       let galleryQuery = File.find(mediaFilter).sort({
         'metadata.takenAt': -1,
         createdAt: -1,
-      });
+      }).lean();
       if (req.query.limit) {
         const parsedLimit = parseInt(req.query.limit as string, 10);
         if (!isNaN(parsedLimit) && parsedLimit > 0) {
@@ -308,9 +331,9 @@ export class FileController {
 
       const [mediaFiles, devices, folders, storageAccounts] = await Promise.all([
         galleryQuery,
-        Device.find({ userId }).select('deviceId deviceName deviceType status'),
-        Folder.find({ userId }).select('_id name'),
-        StorageAccount.find({ userId }).select('_id accountName accountEmail'),
+        Device.find({ userId }).select('deviceId deviceName deviceType status').lean(),
+        Folder.find({ userId }).select('_id name').lean(),
+        StorageAccount.find({ userId }).select('_id accountName accountEmail').lean(),
       ]);
 
       const deviceMap = new Map<string, string>();
@@ -323,11 +346,11 @@ export class FileController {
       storageAccounts.forEach((a) => accountMap.set(a._id.toString(), `${a.accountName} (${a.accountEmail})`));
 
       // Filter out redundant duplicates so the gallery is 100% unique
-      const uniqueMediaFiles: typeof mediaFiles = [];
+      const uniqueMediaFiles: any[] = [];
       const seenHashes = new Set<string>();
       const seenNameSizes = new Set<string>();
 
-      for (const file of mediaFiles) {
+      for (const file of mediaFiles as any[]) {
         const cleanHash = file.contentHash?.trim().toLowerCase();
         const nameSizeKey = `${file.filename?.trim()}_${file.sizeBytes}`;
 
@@ -339,8 +362,8 @@ export class FileController {
         uniqueMediaFiles.push(file);
       }
 
-      const enrichedMedia = uniqueMediaFiles.map((file) => {
-        const obj: any = file.toObject();
+      const enrichedMedia = uniqueMediaFiles.map((file: any) => {
+        const obj: any = { ...file };
         obj.mimeType = getEffectiveMimeType(file.filename, file.mimeType);
         obj.isFavorite = file.isFavorite || false;
         obj.sourceDeviceId = file.sourceDeviceIds?.length ? file.sourceDeviceIds[0] : 'web';
@@ -355,8 +378,13 @@ export class FileController {
           ? accountMap.get(latestStorageId)
           : 'Google Drive Account';
         obj.status = 'safely_backed_up';
-        // Strip short-lived Google CDN links from metadata.thumbnail so client always routes through /thumbnail
-        if (obj.metadata?.thumbnail && obj.metadata.thumbnail.startsWith('http')) {
+        
+        // Strip heavy base64 strings and short-lived HTTP links from list JSON.
+        // Provide lightweight flag and thumbnail URL so clients fetch via cached /thumbnail endpoint.
+        const hasThumb = !!(obj.metadata?.thumbnail && obj.metadata.thumbnail.length > 0);
+        obj.hasThumbnail = hasThumb;
+        obj.thumbnailUrl = `/api/v1/files/${file._id}/thumbnail`;
+        if (obj.metadata?.thumbnail) {
           delete obj.metadata.thumbnail;
         }
         return obj;
@@ -536,11 +564,49 @@ export class FileController {
   static async streamThumbnail(req: Request, res: Response): Promise<void> {
     try {
       const userId = req.user!._id;
-      const file = await File.findOne({ _id: req.params.id, userId });
+      const fileId = req.params.id;
+
+      // Fast path: In-memory thumbnail cache check (0ms response without DB or Drive lookup)
+      const cached = memoryThumbnailCache.get(fileId);
+      if (cached) {
+        res.setHeader('ETag', cached.etag);
+        res.setHeader('Cache-Control', 'public, max-age=604800, stale-while-revalidate=86400');
+        if (req.headers['if-none-match'] === cached.etag) {
+          res.status(304).end();
+          return;
+        }
+        res.setHeader('Content-Type', cached.contentType);
+        res.send(cached.buffer);
+        return;
+      }
+
+      const file: any = await File.findOne({ _id: fileId, userId })
+        .select('metadata mimeType filename updatedAt versions')
+        .lean();
+
       if (!file) {
         res.status(404).json({ error: 'File not found or access denied' });
         return;
       }
+
+      const etag = `"${file._id.toString()}_${new Date(file.updatedAt || 0).getTime()}"`;
+      res.setHeader('ETag', etag);
+      res.setHeader('Cache-Control', 'public, max-age=604800, stale-while-revalidate=86400');
+
+      if (req.headers['if-none-match'] === etag) {
+        res.status(304).end();
+        return;
+      }
+
+      const saveAndSend = (buffer: Buffer, contentType: string) => {
+        if (memoryThumbnailCache.size >= MAX_MEMORY_THUMBNAILS) {
+          const oldestKey = memoryThumbnailCache.keys().next().value;
+          if (oldestKey) memoryThumbnailCache.delete(oldestKey);
+        }
+        memoryThumbnailCache.set(fileId, { buffer, contentType, etag });
+        res.setHeader('Content-Type', contentType);
+        res.send(buffer);
+      };
 
       // If previously stored as application/octet-stream, auto-correct based on filename extension
       if (file.mimeType === 'application/octet-stream') {
@@ -556,19 +622,15 @@ export class FileController {
         if (file.metadata.thumbnail.startsWith('data:image/')) {
           const matches = file.metadata.thumbnail.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
           if (matches && matches.length === 3) {
-            res.setHeader('Content-Type', matches[1]);
-            res.setHeader('Cache-Control', 'public, max-age=86400');
-            res.send(Buffer.from(matches[2], 'base64'));
+            saveAndSend(Buffer.from(matches[2], 'base64'), matches[1]);
             return;
           }
         } else if (file.metadata.thumbnail.startsWith('http')) {
           try {
             const thumbRes = await fetch(file.metadata.thumbnail);
             if (thumbRes.ok) {
-              res.setHeader('Content-Type', thumbRes.headers.get('content-type') || 'image/jpeg');
-              res.setHeader('Cache-Control', 'public, max-age=86400');
               const buffer = Buffer.from(await thumbRes.arrayBuffer());
-              res.send(buffer);
+              saveAndSend(buffer, thumbRes.headers.get('content-type') || 'image/jpeg');
               return;
             }
           } catch (_e) {
@@ -577,7 +639,7 @@ export class FileController {
         }
       }
 
-      const latestVersion = file.versions[file.versions.length - 1];
+      const latestVersion = file.versions?.[file.versions.length - 1];
       if (!latestVersion) {
         res.status(404).json({ error: 'No file versions available' });
         return;
@@ -607,8 +669,6 @@ export class FileController {
         });
 
         if (meta.data.thumbnailLink) {
-          // Google thumbnailLink is usually on lh3.googleusercontent.com
-          // First attempt fetch without Bearer header (many Google CDN links reject Bearer with 401/403)
           let thumbRes = await fetch(meta.data.thumbnailLink);
           if (!thumbRes.ok) {
             const tokenRes = await oauth2Client.getAccessToken();
@@ -620,10 +680,8 @@ export class FileController {
           }
           if (thumbRes.ok) {
             File.updateOne({ _id: file._id }, { $set: { 'metadata.thumbnail': meta.data.thumbnailLink } }).exec();
-            res.setHeader('Content-Type', thumbRes.headers.get('content-type') || 'image/jpeg');
-            res.setHeader('Cache-Control', 'public, max-age=604800, immutable');
             const buffer = Buffer.from(await thumbRes.arrayBuffer());
-            res.send(buffer);
+            saveAndSend(buffer, thumbRes.headers.get('content-type') || 'image/jpeg');
             return;
           }
         }
@@ -645,14 +703,12 @@ export class FileController {
   <polygon points="152,143 176,160 152,177" fill="#FFFFFF"/>
 </svg>`;
         res.setHeader('Content-Type', 'image/svg+xml');
-        res.setHeader('Cache-Control', 'public, max-age=86400');
         res.send(svg);
         return;
       }
 
       // Fallback: stream file with client-side cache headers
       res.setHeader('Content-Type', file.mimeType);
-      res.setHeader('Cache-Control', 'public, max-age=86400');
       const driveStream = await GoogleDriveService.getFileStream(account, latestVersion.providerFileId);
       driveStream.data.pipe(res);
     } catch (error: any) {
@@ -689,6 +745,7 @@ export class FileController {
       }
 
       await File.updateOne({ _id: fileId }, { $set: updateFields });
+      memoryThumbnailCache.delete(fileId);
       await CacheService.invalidateUser(userId.toString());
 
       res.json({ success: true, message: 'Thumbnail updated successfully' });

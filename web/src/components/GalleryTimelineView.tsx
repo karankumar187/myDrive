@@ -982,7 +982,7 @@ const GalleryGridTile: React.FC<{
     setLoading(false);
 
     // If it's a video and lacks an extracted frame thumbnail, generate one on client in background
-    if (isVideo) {
+    if (isVideo && !(item as any).hasThumbnail && !hasRealThumb) {
       mediaQueue.enqueue(async () => {
         try {
           const streamUrl = getStreamUrl(item._id);

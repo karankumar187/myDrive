@@ -1,5 +1,6 @@
 import http from 'http';
 import express from 'express';
+import compression from 'compression';
 import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
@@ -46,6 +47,16 @@ app.use(
       }
     },
     credentials: true,
+  })
+);
+// Enable Gzip / Brotli compression for all JSON and text responses
+app.use(
+  compression({
+    filter: (req, res) => {
+      if (req.headers['x-no-compression']) return false;
+      return compression.filter(req, res);
+    },
+    threshold: 1024, // only compress responses above 1KB
   })
 );
 app.use(express.json({ limit: '10mb' }));

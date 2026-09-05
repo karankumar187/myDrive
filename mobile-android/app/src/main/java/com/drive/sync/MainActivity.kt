@@ -3514,7 +3514,7 @@ fun TransfersScreen(
                                         .background(Color(0xFF1C1C28)),
                                     contentAlignment = Alignment.Center
                                 ) {
-                                    if (isImage) {
+                                    if (isImage || isVideo) {
                                         AsyncImage(
                                             model = ImageRequest.Builder(LocalContext.current)
                                                 .data(thumbUrl)
@@ -3530,8 +3530,16 @@ fun TransfersScreen(
                                             modifier = Modifier.fillMaxSize(),
                                             contentScale = ContentScale.Crop
                                         )
-                                    } else if (isVideo) {
-                                        Icon(Icons.Default.Movie, contentDescription = null, tint = Color(0xFFA855F7), modifier = Modifier.size(24.dp))
+                                        if (isVideo) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .fillMaxSize()
+                                                    .background(Color.Black.copy(alpha = 0.25f)),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+                                            }
+                                        }
                                     } else {
                                         Icon(Icons.Default.Description, contentDescription = null, tint = Color(0xFF38BDF8), modifier = Modifier.size(24.dp))
                                     }
@@ -3671,7 +3679,7 @@ fun TransfersScreen(
                                         .background(Color(0xFF1C1C28)),
                                     contentAlignment = Alignment.Center
                                 ) {
-                                    if (isImage) {
+                                    if (isImage || isVideo) {
                                         AsyncImage(
                                             model = ImageRequest.Builder(LocalContext.current)
                                                 .data(thumbUrl)
@@ -3687,8 +3695,16 @@ fun TransfersScreen(
                                             modifier = Modifier.fillMaxSize(),
                                             contentScale = ContentScale.Crop
                                         )
-                                    } else if (isVideo) {
-                                        Icon(Icons.Default.Movie, contentDescription = null, tint = Color(0xFFA855F7), modifier = Modifier.size(24.dp))
+                                        if (isVideo) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .fillMaxSize()
+                                                    .background(Color.Black.copy(alpha = 0.25f)),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+                                            }
+                                        }
                                     } else {
                                         Icon(Icons.Default.Description, contentDescription = null, tint = Color(0xFF38BDF8), modifier = Modifier.size(24.dp))
                                     }
