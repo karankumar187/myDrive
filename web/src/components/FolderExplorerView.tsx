@@ -299,12 +299,6 @@ export const FolderExplorerView: React.FC<Props> = ({
 
     const isEncrypted = file.versions && file.versions.length > 0 && file.versions[0].isEncrypted;
 
-    if (isEncrypted && !vaultKey) {
-      setPreviewLoading(false);
-      setPreviewError('🔒 This file was saved with Zero-Knowledge Encryption. Unlock your Vault (in the top bar) using your master passphrase to decrypt and view it.');
-      return;
-    }
-
     try {
       const response = await fetch(getStreamUrl(file._id));
       if (!response.ok) {
@@ -314,11 +308,16 @@ export const FolderExplorerView: React.FC<Props> = ({
 
       let url: string;
       if (isEncrypted && vaultKey) {
-        const encryptedBuffer = await response.arrayBuffer();
-        const ivHex = file.versions![0].iv || '';
-        const decryptedBuffer = await VaultCryptoService.decryptBuffer(encryptedBuffer, ivHex, vaultKey);
-        const blob = new Blob([decryptedBuffer], { type: file.mimeType });
-        url = URL.createObjectURL(blob);
+        try {
+          const encryptedBuffer = await response.arrayBuffer();
+          const ivHex = file.versions![0].iv || '';
+          const decryptedBuffer = await VaultCryptoService.decryptBuffer(encryptedBuffer, ivHex, vaultKey);
+          const blob = new Blob([decryptedBuffer], { type: file.mimeType });
+          url = URL.createObjectURL(blob);
+        } catch (_decryptErr) {
+          const blob = await response.blob();
+          url = URL.createObjectURL(blob);
+        }
       } else {
         const blob = await response.blob();
         url = URL.createObjectURL(blob);
@@ -368,19 +367,6 @@ export const FolderExplorerView: React.FC<Props> = ({
   const uploadFiles = async (selectedFiles: FileList | File[]) => {
     if (!selectedFiles || selectedFiles.length === 0) return;
 
-    if (!vaultKey) {
-      const wantToUnlock = confirm(
-        '🔒 Zero-Knowledge Vault is currently locked!\n\n' +
-        '• Click "OK" to unlock your Vault with your Master Passphrase and encrypt files with AES-256-GCM before uploading to Google Drive.\n\n' +
-        '• Click "Cancel" to upload files in standard unencrypted format.'
-      );
-      if (wantToUnlock) {
-        onOpenVault?.();
-        if (fileInputRef.current) fileInputRef.current.value = '';
-        return;
-      }
-    }
-
     setUploading(true);
     setUploadMessage(null);
 
@@ -402,26 +388,14 @@ export const FolderExplorerView: React.FC<Props> = ({
         const buffer = await file.arrayBuffer();
         const contentHash = await VaultCryptoService.calculateSha256(buffer);
 
-        let uploadPayloadBuffer = buffer;
-        let isEncrypted = false;
-        let ivHex: string | undefined;
-
-        if (vaultKey) {
-          setUploadMessage(`Encrypting ${file.name} with AES-256-GCM...`);
-          const encrypted = await VaultCryptoService.encryptBuffer(buffer, vaultKey);
-          uploadPayloadBuffer = await encrypted.encryptedBlob.arrayBuffer();
-          isEncrypted = true;
-          ivHex = encrypted.ivHex;
-        }
-
         setUploadMessage(`Allocating storage pool for ${file.name}...`);
         const initResult = await api.initiateUpload({
           filename: file.name,
           mimeType: file.type || 'application/octet-stream',
-          sizeBytes: isEncrypted ? uploadPayloadBuffer.byteLength : file.size,
+          sizeBytes: file.size,
           contentHash,
           folderId: currentFolderId,
-          isEncrypted,
+          isEncrypted: false,
         });
 
         if (initResult.isDuplicate) {
@@ -438,9 +412,9 @@ export const FolderExplorerView: React.FC<Props> = ({
         const putRes = await fetch(uploadUrl, {
           method: 'PUT',
           headers: {
-            'Content-Type': isEncrypted ? 'application/octet-stream' : file.type || 'application/octet-stream',
+            'Content-Type': file.type || 'application/octet-stream',
           },
-          body: uploadPayloadBuffer,
+          body: buffer,
         });
 
         if (!putRes.ok && putRes.status !== 200 && putRes.status !== 201) {
@@ -465,8 +439,7 @@ export const FolderExplorerView: React.FC<Props> = ({
           storageAccountId: initResult.storageAccountId,
           providerFileId: realProviderFileId,
           folderId: currentFolderId,
-          isEncrypted,
-          iv: ivHex,
+          isEncrypted: false,
           metadata: videoThumb ? { thumbnail: videoThumb } : undefined,
         });
 
@@ -846,26 +819,6 @@ export const FolderExplorerView: React.FC<Props> = ({
         </div>
 
         <div className="flex items-center space-x-2 flex-shrink-0">
-          {vaultKey ? (
-            <button
-              onClick={onOpenVault}
-              className="inline-flex items-center px-2.5 py-1 text-[11px] font-semibold text-purple-300 bg-purple-950/40 border border-purple-800/50 hover:bg-purple-900/40 rounded-full shadow-glow-purple transition active:scale-95"
-              title="Zero-Knowledge Encryption is Active (AES-256-GCM) - Click to manage"
-            >
-              <ShieldCheck className="w-3 h-3 mr-1 text-purple-400" />
-              <span>E2EE Active</span>
-            </button>
-          ) : (
-            <button
-              onClick={onOpenVault}
-              className="inline-flex items-center px-2.5 py-1 text-[11px] font-semibold text-zinc-400 hover:text-white bg-[#181820] hover:bg-[#22222b] border border-[#272736] hover:border-purple-500/40 rounded-full transition active:scale-95"
-              title="Vault is locked - Click to unlock and enable Zero-Knowledge Encryption"
-            >
-              <Lock className="w-3 h-3 mr-1 text-amber-400" />
-              <span>Unlock Vault</span>
-            </button>
-          )}
-
           {!isSelectionMode && (
             <button
               onClick={() => setIsSelectionMode(true)}

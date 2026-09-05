@@ -53,15 +53,14 @@ export class FileController {
       // Select target Google Drive account with sufficient room
       const targetAccount = await StorageEngineService.selectTargetAccount(userId, sizeBytes);
 
-      // Unique opaque filename for Google Drive (opaque for Zero-Knowledge privacy)
-      const driveOpaqueName = isEncrypted
-        ? `blob_${Date.now()}_${new Types.ObjectId().toString()}.enc`
-        : `file_${Date.now()}_${filename}`;
+      // Target Google Drive filename sanitized
+      const sanitizedName = filename.replace(/[^a-zA-Z0-9._-]/g, '_');
+      const driveOpaqueName = `file_${Date.now()}_${sanitizedName}`;
 
       const clientOrigin = (req.headers.origin as string) || (process.env.CLIENT_URL || 'http://localhost:5173').split(',')[0].trim();
       const resumableSessionUri = await GoogleDriveService.createResumableUploadSession(targetAccount, {
         name: driveOpaqueName,
-        mimeType: isEncrypted ? 'application/octet-stream' : mimeType,
+        mimeType: mimeType || 'application/octet-stream',
         sizeBytes,
         origin: clientOrigin,
       });
@@ -97,11 +96,16 @@ export class FileController {
         isEncrypted,
         iv,
         metadata,
+        thumbnail,
       } = req.body;
 
       const deviceId = req.device?.deviceId || (req.headers['x-device-id'] as string) || undefined;
-
       const effectiveProviderId = providerFileId || driveOpaqueName || `file_${Date.now()}_${filename}`;
+
+      const finalMetadata = {
+        ...(metadata || {}),
+        ...(thumbnail ? { thumbnail } : {}),
+      };
 
       const { file, isDuplicate } = await StorageEngineService.finalizeUpload({
         userId,
@@ -114,9 +118,9 @@ export class FileController {
         providerFileId: effectiveProviderId,
         deviceId,
         deviceAssetId,
-        isEncrypted: !!isEncrypted,
+        isEncrypted: false,
         iv,
-        metadata,
+        metadata: finalMetadata,
       });
 
       // Emit real-time notification over Socket.io
@@ -359,23 +363,12 @@ export class FileController {
       }
 
       // Resolve the real Google Drive file ID if stored as an opaque name
-      let driveFileId = latestVersion.providerFileId;
-      if (
-        driveFileId.startsWith('blob_') ||
-        driveFileId.startsWith('file_') ||
-        driveFileId.includes('.enc')
-      ) {
-        const drive = google.drive({ version: 'v3', auth: oauth2Client });
-        const lastUnderscore = driveFileId.lastIndexOf('_');
-        const baseName =
-          lastUnderscore !== -1 ? driveFileId.substring(lastUnderscore + 1) : driveFileId;
-        const q = baseName.includes('.')
-          ? `name contains '${baseName}' and trashed = false`
-          : `name = '${driveFileId}' and trashed = false`;
-        const listRes = await drive.files.list({ q, fields: 'files(id)', pageSize: 1 });
-        if (listRes.data.files?.[0]?.id) {
-          driveFileId = listRes.data.files[0].id;
-        }
+      const driveFileId = await GoogleDriveService.resolveDriveFileId(account, latestVersion.providerFileId);
+      if (driveFileId !== latestVersion.providerFileId) {
+        File.updateOne(
+          { _id: file._id, 'versions.versionNumber': latestVersion.versionNumber },
+          { $set: { 'versions.$.providerFileId': driveFileId } }
+        ).exec();
       }
 
       // Direct Google Drive API download URL with embedded access token.
@@ -433,6 +426,13 @@ export class FileController {
 
       const range = req.headers.range;
       const driveStream = await GoogleDriveService.getFileStream(account, latestVersion.providerFileId, range);
+
+      if (driveStream.resolvedFileId && driveStream.resolvedFileId !== latestVersion.providerFileId) {
+        File.updateOne(
+          { _id: file._id, 'versions.versionNumber': latestVersion.versionNumber },
+          { $set: { 'versions.$.providerFileId': driveStream.resolvedFileId } }
+        ).exec();
+      }
 
       if (driveStream.status === 206) {
         res.status(206);
@@ -510,21 +510,12 @@ export class FileController {
       try {
         const oauth2Client = GoogleDriveService.getOAuth2Client(account);
         const drive = google.drive({ version: 'v3', auth: oauth2Client });
-        let actualFileId = latestVersion.providerFileId;
-        if (actualFileId.startsWith('blob_') || actualFileId.startsWith('file_') || actualFileId.includes('.enc')) {
-          const lastUnderscore = actualFileId.lastIndexOf('_');
-          const baseName = lastUnderscore !== -1 ? actualFileId.substring(lastUnderscore + 1) : actualFileId;
-          const query = (baseName && baseName.includes('.'))
-            ? `name contains '${baseName}' and trashed = false`
-            : `name = '${actualFileId}' and trashed = false`;
-          const listRes = await drive.files.list({
-            q: query,
-            fields: 'files(id, name, thumbnailLink)',
-            pageSize: 1,
-          });
-          if (listRes.data.files?.[0]?.id) {
-            actualFileId = listRes.data.files[0].id;
-          }
+        const actualFileId = await GoogleDriveService.resolveDriveFileId(account, latestVersion.providerFileId);
+        if (actualFileId !== latestVersion.providerFileId) {
+          File.updateOne(
+            { _id: file._id, 'versions.versionNumber': latestVersion.versionNumber },
+            { $set: { 'versions.$.providerFileId': actualFileId } }
+          ).exec();
         }
 
         const meta = await drive.files.get({
@@ -812,6 +803,23 @@ export class FileController {
   }
 
   /**
+   * Clears encryption flags across user files to allow transparent direct streaming.
+   */
+  static async clearEncryptionFlags(req: Request, res: Response): Promise<void> {
+    try {
+      const userId = req.user!._id;
+      const result = await File.updateMany(
+        { userId },
+        { $set: { 'versions.$[].isEncrypted': false } }
+      );
+      await CacheService.invalidateUser(userId.toString());
+      res.json({ success: true, modifiedCount: result.modifiedCount });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+
+  /**
    * Toggles or sets favorite status for a file.
    */
   static async toggleFavorite(req: Request, res: Response): Promise<void> {
@@ -1078,9 +1086,10 @@ export class FileController {
     try {
       const userId = req.user!._id;
       const parentFolderId = req.query.parentFolderId as string;
+      const getAll = req.query.all === 'true';
 
       // Check Redis cache for folder tree
-      const cacheKey = `cache:user:${userId}:folders:${parentFolderId || 'root'}`;
+      const cacheKey = `cache:user:${userId}:folders:${getAll ? 'all' : (parentFolderId || 'root')}`;
       const cached = await CacheService.get(cacheKey);
       if (cached) {
         res.json(cached);
@@ -1097,24 +1106,26 @@ export class FileController {
         { id: null, name: 'My Drive' },
       ];
 
-      if (parentFolderId && parentFolderId !== 'root' && Types.ObjectId.isValid(parentFolderId)) {
-        filter.parentFolderId = new Types.ObjectId(parentFolderId);
-        currentFolder = await Folder.findOne({ _id: parentFolderId, userId });
+      if (!getAll) {
+        if (parentFolderId && parentFolderId !== 'root' && Types.ObjectId.isValid(parentFolderId)) {
+          filter.parentFolderId = new Types.ObjectId(parentFolderId);
+          currentFolder = await Folder.findOne({ _id: parentFolderId, userId });
 
-        // Trace breadcrumbs upwards
-        const trail: Array<{ id: string; name: string }> = [];
-        let curr = currentFolder;
-        while (curr) {
-          trail.unshift({ id: curr._id.toString(), name: curr.name });
-          if (curr.parentFolderId) {
-            curr = await Folder.findOne({ _id: curr.parentFolderId, userId });
-          } else {
-            break;
+          // Trace breadcrumbs upwards
+          const trail: Array<{ id: string; name: string }> = [];
+          let curr = currentFolder;
+          while (curr) {
+            trail.unshift({ id: curr._id.toString(), name: curr.name });
+            if (curr.parentFolderId) {
+              curr = await Folder.findOne({ _id: curr.parentFolderId, userId });
+            } else {
+              break;
+            }
           }
+          breadcrumbs = [{ id: null, name: 'My Drive' }, ...trail];
+        } else {
+          filter.parentFolderId = null;
         }
-        breadcrumbs = [{ id: null, name: 'My Drive' }, ...trail];
-      } else {
-        filter.parentFolderId = null;
       }
 
       const folders = await Folder.find(filter).sort({ name: 1 });

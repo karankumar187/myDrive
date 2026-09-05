@@ -399,40 +399,17 @@ export const App: React.FC = () => {
 
           {/* Right Action Controls */}
           <div className="flex items-center space-x-3">
-            {/* Vault Unlock Pill */}
-            <button
-              onClick={() => {
-                if (vaultKey) {
-                  if (confirm('Lock Zero-Knowledge Vault? Encrypted files will be protected and require your Master Passphrase to view.')) {
-                    VaultCryptoService.clearSessionKey();
-                    setVaultKey(null);
-                  }
-                } else {
-                  setIsVaultModalOpen(true);
-                }
-              }}
-              className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-full text-xs font-medium border transition active:scale-95 ${
-                vaultKey
-                  ? 'bg-purple-950/50 border-purple-500/60 text-purple-300 shadow-glow-purple hover:bg-purple-900/40'
-                  : 'bg-[#141418] border-[#222229] text-zinc-400 hover:text-white hover:border-purple-500/30'
-              }`}
-              title={vaultKey ? 'Vault unlocked - Click to lock' : 'Click to unlock Zero-Knowledge Vault'}
-            >
-              {vaultKey ? (
-                <ShieldCheck className="w-3.5 h-3.5 text-purple-400" />
-              ) : (
-                <Shield className="w-3.5 h-3.5 text-zinc-500" />
-              )}
-              <span className="hidden xs:inline">{vaultKey ? 'Vault Active' : 'Unlock Vault'}</span>
-            </button>
-
             {/* Profile Avatar with Dropdown */}
             <div className="relative">
               <button
                 onClick={() => setShowProfileMenu(!showProfileMenu)}
-                className="w-8 h-8 rounded-full bg-gradient-to-tr from-purple-700 to-violet-500 flex items-center justify-center text-white font-bold text-xs shadow-glow-purple ring-2 ring-[#222229] hover:ring-purple-500 transition"
+                className="w-8 h-8 rounded-full overflow-hidden bg-gradient-to-tr from-purple-700 to-violet-500 flex items-center justify-center text-white font-bold text-xs shadow-glow-purple ring-2 ring-[#222229] hover:ring-purple-500 transition"
               >
-                {currentUser.name.charAt(0).toUpperCase()}
+                {currentUser.avatarUrl ? (
+                  <img src={currentUser.avatarUrl} alt={currentUser.name} className="w-full h-full object-cover" />
+                ) : (
+                  currentUser.name.charAt(0).toUpperCase()
+                )}
               </button>
 
               {showProfileMenu && (
@@ -441,16 +418,6 @@ export const App: React.FC = () => {
                     <p className="text-xs font-bold text-white truncate">{currentUser.name}</p>
                     <p className="text-[10px] text-zinc-400 truncate">{currentUser.email}</p>
                   </div>
-                  <button
-                    onClick={() => {
-                      setIsVaultModalOpen(true);
-                      setShowProfileMenu(false);
-                    }}
-                    className="w-full flex items-center space-x-2 px-3 py-2 text-xs text-zinc-300 hover:bg-[#1b1b22] rounded-xl transition"
-                  >
-                    <Shield className="w-3.5 h-3.5 text-purple-400" />
-                    <span>Zero-Knowledge Vault</span>
-                  </button>
                   <button
                     onClick={api.logout}
                     className="w-full flex items-center space-x-2 px-3 py-2 text-xs text-red-400 hover:bg-red-500/10 rounded-xl transition"

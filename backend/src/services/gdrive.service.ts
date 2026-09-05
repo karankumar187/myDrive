@@ -174,47 +174,77 @@ export class GoogleDriveService {
   }
 
   /**
+   * Resolves an opaque file reference (e.g. file_..., blob_...) to an actual Google Drive file ID.
+   */
+  static async resolveDriveFileId(account: IStorageAccountDocument, providerFileId: string): Promise<string> {
+    if (!providerFileId.startsWith('blob_') && !providerFileId.startsWith('file_') && !providerFileId.includes('.enc')) {
+      return providerFileId;
+    }
+
+    try {
+      const oauth2Client = this.getOAuth2Client(account);
+      const drive = google.drive({ version: 'v3', auth: oauth2Client });
+      const escapeQueryStr = (s: string) => s.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+
+      // 1. First attempt: exact match on the full providerFileId (which was used as Google Drive file name)
+      const exactQuery = `name = '${escapeQueryStr(providerFileId)}' and trashed = false`;
+      const listRes = await drive.files.list({
+        q: exactQuery,
+        fields: 'files(id, name)',
+        pageSize: 1,
+      });
+
+      if (listRes.data.files && listRes.data.files.length > 0 && listRes.data.files[0].id) {
+        return listRes.data.files[0].id;
+      }
+
+      // 2. Second attempt: search by basename (part after last underscore)
+      const lastUnderscore = providerFileId.lastIndexOf('_');
+      if (lastUnderscore !== -1) {
+        const baseName = providerFileId.substring(lastUnderscore + 1);
+        if (baseName) {
+          const baseNameQuery = `name = '${escapeQueryStr(baseName)}' and trashed = false`;
+          const baseRes = await drive.files.list({
+            q: baseNameQuery,
+            fields: 'files(id, name)',
+            pageSize: 1,
+          });
+          if (baseRes.data.files && baseRes.data.files.length > 0 && baseRes.data.files[0].id) {
+            return baseRes.data.files[0].id;
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('Could not resolve file by name in Google Drive:', err);
+    }
+
+    return providerFileId;
+  }
+
+  /**
    * Streams a file from Google Drive for client download or browser decryption.
    */
   static async getFileStream(account: IStorageAccountDocument, providerFileId: string, rangeHeader?: string): Promise<any> {
     const oauth2Client = this.getOAuth2Client(account);
     const drive = google.drive({ version: 'v3', auth: oauth2Client });
 
-    let actualFileId = providerFileId;
-
-    // If providerFileId is an opaque filename rather than a Google Drive file ID, look it up by name
-    if (providerFileId.startsWith('blob_') || providerFileId.startsWith('file_') || providerFileId.includes('.enc')) {
-      try {
-        const lastUnderscore = providerFileId.lastIndexOf('_');
-        const baseName = lastUnderscore !== -1 ? providerFileId.substring(lastUnderscore + 1) : providerFileId;
-        const query = (baseName && baseName.includes('.'))
-          ? `name contains '${baseName}' and trashed = false`
-          : `name = '${providerFileId}' and trashed = false`;
-        const listRes = await drive.files.list({
-          q: query,
-          fields: 'files(id, name)',
-          pageSize: 1,
-        });
-        if (listRes.data.files && listRes.data.files.length > 0 && listRes.data.files[0].id) {
-          actualFileId = listRes.data.files[0].id;
-        }
-      } catch (err) {
-        console.warn('Could not resolve file by name in Google Drive:', err);
-      }
-    }
+    const actualFileId = await this.resolveDriveFileId(account, providerFileId);
 
     const requestOptions: any = { responseType: 'stream' };
     if (rangeHeader) {
       requestOptions.headers = { Range: rangeHeader };
     }
 
-    return await drive.files.get(
+    const res = await drive.files.get(
       {
         fileId: actualFileId,
         alt: 'media',
       },
       requestOptions
     );
+
+    (res as any).resolvedFileId = actualFileId;
+    return res;
   }
 
   /**

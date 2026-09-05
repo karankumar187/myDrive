@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { AuthController } from '../controllers/auth.controller.js';
-import { requireUserAuth } from '../middlewares/auth.middleware.js';
+import { requireUserAuth, requireAnyAuth } from '../middlewares/auth.middleware.js';
 
 const router = Router();
 
@@ -9,7 +9,7 @@ router.get('/google', AuthController.googleLogin);
 router.get('/google/callback', AuthController.googleCallback);
 
 // Profile and Vault
-router.get('/me', requireUserAuth, AuthController.getCurrentUser);
+router.get('/me', requireAnyAuth, AuthController.getCurrentUser);
 router.post('/vault/keys', requireUserAuth, AuthController.updateVaultKeys);
 
 export const authRoutes = router;

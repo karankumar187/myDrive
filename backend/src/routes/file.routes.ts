@@ -24,6 +24,7 @@ router.patch('/:id/move', requireAnyAuth, FileController.moveFile);
 router.post('/:id/move', requireAnyAuth, FileController.moveFile);
 router.post('/bulk', requireAnyAuth, FileController.bulkAction);
 router.post('/deduplicate', requireAnyAuth, FileController.deduplicateFiles);
+router.post('/clear-encryption-flags', requireAnyAuth, FileController.clearEncryptionFlags);
 
 // Soft delete / Recycle bin
 router.post('/trash/empty', requireAnyAuth, FileController.emptyTrash);

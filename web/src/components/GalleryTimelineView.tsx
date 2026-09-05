@@ -516,26 +516,6 @@ export const GalleryTimelineView: React.FC<Props> = ({ media, vaultKey, onOpenVa
             <CheckSquare className="w-3.5 h-3.5" />
             <span>{isSelectionMode ? 'Cancel' : 'Select'}</span>
           </button>
-
-          {vaultKey ? (
-            <button
-              onClick={onOpenVault}
-              className="hidden sm:inline-flex items-center px-3 py-1.5 rounded-full text-xs font-semibold bg-purple-950/40 hover:bg-purple-900/40 text-purple-300 border border-purple-800/40 shadow-glow-purple transition active:scale-95"
-              title="Zero-Knowledge Encryption Active"
-            >
-              <ShieldCheck className="w-3.5 h-3.5 mr-1 text-purple-400" />
-              E2EE
-            </button>
-          ) : (
-            <button
-              onClick={onOpenVault}
-              className="hidden sm:inline-flex items-center px-3 py-1.5 rounded-full text-xs font-semibold bg-[#181820] hover:bg-[#22222b] text-zinc-300 border border-[#272736] transition active:scale-95"
-              title="Click to unlock Vault for E2EE media"
-            >
-              <Lock className="w-3.5 h-3.5 mr-1 text-amber-400" />
-              Unlock
-            </button>
-          )}
         </div>
       </div>
 
@@ -947,62 +927,25 @@ const GalleryGridTile: React.FC<{
   const isEncrypted = item.versions?.[item.versions.length - 1]?.isEncrypted || false;
   const [loadError, setLoadError] = useState(false);
 
-  // If local base64 thumbnail exists, use it. Otherwise, use fast /thumbnail endpoint for non-encrypted files.
+  // If local base64 thumbnail exists, use it. Otherwise, use fast /thumbnail endpoint.
   const initialThumb = (item.metadata?.thumbnail && item.metadata.thumbnail.startsWith('data:image/'))
     ? item.metadata.thumbnail
-    : mediaCache.getThumbnail(item._id) || mediaCache.get(item._id) || (!isEncrypted ? api.getThumbnailUrl(item._id) : null);
+    : mediaCache.getThumbnail(item._id) || mediaCache.get(item._id) || api.getThumbnailUrl(item._id);
 
   const [thumbUrl, setThumbUrl] = useState<string | null>(initialThumb);
   const [loading, setLoading] = useState(!initialThumb);
 
   useEffect(() => {
     setLoadError(false);
-    if (!isEncrypted) {
-      setThumbUrl(api.getThumbnailUrl(item._id));
+    const cached = mediaCache.get(item._id);
+    if (cached) {
+      setThumbUrl(cached);
       setLoading(false);
       return;
     }
-
-    // Encrypted items require client-side decryption
-    if (isEncrypted && vaultKey) {
-      let active = true;
-      const cached = mediaCache.get(item._id);
-      if (cached) {
-        setThumbUrl(cached);
-        setLoading(false);
-        return;
-      }
-
-      setLoading(true);
-      const decryptThumb = async () => {
-        try {
-          const version = item.versions?.[item.versions.length - 1];
-          if (!version?.iv) return;
-          const streamUrl = getStreamUrl(item._id);
-          const res = await fetch(streamUrl);
-          if (!res.ok) throw new Error('Fetch failed');
-          const ciphertext = await res.arrayBuffer();
-          const decrypted = await VaultCryptoService.decryptBuffer(ciphertext, version.iv, vaultKey);
-          const blobUrl = URL.createObjectURL(new Blob([decrypted], { type: item.mimeType }));
-          mediaCache.set(item._id, blobUrl);
-          if (active) {
-            setThumbUrl(blobUrl);
-            setLoading(false);
-          }
-        } catch (err) {
-          if (active) setLoading(false);
-        }
-      };
-
-      decryptThumb();
-      return () => {
-        active = false;
-      };
-    } else if (isEncrypted && !vaultKey) {
-      setThumbUrl(null);
-      setLoading(false);
-    }
-  }, [item._id, isEncrypted, vaultKey]);
+    setThumbUrl(api.getThumbnailUrl(item._id));
+    setLoading(false);
+  }, [item._id]);
 
   return (
     <div
@@ -1019,11 +962,6 @@ const GalleryGridTile: React.FC<{
         <div className="w-full h-full flex items-center justify-center bg-[#141419]">
           <Loader2 className="w-4 h-4 animate-spin text-purple-400" />
         </div>
-      ) : isEncrypted && !vaultKey && !thumbUrl ? (
-        <div className="w-full h-full flex flex-col items-center justify-center bg-[#141419] p-2 text-center">
-          <Lock className="w-5 h-5 text-amber-400 mb-1" />
-          <span className="text-[9px] text-zinc-400">Locked</span>
-        </div>
       ) : thumbUrl && !loadError ? (
         <img
           src={thumbUrl}
@@ -1032,8 +970,9 @@ const GalleryGridTile: React.FC<{
           loading="lazy"
           decoding="async"
           onError={() => {
-            if (thumbUrl !== getStreamUrl(item._id) && !isEncrypted) {
-              setThumbUrl(getStreamUrl(item._id));
+            const fallbackUrl = getStreamUrl(item._id);
+            if (thumbUrl !== fallbackUrl) {
+              setThumbUrl(fallbackUrl);
             } else {
               setLoadError(true);
             }
@@ -1141,6 +1080,7 @@ const FullScreenViewer: React.FC<{
   // Decrypted or stream URL
   const [fullUrl, setFullUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [isImageLoaded, setIsImageLoaded] = useState(false);
   const [videoError, setVideoError] = useState(false);
   const [imgError, setImgError] = useState(false);
 
@@ -1168,11 +1108,28 @@ const FullScreenViewer: React.FC<{
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [currentIndex, mediaList.length]);
 
+  // Preload adjacent images (next 2 and previous 1) into browser cache for instantaneous transitions
+  useEffect(() => {
+    const toPreload: string[] = [];
+    if (currentIndex < mediaList.length - 1) toPreload.push(mediaList[currentIndex + 1]._id);
+    if (currentIndex < mediaList.length - 2) toPreload.push(mediaList[currentIndex + 2]._id);
+    if (currentIndex > 0) toPreload.push(mediaList[currentIndex - 1]._id);
+
+    toPreload.forEach((id) => {
+      const m = mediaList.find((x) => x._id === id);
+      if (m && !m.mimeType.startsWith('video/')) {
+        const preImg = new Image();
+        preImg.src = getStreamUrl(id);
+      }
+    });
+  }, [currentIndex, mediaList]);
+
   // Load media stream / decrypt
   useEffect(() => {
     let active = true;
     setScale(1);
     setLoading(true);
+    setIsImageLoaded(false);
     setVideoError(false);
     setImgError(false);
 
@@ -1188,25 +1145,25 @@ const FullScreenViewer: React.FC<{
       return;
     }
 
-    if (!isEncrypted) {
+    if (!isEncrypted || !vaultKey) {
       setFullUrl(streamUrl);
       setLoading(false);
       return;
     }
 
-    if (isEncrypted && !vaultKey) {
-      setFullUrl(null);
-      setLoading(false);
-      return;
-    }
-
-    // Decrypt E2EE media
+    // Decrypt E2EE media if vaultKey provided, otherwise fallback to direct stream
     const decryptMedia = async () => {
       try {
         const res = await fetch(streamUrl);
         if (!res.ok) throw new Error('Fetch failed');
         const ciphertext = await res.arrayBuffer();
-        if (!version?.iv) return;
+        if (!version?.iv) {
+          if (active) {
+            setFullUrl(streamUrl);
+            setLoading(false);
+          }
+          return;
+        }
         const decrypted = await VaultCryptoService.decryptBuffer(ciphertext, version.iv, vaultKey!);
         if (active) {
           const blobUrl = URL.createObjectURL(new Blob([decrypted], { type: item.mimeType }));
@@ -1215,7 +1172,10 @@ const FullScreenViewer: React.FC<{
           setLoading(false);
         }
       } catch (err) {
-        if (active) setLoading(false);
+        if (active) {
+          setFullUrl(streamUrl);
+          setLoading(false);
+        }
       }
     };
 
@@ -1462,42 +1422,86 @@ const FullScreenViewer: React.FC<{
             </div>
           </div>
         ) : fullUrl && !imgError ? (
-          <img
-            src={fullUrl}
-            alt={item.filename}
-            onLoad={() => setLoading(false)}
-            onError={() => {
-              setLoading(false);
-              setImgError(true);
-            }}
-            onDoubleClick={(e) => {
-              e.stopPropagation();
-              setScale((s) => (s === 1 ? 2 : 1));
-            }}
-            style={{ transform: `scale(${scale})`, transition: 'transform 0.2s ease-out' }}
-            className="max-h-[82vh] max-w-full object-contain rounded-xl shadow-2xl cursor-zoom-in"
-          />
+          <div className="relative flex items-center justify-center max-h-[82vh] max-w-full">
+            {/* Instant Thumbnail Placeholder with Blur while high-res loads */}
+            {!isImageLoaded && (
+              <div className="flex items-center justify-center">
+                <img
+                  key={`thumb-${item._id}`}
+                  src={
+                    item.metadata?.thumbnail && item.metadata.thumbnail.startsWith('data:image/')
+                      ? item.metadata.thumbnail
+                      : api.getThumbnailUrl(item._id)
+                  }
+                  alt="Loading placeholder"
+                  className="max-h-[82vh] max-w-full object-contain filter blur-md opacity-40 scale-95 transition-all duration-300 pointer-events-none"
+                />
+                <div className="absolute flex flex-col items-center justify-center space-y-2.5 bg-black/60 px-5 py-3 rounded-2xl backdrop-blur-md border border-purple-500/20 shadow-2xl pointer-events-none">
+                  <Loader2 className="w-8 h-8 animate-spin text-purple-400" />
+                  <span className="text-xs text-zinc-300 font-medium tracking-wide">Loading photo...</span>
+                </div>
+              </div>
+            )}
+
+            <img
+              key={item._id}
+              src={fullUrl}
+              alt={item.filename}
+              onLoad={() => {
+                setIsImageLoaded(true);
+                setLoading(false);
+              }}
+              onError={() => {
+                setIsImageLoaded(false);
+                setLoading(false);
+                setImgError(true);
+              }}
+              onDoubleClick={(e) => {
+                e.stopPropagation();
+                setScale((s) => (s === 1 ? 2 : 1));
+              }}
+              style={{ transform: `scale(${scale})`, transition: 'transform 0.2s ease-out, opacity 0.25s ease-in' }}
+              className={`max-h-[82vh] max-w-full object-contain rounded-xl shadow-2xl cursor-zoom-in ${
+                isImageLoaded ? 'opacity-100' : 'opacity-0 absolute'
+              }`}
+            />
+          </div>
         ) : imgError ? (
-          <div className="p-8 text-center bg-[#16161d] border border-red-500/30 rounded-2xl max-w-md space-y-3">
+          <div className="p-8 text-center bg-[#16161d] border border-red-500/30 rounded-2xl max-w-md space-y-4">
             <ImageIcon className="w-8 h-8 mx-auto text-red-400" />
-            <h4 className="text-sm font-bold text-white">Image Preview Unavailable</h4>
-            <p className="text-xs text-zinc-400">The high-resolution media could not be loaded directly.</p>
-            <a
-              href={getStreamUrl(item._id)}
-              download={item.filename}
-              className="mt-2 inline-flex items-center space-x-1.5 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white text-xs font-semibold rounded-lg"
-            >
-              <Download className="w-4 h-4" />
-              <span>Download File</span>
-            </a>
+            <div>
+              <h4 className="text-sm font-bold text-white">Image Preview</h4>
+              <p className="text-xs text-zinc-400 mt-1">High-resolution stream is buffering or unavailable.</p>
+            </div>
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              <button
+                onClick={() => {
+                  setImgError(false);
+                  setIsImageLoaded(false);
+                  setLoading(true);
+                  setFullUrl(`${getStreamUrl(item._id)}&retry=${Date.now()}`);
+                }}
+                className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white text-xs font-semibold rounded-lg transition"
+              >
+                Retry
+              </button>
+              <a
+                href={getStreamUrl(item._id)}
+                download={item.filename}
+                className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-semibold rounded-lg flex items-center space-x-1.5 transition"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Download</span>
+              </a>
+              <button
+                onClick={() => window.open(getStreamUrl(item._id), '_blank')}
+                className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-semibold rounded-lg transition"
+              >
+                Open in New Tab
+              </button>
+            </div>
           </div>
-        ) : (
-          <div className="p-8 text-center bg-[#16161d] border border-red-500/30 rounded-2xl max-w-md space-y-2">
-            <Lock className="w-8 h-8 mx-auto text-amber-400" />
-            <h4 className="text-sm font-bold text-white">Encrypted Media</h4>
-            <p className="text-xs text-zinc-400">Unlock Vault with Master Passphrase to view.</p>
-          </div>
-        )}
+        ) : null}
       </div>
 
       {/* Bottom Action Bar */}

@@ -47,6 +47,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import coil.compose.AsyncImage
+import coil.imageLoader
 import coil.request.ImageRequest
 import coil.size.Precision
 import coil.size.Size
@@ -1356,6 +1357,27 @@ fun FullScreenPhotoViewer(
     val isVideo = currentItem.mimeType.startsWith("video/")
     val streamUrl = "${serverUrl.trimEnd('/')}/api/v1/files/${currentItem.id}/stream?deviceId=$deviceId&deviceKey=$deviceKey"
 
+    // Preload adjacent images (next 2 and previous 1) into Coil cache for instant transitions
+    LaunchedEffect(currentIndex, mediaList) {
+        val toPreload = mutableListOf<String>()
+        if (currentIndex < mediaList.size - 1) toPreload.add(mediaList[currentIndex + 1].id)
+        if (currentIndex < mediaList.size - 2) toPreload.add(mediaList[currentIndex + 2].id)
+        if (currentIndex > 0) toPreload.add(mediaList[currentIndex - 1].id)
+
+        toPreload.forEach { fileId ->
+            val item = mediaList.find { it.id == fileId }
+            if (item != null && !item.mimeType.startsWith("video/")) {
+                val preUrl = "${serverUrl.trimEnd('/')}/api/v1/files/${item.id}/stream?deviceId=$deviceId&deviceKey=$deviceKey"
+                val req = ImageRequest.Builder(context)
+                    .data(preUrl)
+                    .addHeader("x-device-id", deviceId)
+                    .addHeader("x-device-key", deviceKey)
+                    .build()
+                context.imageLoader.enqueue(req)
+            }
+        }
+    }
+
     Dialog(
         onDismissRequest = onClose,
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
@@ -1424,6 +1446,38 @@ fun FullScreenPhotoViewer(
                         var isBuffering by remember { mutableStateOf(true) }
                         var playbackError by remember { mutableStateOf<String?>(null) }
                         var videoViewRef by remember { mutableStateOf<VideoView?>(null) }
+                        var directVideoUrl by remember { mutableStateOf<String?>(null) }
+
+                        LaunchedEffect(currentItem.id) {
+                            withContext(Dispatchers.IO) {
+                                try {
+                                    val gdriveReqUrl = "${serverUrl.trimEnd('/')}/api/v1/files/${currentItem.id}/gdrive-url?deviceId=$deviceId&deviceKey=$deviceKey"
+                                    val req = Request.Builder()
+                                        .url(gdriveReqUrl)
+                                        .addHeader("x-device-id", deviceId)
+                                        .addHeader("x-device-key", deviceKey)
+                                        .get()
+                                        .build()
+                                    val res = sharedHttpClient.newCall(req).execute()
+                                    if (res.isSuccessful) {
+                                        val body = res.body?.string() ?: ""
+                                        val json = JSONObject(body)
+                                        val direct = json.optString("directUrl", "")
+                                        if (direct.isNotBlank()) {
+                                            withContext(Dispatchers.Main) {
+                                                directVideoUrl = direct
+                                            }
+                                            return@withContext
+                                        }
+                                    }
+                                } catch (e: Exception) {
+                                    // fallback
+                                }
+                                withContext(Dispatchers.Main) {
+                                    directVideoUrl = streamUrl
+                                }
+                            }
+                        }
 
                         DisposableEffect(currentItem.id) {
                             onDispose {
@@ -1435,44 +1489,59 @@ fun FullScreenPhotoViewer(
                             modifier = Modifier.fillMaxSize(),
                             contentAlignment = Alignment.Center
                         ) {
-                            AndroidView(
-                                factory = { ctx ->
-                                    VideoView(ctx).apply {
-                                        videoViewRef = this
-                                        val mc = MediaController(ctx)
-                                        mc.setAnchorView(this)
-                                        setMediaController(mc)
+                            val playUrl = directVideoUrl
+                            if (playUrl != null) {
+                                AndroidView(
+                                    factory = { ctx ->
+                                        VideoView(ctx).apply {
+                                            videoViewRef = this
+                                            val mc = MediaController(ctx)
+                                            mc.setAnchorView(this)
+                                            setMediaController(mc)
 
-                                        setOnPreparedListener { mp ->
-                                            isBuffering = false
-                                            playbackError = null
-                                            mp.isLooping = false
-                                            start()
+                                            setOnPreparedListener { mp ->
+                                                isBuffering = false
+                                                playbackError = null
+                                                mp.isLooping = false
+                                                start()
+                                            }
+
+                                            setOnInfoListener { _, what, _ ->
+                                                if (what == MediaPlayer.MEDIA_INFO_BUFFERING_START) isBuffering = true
+                                                else if (what == MediaPlayer.MEDIA_INFO_BUFFERING_END) isBuffering = false
+                                                true
+                                            }
+
+                                            setOnErrorListener { _, what, extra ->
+                                                isBuffering = false
+                                                playbackError = "Unable to stream video ($what, $extra)"
+                                                true
+                                            }
+
+                                            setVideoURI(Uri.parse(playUrl))
                                         }
-
-                                        setOnInfoListener { _, what, _ ->
-                                            if (what == MediaPlayer.MEDIA_INFO_BUFFERING_START) isBuffering = true
-                                            else if (what == MediaPlayer.MEDIA_INFO_BUFFERING_END) isBuffering = false
-                                            true
-                                        }
-
-                                        setOnErrorListener { _, what, extra ->
-                                            isBuffering = false
-                                            playbackError = "Unable to stream video ($what, $extra)"
-                                            true
-                                        }
-
-                                        setVideoURI(Uri.parse(streamUrl))
-                                    }
-                                },
-                                modifier = Modifier.fillMaxSize()
-                            )
-
-                            if (isBuffering && playbackError == null) {
-                                CircularProgressIndicator(
-                                    color = Color(0xFFA855F7),
-                                    modifier = Modifier.size(48.dp)
+                                    },
+                                    modifier = Modifier.fillMaxSize()
                                 )
+                            }
+
+                            if ((isBuffering || directVideoUrl == null) && playbackError == null) {
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    CircularProgressIndicator(
+                                        color = Color(0xFFA855F7),
+                                        modifier = Modifier.size(44.dp)
+                                    )
+                                    if (directVideoUrl == null) {
+                                        Text(
+                                            "Connecting to Google Drive CDN...",
+                                            color = Color.White.copy(alpha = 0.8f),
+                                            fontSize = 12.sp
+                                        )
+                                    }
+                                }
                             }
 
                             if (playbackError != null) {
@@ -1497,7 +1566,7 @@ fun FullScreenPhotoViewer(
                                         onClick = {
                                             try {
                                                 val intent = Intent(Intent.ACTION_VIEW).apply {
-                                                    setDataAndType(Uri.parse(streamUrl), "video/*")
+                                                    setDataAndType(Uri.parse(playUrl ?: streamUrl), "video/*")
                                                     flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION
                                                 }
                                                 context.startActivity(intent)
@@ -1514,24 +1583,108 @@ fun FullScreenPhotoViewer(
                         }
                     }
                 } else {
-                    AsyncImage(
-                        model = ImageRequest.Builder(LocalContext.current)
-                            .data(streamUrl)
-                            .addHeader("x-device-id", deviceId)
-                            .addHeader("x-device-key", deviceKey)
-                            .crossfade(true)
-                            .build(),
-                        contentDescription = currentItem.filename,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .graphicsLayer(
-                                scaleX = scale,
-                                scaleY = scale,
-                                translationX = offset.x,
-                                translationY = offset.y
-                            ),
-                        contentScale = ContentScale.Fit
-                    )
+                    key(currentItem.id) {
+                        var isImageLoading by remember { mutableStateOf(true) }
+                        var isImageError by remember { mutableStateOf(false) }
+                        val thumbUrl = "${serverUrl.trimEnd('/')}/api/v1/files/${currentItem.id}/thumbnail?deviceId=$deviceId&deviceKey=$deviceKey"
+
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            // Instant blurred thumbnail preview + loading indicator while high-res loads
+                            if (isImageLoading && !isImageError) {
+                                Box(
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    AsyncImage(
+                                        model = ImageRequest.Builder(context)
+                                            .data(thumbUrl)
+                                            .addHeader("x-device-id", deviceId)
+                                            .addHeader("x-device-key", deviceKey)
+                                            .crossfade(false)
+                                            .build(),
+                                        contentDescription = null,
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .graphicsLayer(alpha = 0.4f),
+                                        contentScale = ContentScale.Fit
+                                    )
+
+                                    Surface(
+                                        shape = RoundedCornerShape(16.dp),
+                                        color = Color.Black.copy(alpha = 0.65f),
+                                        border = BorderStroke(1.dp, Color(0xFFA855F7).copy(alpha = 0.3f)),
+                                        modifier = Modifier.padding(16.dp)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                        ) {
+                                            CircularProgressIndicator(
+                                                color = Color(0xFFA855F7),
+                                                strokeWidth = 2.5.dp,
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                            Text(
+                                                text = "Loading photo...",
+                                                color = Color.White,
+                                                fontSize = 13.sp,
+                                                fontWeight = FontWeight.Medium
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            AsyncImage(
+                                model = ImageRequest.Builder(context)
+                                    .data(streamUrl)
+                                    .addHeader("x-device-id", deviceId)
+                                    .addHeader("x-device-key", deviceKey)
+                                    .crossfade(true)
+                                    .build(),
+                                contentDescription = currentItem.filename,
+                                onSuccess = {
+                                    isImageLoading = false
+                                },
+                                onError = {
+                                    isImageLoading = false
+                                    isImageError = true
+                                },
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .graphicsLayer(
+                                        scaleX = scale,
+                                        scaleY = scale,
+                                        translationX = offset.x,
+                                        translationY = offset.y,
+                                        alpha = if (isImageLoading) 0f else 1f
+                                    ),
+                                contentScale = ContentScale.Fit
+                            )
+
+                            if (isImageError) {
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    modifier = Modifier
+                                        .background(Color(0xFF0F0F14).copy(alpha = 0.94f), RoundedCornerShape(16.dp))
+                                        .padding(24.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.ErrorOutline,
+                                        contentDescription = null,
+                                        tint = Color(0xFFEF4444),
+                                        modifier = Modifier.size(36.dp)
+                                    )
+                                    Spacer(modifier = Modifier.height(10.dp))
+                                    Text("Unable to load image", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                }
+                            }
+                        }
+                    }
                 }
             }
 

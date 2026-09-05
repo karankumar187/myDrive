@@ -28,6 +28,7 @@ import android.os.ParcelFileDescriptor
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -131,7 +132,8 @@ data class CloudMedia(
 data class CloudFolder(
     val id: String,
     val name: String,
-    val path: String = ""
+    val path: String = "",
+    val parentFolderId: String? = null
 )
 
 data class PairedDevice(
@@ -727,6 +729,9 @@ fun MainAppScreen(
     var galleryList by remember { mutableStateOf<List<CloudMedia>>(emptyList()) }
     var foldersList by remember { mutableStateOf<List<CloudFolder>>(emptyList()) }
     var selectedFilterFolderId by remember { mutableStateOf<String?>(null) }
+    var userAvatarUrl by remember { mutableStateOf(prefs.getString("user_avatar_url", "") ?: "") }
+    var userName by remember { mutableStateOf(prefs.getString("user_name", "") ?: "") }
+    var userEmail by remember { mutableStateOf(prefs.getString("user_email", "") ?: "") }
 
     // Activity & Paired Devices States
     var uploadedFilesList by remember { mutableStateOf<List<DeviceUploadItem>>(emptyList()) }
@@ -1187,10 +1192,10 @@ fun MainAppScreen(
                             e.printStackTrace()
                         }
 
-                        // 4. Fetch Folders
+                        // 4. Fetch Folders (all folders including nested ones)
                         try {
                             val req = Request.Builder()
-                                .url("$baseUrl/api/v1/files/folders/list")
+                                .url("$baseUrl/api/v1/files/folders/list?all=true")
                                 .addHeader("x-device-id", deviceId)
                                 .addHeader("x-device-key", deviceKey)
                                 .build()
@@ -1202,11 +1207,13 @@ fun MainAppScreen(
                                 if (array != null) {
                                     for (i in 0 until array.length()) {
                                         val item = array.getJSONObject(i)
+                                        val parentId = item.optString("parentFolderId", "").ifBlank { null }
                                         list.add(
                                             CloudFolder(
                                                 id = item.optString("_id"),
                                                 name = item.optString("name"),
-                                                path = item.optString("path", "")
+                                                path = item.optString("path", ""),
+                                                parentFolderId = parentId
                                             )
                                         )
                                     }
@@ -1364,6 +1371,37 @@ fun MainAppScreen(
                         } catch (e: Exception) {
                             e.printStackTrace()
                         }
+
+                        // 8. Fetch User Profile & Google Avatar
+                        try {
+                            val req = Request.Builder()
+                                .url("$baseUrl/api/v1/auth/me")
+                                .addHeader("x-device-id", deviceId)
+                                .addHeader("x-device-key", deviceKey)
+                                .build()
+                            val res = httpClient.newCall(req).execute()
+                            if (res.isSuccessful) {
+                                val json = JSONObject(res.body?.string() ?: "{}")
+                                val userObj = json.optJSONObject("user")
+                                if (userObj != null) {
+                                    val aUrl = userObj.optString("avatarUrl", "")
+                                    val uName = userObj.optString("name", "")
+                                    val uEmail = userObj.optString("email", "")
+                                    withContext(Dispatchers.Main) {
+                                        userAvatarUrl = aUrl
+                                        userName = uName
+                                        userEmail = uEmail
+                                    }
+                                    prefs.edit()
+                                        .putString("user_avatar_url", aUrl)
+                                        .putString("user_name", uName)
+                                        .putString("user_email", uEmail)
+                                        .apply()
+                                }
+                            }
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
                     }
 
                     // Reload sync preferences
@@ -1379,13 +1417,16 @@ fun MainAppScreen(
         }
     }
 
-    val createFolderAction: (String) -> Unit = { folderName ->
+    val createFolderAction: (String, String?) -> Unit = { folderName, parentId ->
         if (folderName.isNotBlank() && serverUrl.isNotBlank() && deviceId.isNotBlank() && deviceKey.isNotBlank()) {
             scope.launch(Dispatchers.IO) {
                 try {
                     val baseUrl = serverUrl.trimEnd('/')
                     val body = JSONObject().apply {
                         put("name", folderName.trim())
+                        if (!parentId.isNullOrBlank()) {
+                            put("parentFolderId", parentId)
+                        }
                     }
                     val req = Request.Builder()
                         .url("$baseUrl/api/v1/files/folders/create")
@@ -1757,6 +1798,35 @@ fun MainAppScreen(
                             )
                         }
                     }
+                    if (userAvatarUrl.isNotBlank()) {
+                        AsyncImage(
+                            model = userAvatarUrl,
+                            contentDescription = userName.ifBlank { "User Profile" },
+                            modifier = Modifier
+                                .padding(end = 8.dp)
+                                .size(34.dp)
+                                .clip(CircleShape)
+                                .border(1.5.dp, Color(0xFFA855F7), CircleShape),
+                            contentScale = ContentScale.Crop
+                        )
+                    } else if (userName.isNotBlank()) {
+                        Box(
+                            modifier = Modifier
+                                .padding(end = 8.dp)
+                                .size(34.dp)
+                                .clip(CircleShape)
+                                .background(Color(0xFF9333EA))
+                                .border(1.5.dp, Color(0xFFA855F7), CircleShape),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = userName.take(1).uppercase(),
+                                color = Color.White,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color(0xFF0D0D11))
             )
@@ -2038,6 +2108,29 @@ fun FilesScreen(
         }
     }
 
+    val folderBreadcrumbs = remember(folders, selectedFolderId) {
+        if (selectedFolderId == null) emptyList()
+        else {
+            val chain = mutableListOf<CloudFolder>()
+            var curr: CloudFolder? = folders.find { it.id == selectedFolderId }
+            val visited = mutableSetOf<String>()
+            while (curr != null && !visited.contains(curr.id)) {
+                visited.add(curr.id)
+                chain.add(0, curr)
+                curr = if (!curr.parentFolderId.isNullOrBlank()) folders.find { it.id == curr?.parentFolderId } else null
+            }
+            chain
+        }
+    }
+
+    val visibleSubfolders = remember(folders, selectedFolderId) {
+        if (selectedFolderId == null) {
+            folders.filter { it.parentFolderId.isNullOrBlank() }
+        } else {
+            folders.filter { it.parentFolderId == selectedFolderId }
+        }
+    }
+
     Box(modifier = Modifier.fillMaxSize()) {
         LazyColumn(
             modifier = Modifier
@@ -2117,12 +2210,82 @@ fun FilesScreen(
                 }
             }
 
-            // Folders Section (if folders exist in library)
-            if (folders.isNotEmpty()) {
+            // Breadcrumbs and Folders Navigation Section
+            // Breadcrumb bar if inside a folder
+            if (folderBreadcrumbs.isNotEmpty()) {
+                item {
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 2.dp)
+                    ) {
+                        item {
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = Color(0xFF181824),
+                                modifier = Modifier.clickable { onSelectFilterFolder(null) }
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        Icons.Default.CloudQueue,
+                                        contentDescription = null,
+                                        tint = Color(0xFF94A3B8),
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("All Files", color = Color(0xFF94A3B8), fontSize = 11.sp)
+                                }
+                            }
+                        }
+
+                        items(folderBreadcrumbs) { crumb ->
+                            val isLast = crumb.id == selectedFolderId
+                            Icon(
+                                Icons.Default.ChevronRight,
+                                contentDescription = null,
+                                tint = Color(0xFF52525B),
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = if (isLast) Color(0xFF26193E) else Color(0xFF181824),
+                                modifier = Modifier.clickable { onSelectFilterFolder(crumb.id) }
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        Icons.Default.Folder,
+                                        contentDescription = null,
+                                        tint = if (isLast) Color(0xFFC084FC) else Color(0xFFFBBF24),
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = crumb.name,
+                                        color = if (isLast) Color.White else Color(0xFF94A3B8),
+                                        fontSize = 11.sp,
+                                        fontWeight = if (isLast) FontWeight.Bold else FontWeight.Normal
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Visible Subfolders / Root Folders
+            if (visibleSubfolders.isNotEmpty() || selectedFolderId == null && folders.isNotEmpty()) {
                 item {
                     Column(modifier = Modifier.padding(vertical = 4.dp)) {
                         Text(
-                            text = "Cloud Folders",
+                            text = if (selectedFolderId == null) "Cloud Folders" else "Subfolders (${visibleSubfolders.size})",
                             fontSize = 13.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = Color(0xFF94A3B8),
@@ -2132,38 +2295,40 @@ fun FilesScreen(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            item {
-                                Surface(
-                                    shape = RoundedCornerShape(10.dp),
-                                    color = if (selectedFolderId == null) Color(0xFF26193E) else Color(0xFF181824),
-                                    modifier = Modifier.clickable { onSelectFilterFolder(null) }
-                                ) {
-                                    Row(
-                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                                        verticalAlignment = Alignment.CenterVertically
+                            if (selectedFolderId == null) {
+                                item {
+                                    Surface(
+                                        shape = RoundedCornerShape(10.dp),
+                                        color = Color(0xFF26193E),
+                                        modifier = Modifier.clickable { onSelectFilterFolder(null) }
                                     ) {
-                                        Icon(
-                                            Icons.Default.CloudQueue,
-                                            contentDescription = null,
-                                            tint = if (selectedFolderId == null) Color(0xFFC084FC) else Color(0xFF71717A),
-                                            modifier = Modifier.size(16.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        Text(
-                                            text = "All Files",
-                                            color = Color.White,
-                                            fontSize = 12.sp,
-                                            fontWeight = if (selectedFolderId == null) FontWeight.Bold else FontWeight.Normal
-                                        )
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(
+                                                Icons.Default.CloudQueue,
+                                                contentDescription = null,
+                                                tint = Color(0xFFC084FC),
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text(
+                                                text = "All Files",
+                                                color = Color.White,
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
                                     }
                                 }
                             }
 
-                            items(folders) { folder ->
-                                val isSelected = selectedFolderId == folder.id
+                            items(visibleSubfolders) { folder ->
+                                val subCount = folders.count { it.parentFolderId == folder.id }
                                 Surface(
                                     shape = RoundedCornerShape(10.dp),
-                                    color = if (isSelected) Color(0xFF26193E) else Color(0xFF181824),
+                                    color = Color(0xFF181824),
                                     modifier = Modifier.combinedClickable(
                                         onClick = { onSelectFilterFolder(folder.id) },
                                         onLongClick = { selectedFolderForMenu = folder }
@@ -2176,7 +2341,7 @@ fun FilesScreen(
                                         Icon(
                                             Icons.Default.Folder,
                                             contentDescription = null,
-                                            tint = if (isSelected) Color(0xFFC084FC) else Color(0xFFFBBF24),
+                                            tint = Color(0xFFFBBF24),
                                             modifier = Modifier.size(16.dp)
                                         )
                                         Spacer(modifier = Modifier.width(6.dp))
@@ -2184,8 +2349,16 @@ fun FilesScreen(
                                             text = folder.name,
                                             color = Color.White,
                                             fontSize = 12.sp,
-                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                            fontWeight = FontWeight.Normal
                                         )
+                                        if (subCount > 0) {
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text(
+                                                text = "($subCount)",
+                                                color = Color(0xFF71717A),
+                                                fontSize = 10.sp
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -2618,7 +2791,28 @@ fun FilesScreen(
                 }
                 showMoveDialog = false
             },
-            onCreateFolder = { folderName ->
+            onCreateFolder = { folderName, parentId ->
+                coroutineScope.launch {
+                    try {
+                        val baseUrl = serverUrl.trimEnd('/')
+                        val body = JSONObject().apply {
+                            put("name", folderName.trim())
+                            if (!parentId.isNullOrBlank()) {
+                                put("parentFolderId", parentId)
+                            }
+                        }
+                        val req = Request.Builder()
+                            .url("$baseUrl/api/v1/files/folders/create")
+                            .addHeader("x-device-id", deviceId)
+                            .addHeader("x-device-key", deviceKey)
+                            .post(body.toString().toRequestBody("application/json".toMediaType()))
+                            .build()
+                        sharedHttpClient.newCall(req).execute().close()
+                        onRefresh()
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                }
             },
             onDismiss = { showMoveDialog = false }
         )
@@ -4495,28 +4689,105 @@ fun openPdfInExternalApp(context: Context, pdfFile: File) {
 }
 
 // ----------------------------------------------------
-// Folder Selection & Creation Dialog
+// Folder Selection & Creation Dialog (with Nested Browsing)
 // ----------------------------------------------------
 @Composable
 fun FolderPickerDialog(
     folders: List<CloudFolder>,
     currentFolderId: String,
     onSelectFolder: (String, String) -> Unit,
-    onCreateFolder: (String) -> Unit,
+    onCreateFolder: (String, String?) -> Unit,
     onDismiss: () -> Unit
 ) {
+    var browsingFolderId by remember { mutableStateOf<String?>(null) }
     var newFolderName by remember { mutableStateOf("") }
+
+    val currentBrowsingFolder = remember(folders, browsingFolderId) {
+        folders.find { it.id == browsingFolderId }
+    }
+
+    val breadcrumbChain = remember(folders, browsingFolderId) {
+        if (browsingFolderId == null) emptyList()
+        else {
+            val chain = mutableListOf<CloudFolder>()
+            var curr: CloudFolder? = folders.find { it.id == browsingFolderId }
+            val visited = mutableSetOf<String>()
+            while (curr != null && !visited.contains(curr.id)) {
+                visited.add(curr.id)
+                chain.add(0, curr)
+                curr = if (!curr.parentFolderId.isNullOrBlank()) folders.find { it.id == curr?.parentFolderId } else null
+            }
+            chain
+        }
+    }
+
+    val currentLevelFolders = remember(folders, browsingFolderId) {
+        if (browsingFolderId == null) {
+            folders.filter { it.parentFolderId.isNullOrBlank() }
+        } else {
+            folders.filter { it.parentFolderId == browsingFolderId }
+        }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = Color(0xFF14141C),
         title = {
-            Text(
-                text = "Select Upload Folder",
-                color = Color.White,
-                fontWeight = FontWeight.Bold,
-                fontSize = 17.sp
-            )
+            Column {
+                Text(
+                    text = "Select Upload Folder",
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 17.sp
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                // Breadcrumb Navigation
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    item {
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = if (browsingFolderId == null) Color(0xFF26193E) else Color(0xFF1F1F2C),
+                            modifier = Modifier.clickable { browsingFolderId = null }
+                        ) {
+                            Text(
+                                text = "Root",
+                                color = if (browsingFolderId == null) Color(0xFFC084FC) else Color(0xFF94A3B8),
+                                fontSize = 11.sp,
+                                fontWeight = if (browsingFolderId == null) FontWeight.Bold else FontWeight.Normal,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
+                            )
+                        }
+                    }
+                    items(breadcrumbChain) { item ->
+                        Icon(
+                            Icons.Default.ChevronRight,
+                            contentDescription = null,
+                            tint = Color(0xFF52525B),
+                            modifier = Modifier.size(12.dp)
+                        )
+                        val isCurrent = item.id == browsingFolderId
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = if (isCurrent) Color(0xFF26193E) else Color(0xFF1F1F2C),
+                            modifier = Modifier.clickable { browsingFolderId = item.id }
+                        ) {
+                            Text(
+                                text = item.name,
+                                color = if (isCurrent) Color(0xFFC084FC) else Color(0xFF94A3B8),
+                                fontSize = 11.sp,
+                                fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                }
+            }
         },
         text = {
             Column(
@@ -4525,87 +4796,132 @@ fun FolderPickerDialog(
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Text(
-                    text = "Choose where photos & videos from this phone will be stored:",
-                    color = Color(0xFF94A3B8),
-                    fontSize = 12.sp
-                )
+                // Button to select the currently browsed folder as destination
+                val isCurrentBrowsingSelected = if (browsingFolderId == null) {
+                    currentFolderId.isBlank()
+                } else {
+                    currentFolderId == browsingFolderId
+                }
 
-                // Option: Root Folder
                 Surface(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(10.dp))
                         .clickable {
-                            onSelectFolder("", "Root (My Drive)")
+                            if (browsingFolderId == null) {
+                                onSelectFolder("", "Root (My Drive)")
+                            } else {
+                                onSelectFolder(browsingFolderId!!, currentBrowsingFolder?.name ?: "Folder")
+                            }
                         },
-                    color = if (currentFolderId.isBlank()) Color(0xFF26193E) else Color(0xFF1C1C28)
+                    color = if (isCurrentBrowsingSelected) Color(0xFF26193E) else Color(0xFF1C1C28)
                 ) {
                     Row(
                         modifier = Modifier.padding(12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(
-                            Icons.Default.CloudQueue,
+                            if (browsingFolderId == null) Icons.Default.CloudQueue else Icons.Default.FolderOpen,
                             contentDescription = null,
-                            tint = if (currentFolderId.isBlank()) Color(0xFFC084FC) else Color(0xFF94A3B8),
+                            tint = if (isCurrentBrowsingSelected) Color(0xFFC084FC) else Color(0xFFA855F7),
                             modifier = Modifier.size(20.dp)
                         )
                         Spacer(modifier = Modifier.width(10.dp))
-                        Text(
-                            text = "Root (My Drive)",
-                            color = Color.White,
-                            fontSize = 13.sp,
-                            fontWeight = if (currentFolderId.isBlank()) FontWeight.Bold else FontWeight.Normal
-                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = if (browsingFolderId == null) "Use 'Root (My Drive)'" else "Use '${currentBrowsingFolder?.name}'",
+                                color = Color.White,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                text = if (isCurrentBrowsingSelected) "Currently selected destination" else "Tap to select this folder",
+                                color = if (isCurrentBrowsingSelected) Color(0xFFC084FC) else Color(0xFF71717A),
+                                fontSize = 10.sp
+                            )
+                        }
+                        if (isCurrentBrowsingSelected) {
+                            Icon(
+                                Icons.Default.Check,
+                                contentDescription = "Selected",
+                                tint = Color(0xFFC084FC),
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
                     }
                 }
 
-                // List of existing folders
-                folders.forEach { folder ->
-                    val isSelected = currentFolderId == folder.id
-                    Surface(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(10.dp))
-                            .clickable {
-                                onSelectFolder(folder.id, folder.name)
-                            },
-                        color = if (isSelected) Color(0xFF26193E) else Color(0xFF1C1C28)
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                if (currentLevelFolders.isNotEmpty()) {
+                    Text(
+                        text = if (browsingFolderId == null) "Folders in Root:" else "Subfolders in ${currentBrowsingFolder?.name}:",
+                        color = Color(0xFF94A3B8),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+
+                    currentLevelFolders.forEach { folder ->
+                        val subCount = folders.count { it.parentFolderId == folder.id }
+                        val isThisFolderSelected = currentFolderId == folder.id
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp)),
+                            color = if (isThisFolderSelected) Color(0xFF26193E) else Color(0xFF1C1C28)
                         ) {
-                            Icon(
-                                Icons.Default.Folder,
-                                contentDescription = null,
-                                tint = if (isSelected) Color(0xFFC084FC) else Color(0xFFFBBF24),
-                                modifier = Modifier.size(20.dp)
-                            )
-                            Spacer(modifier = Modifier.width(10.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = folder.name,
-                                    color = Color.White,
-                                    fontSize = 13.sp,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
-                                )
-                                if (folder.path.isNotBlank()) {
-                                    Text(
-                                        text = folder.path,
-                                        color = Color(0xFF71717A),
-                                        fontSize = 10.sp
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clickable { browsingFolderId = folder.id },
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        Icons.Default.Folder,
+                                        contentDescription = null,
+                                        tint = if (isThisFolderSelected) Color(0xFFC084FC) else Color(0xFFFBBF24),
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Column {
+                                        Text(
+                                            text = folder.name,
+                                            color = Color.White,
+                                            fontSize = 13.sp,
+                                            fontWeight = if (isThisFolderSelected) FontWeight.Bold else FontWeight.Normal
+                                        )
+                                        if (subCount > 0) {
+                                            Text(
+                                                text = "$subCount subfolder(s) • Tap to enter",
+                                                color = Color(0xFF71717A),
+                                                fontSize = 10.sp
+                                            )
+                                        } else {
+                                            Text(
+                                                text = "Tap to enter",
+                                                color = Color(0xFF52525B),
+                                                fontSize = 10.sp
+                                            )
+                                        }
+                                    }
+                                }
+
+                                IconButton(
+                                    onClick = { onSelectFolder(folder.id, folder.name) },
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.CheckCircleOutline,
+                                        contentDescription = "Select this folder",
+                                        tint = if (isThisFolderSelected) Color(0xFFC084FC) else Color(0xFF71717A),
+                                        modifier = Modifier.size(20.dp)
                                     )
                                 }
-                            }
-                            if (isSelected) {
-                                Icon(
-                                    Icons.Default.Check,
-                                    contentDescription = "Selected",
-                                    tint = Color(0xFFC084FC),
-                                    modifier = Modifier.size(18.dp)
-                                )
                             }
                         }
                     }
@@ -4615,10 +4931,10 @@ fun FolderPickerDialog(
 
                 // Create New Folder section
                 Text(
-                    text = "Create New Folder:",
+                    text = if (browsingFolderId == null) "Create Folder in Root:" else "Create Subfolder in ${currentBrowsingFolder?.name}:",
                     color = Color.White,
                     fontWeight = FontWeight.SemiBold,
-                    fontSize = 13.sp
+                    fontSize = 12.sp
                 )
 
                 OutlinedTextField(
@@ -4639,7 +4955,7 @@ fun FolderPickerDialog(
                 Button(
                     onClick = {
                         if (newFolderName.isNotBlank()) {
-                            onCreateFolder(newFolderName)
+                            onCreateFolder(newFolderName, browsingFolderId)
                         }
                     },
                     enabled = newFolderName.isNotBlank(),

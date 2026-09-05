@@ -10,6 +10,11 @@ import androidx.work.WorkerParameters
 import com.drive.sync.crypto.VaultCrypto
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import android.graphics.Bitmap
+import android.media.MediaMetadataRetriever
+import android.os.Build
+import android.util.Base64
+import android.util.Size
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -256,6 +261,30 @@ class SyncWorker(
                     providerFileId = driveOpaqueName
                 }
 
+                // Extract video frame thumbnail locally if video
+                var videoThumbBase64: String? = null
+                if (mimeType.startsWith("video/")) {
+                    try {
+                        val bitmap = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                            applicationContext.contentResolver.loadThumbnail(contentUri, Size(320, 320), null)
+                        } else {
+                            val retriever = MediaMetadataRetriever()
+                            retriever.setDataSource(applicationContext, contentUri)
+                            val frame = retriever.getFrameAtTime(1000000)
+                            retriever.release()
+                            frame
+                        }
+                        if (bitmap != null) {
+                            val out = ByteArrayOutputStream()
+                            bitmap.compress(Bitmap.CompressFormat.JPEG, 75, out)
+                            val b64 = Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
+                            videoThumbBase64 = "data:image/jpeg;base64,$b64"
+                        }
+                    } catch (e: Exception) {
+                        Log.w("SyncWorker", "Could not generate local video thumbnail for $filename: ${e.message}")
+                    }
+                }
+
                 // 3. Finalize upload with backend
                 val completeJson = JSONObject().apply {
                     put("filename", filename)
@@ -268,6 +297,9 @@ class SyncWorker(
                     put("deviceAssetId", id.toString())
                     if (!targetFolderId.isNullOrBlank()) {
                         put("folderId", targetFolderId)
+                    }
+                    if (!videoThumbBase64.isNullOrBlank()) {
+                        put("thumbnail", videoThumbBase64)
                     }
                 }
 
