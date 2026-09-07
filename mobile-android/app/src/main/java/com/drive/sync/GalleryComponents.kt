@@ -64,8 +64,11 @@ import coil.imageLoader
 import coil.request.ImageRequest
 import coil.size.Precision
 import coil.size.Size
+import androidx.core.content.FileProvider
+import android.content.pm.PackageManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.*
@@ -282,14 +285,238 @@ suspend fun downloadMediaToGallery(
     }
 }
 
-fun shareMedia(context: Context, item: CloudMedia, serverUrl: String, deviceId: String, deviceKey: String) {
-    val streamUrl = "${serverUrl.trimEnd('/')}/api/v1/files/${item.id}/stream?deviceId=$deviceId&deviceKey=$deviceKey"
-    val shareIntent = Intent(Intent.ACTION_SEND).apply {
-        type = "text/plain"
-        putExtra(Intent.EXTRA_SUBJECT, item.filename)
-        putExtra(Intent.EXTRA_TEXT, "Shared from myDrive: ${item.filename}\n$streamUrl")
+/**
+ * Downloads a media file to a temporary cache directory for sharing to external apps (WhatsApp, Telegram, etc.).
+ * Reports download progress via onProgress callback.
+ */
+suspend fun downloadMediaForSharing(
+    context: Context,
+    item: CloudMedia,
+    serverUrl: String,
+    deviceId: String,
+    deviceKey: String,
+    onProgress: (Float, Long, Long) -> Unit = { _, _, _ -> }
+): Uri? = withContext(Dispatchers.IO) {
+    try {
+        val shareDir = java.io.File(context.cacheDir, "shared_media").apply { mkdirs() }
+        val safeName = item.filename.replace(Regex("[^a-zA-Z0-9._-]"), "_")
+        val targetFile = java.io.File(shareDir, safeName)
+
+        val streamUrl = "${serverUrl.trimEnd('/')}/api/v1/files/${item.id}/stream?deviceId=$deviceId&deviceKey=$deviceKey"
+        val req = Request.Builder()
+            .url(streamUrl)
+            .addHeader("x-device-id", deviceId)
+            .addHeader("x-device-key", deviceKey)
+            .get()
+            .build()
+
+        val response = sharedHttpClient.newCall(req).execute()
+        if (!response.isSuccessful) return@withContext null
+
+        val body = response.body ?: return@withContext null
+        val totalBytes = if (body.contentLength() > 0) body.contentLength() else item.sizeBytes
+        var bytesCopied: Long = 0
+
+        targetFile.outputStream().use { out ->
+            body.byteStream().use { input ->
+                val buffer = ByteArray(32 * 1024)
+                var bytes = input.read(buffer)
+                while (bytes >= 0) {
+                    out.write(buffer, 0, bytes)
+                    bytesCopied += bytes
+                    if (totalBytes > 0) {
+                        onProgress((bytesCopied.toFloat() / totalBytes.toFloat()).coerceIn(0f, 1f), bytesCopied, totalBytes)
+                    }
+                    bytes = input.read(buffer)
+                }
+            }
+        }
+
+        FileProvider.getUriForFile(
+            context,
+            "${context.packageName}.fileprovider",
+            targetFile
+        )
+    } catch (e: Exception) {
+        e.printStackTrace()
+        null
     }
-    context.startActivity(Intent.createChooser(shareIntent, "Share ${item.filename}"))
+}
+
+/**
+ * Fires the system ACTION_SEND intent with the downloaded media file Uri.
+ */
+fun launchFileShareIntent(context: Context, item: CloudMedia, contentUri: Uri) {
+    val effectiveMime = item.mimeType.takeIf { it.isNotBlank() }
+        ?: if (item.mimeType.startsWith("video/")) "video/mp4" else "image/jpeg"
+
+    val shareIntent = Intent(Intent.ACTION_SEND).apply {
+        type = effectiveMime
+        putExtra(Intent.EXTRA_STREAM, contentUri)
+        putExtra(Intent.EXTRA_SUBJECT, item.filename)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+
+    val chooser = Intent.createChooser(shareIntent, "Share ${item.filename}").apply {
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+
+    val resInfoList = context.packageManager.queryIntentActivities(chooser, PackageManager.MATCH_DEFAULT_ONLY)
+    for (resolveInfo in resInfoList) {
+        val packageName = resolveInfo.activityInfo.packageName
+        context.grantUriPermission(packageName, contentUri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+
+    context.startActivity(chooser)
+}
+
+/**
+ * Fires the system ACTION_SEND_MULTIPLE intent with multiple media file Uris.
+ */
+fun launchMultipleFilesShareIntent(context: Context, uris: List<Uri>, mimeType: String = "*/*") {
+    val shareIntent = Intent(Intent.ACTION_SEND_MULTIPLE).apply {
+        type = mimeType
+        putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(uris))
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+
+    val chooser = Intent.createChooser(shareIntent, "Share ${uris.size} media files").apply {
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+
+    val resInfoList = context.packageManager.queryIntentActivities(chooser, PackageManager.MATCH_DEFAULT_ONLY)
+    for (resolveInfo in resInfoList) {
+        val packageName = resolveInfo.activityInfo.packageName
+        for (u in uris) {
+            context.grantUriPermission(packageName, u, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+    }
+
+    context.startActivity(chooser)
+}
+
+/**
+ * Modern AMOLED downloading dialog shown when downloading an item before sharing to external apps.
+ */
+@Composable
+fun ShareDownloadDialog(
+    filename: String,
+    progress: Float,
+    downloadedBytes: Long,
+    totalBytes: Long,
+    onCancel: () -> Unit
+) {
+    Dialog(
+        onDismissRequest = onCancel,
+        properties = DialogProperties(
+            dismissOnBackPress = true,
+            dismissOnClickOutside = false
+        )
+    ) {
+        Surface(
+            shape = RoundedCornerShape(24.dp),
+            color = Color(0xFF131317),
+            border = BorderStroke(1.dp, Color(0xFF27272A)),
+            shadowElevation = 16.dp,
+            modifier = Modifier
+                .fillMaxWidth(0.92f)
+                .wrapContentHeight()
+        ) {
+            Column(
+                modifier = Modifier.padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(54.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFF3B0764).copy(alpha = 0.5f))
+                        .border(1.dp, Color(0xFFA855F7).copy(alpha = 0.4f), CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.CloudDownload,
+                        contentDescription = "Downloading",
+                        tint = Color(0xFFC084FC),
+                        modifier = Modifier.size(28.dp)
+                    )
+                }
+
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = "Preparing Media to Share",
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 17.sp
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = filename,
+                        color = Color(0xFFA1A1AA),
+                        fontSize = 13.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    if (progress > 0f) {
+                        LinearProgressIndicator(
+                            progress = { progress.coerceIn(0f, 1f) },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(8.dp)
+                                .clip(RoundedCornerShape(4.dp)),
+                            color = Color(0xFFA855F7),
+                            trackColor = Color(0xFF27272A),
+                        )
+                    } else {
+                        LinearProgressIndicator(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(8.dp)
+                                .clip(RoundedCornerShape(4.dp)),
+                            color = Color(0xFFA855F7),
+                            trackColor = Color(0xFF27272A),
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = if (totalBytes > 0) "${formatBytes(downloadedBytes)} of ${formatBytes(totalBytes)}" else "Connecting...",
+                            color = Color(0xFF71717A),
+                            fontSize = 11.sp
+                        )
+                        Text(
+                            text = if (progress > 0f) "${(progress * 100).toInt()}%" else "Downloading...",
+                            color = Color(0xFFC084FC),
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 11.sp
+                        )
+                    }
+                }
+
+                OutlinedButton(
+                    onClick = onCancel,
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, Color(0xFF3F3F46)),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = Color(0xFFA1A1AA)
+                    ),
+                    modifier = Modifier.fillMaxWidth(0.5f)
+                ) {
+                    Text("Cancel", fontSize = 13.sp)
+                }
+            }
+        }
+    }
 }
 
 suspend fun apiToggleFavorite(
@@ -780,6 +1007,14 @@ fun FullGalleryScreen(
     var isActionLoading by remember { mutableStateOf(false) }
     var showEmptyTrashDialog by remember { mutableStateOf(false) }
 
+    // Share downloading state
+    var isGallerySharingDownloading by remember { mutableStateOf(false) }
+    var galleryShareProgress by remember { mutableFloatStateOf(0f) }
+    var galleryShareBytesDownloaded by remember { mutableLongStateOf(0L) }
+    var galleryShareTotalBytes by remember { mutableLongStateOf(0L) }
+    var galleryShareItemName by remember { mutableStateOf("") }
+    var galleryShareJob by remember { mutableStateOf<Job?>(null) }
+
     // Filter media
     val filteredList = remember(localList, filterType, searchQuery, selectedDeviceFilters.toList()) {
         localList.filter { item ->
@@ -1268,13 +1503,74 @@ fun FullGalleryScreen(
                             Icon(Icons.Default.Favorite, contentDescription = "Favorite", tint = Color(0xFFEF4444))
                         }
 
-                        // Bulk Share
+                        // Bulk Share (Downloads real media and opens share sheet)
                         IconButton(
                             onClick = {
                                 val ids = selectedIds.toList()
-                                val firstItem = localList.firstOrNull { ids.contains(it.id) }
-                                if (firstItem != null) {
-                                    shareMedia(context, firstItem, serverUrl, deviceId, deviceKey)
+                                val selectedItems = localList.filter { ids.contains(it.id) }
+                                if (selectedItems.isEmpty()) return@IconButton
+
+                                galleryShareJob?.cancel()
+                                galleryShareJob = coroutineScope.launch {
+                                    isGallerySharingDownloading = true
+                                    if (selectedItems.size == 1) {
+                                        val single = selectedItems.first()
+                                        galleryShareItemName = single.filename
+                                        galleryShareProgress = 0f
+                                        galleryShareBytesDownloaded = 0L
+                                        galleryShareTotalBytes = single.sizeBytes
+
+                                        val uri = downloadMediaForSharing(
+                                            context = context,
+                                            item = single,
+                                            serverUrl = serverUrl,
+                                            deviceId = deviceId,
+                                            deviceKey = deviceKey,
+                                            onProgress = { p, dl, total ->
+                                                galleryShareProgress = p
+                                                galleryShareBytesDownloaded = dl
+                                                galleryShareTotalBytes = total
+                                            }
+                                        )
+                                        isGallerySharingDownloading = false
+                                        if (uri != null) {
+                                            launchFileShareIntent(context, single, uri)
+                                            selectedIds.clear()
+                                            isSelectionMode = false
+                                        } else {
+                                            Toast.makeText(context, "Failed to download media for sharing", Toast.LENGTH_SHORT).show()
+                                        }
+                                    } else {
+                                        galleryShareItemName = "Downloading 1 of ${selectedItems.size}..."
+                                        galleryShareProgress = 0f
+                                        val downloadedUris = mutableListOf<Uri>()
+                                        for ((idx, mediaItem) in selectedItems.withIndex()) {
+                                            galleryShareItemName = "Downloading (${idx + 1}/${selectedItems.size}) ${mediaItem.filename}"
+                                            val uri = downloadMediaForSharing(
+                                                context = context,
+                                                item = mediaItem,
+                                                serverUrl = serverUrl,
+                                                deviceId = deviceId,
+                                                deviceKey = deviceKey,
+                                                onProgress = { p, dl, total ->
+                                                    galleryShareProgress = (idx.toFloat() + p) / selectedItems.size.toFloat()
+                                                    galleryShareBytesDownloaded = dl
+                                                    galleryShareTotalBytes = total
+                                                }
+                                            )
+                                            if (uri != null) {
+                                                downloadedUris.add(uri)
+                                            }
+                                        }
+                                        isGallerySharingDownloading = false
+                                        if (downloadedUris.isNotEmpty()) {
+                                            launchMultipleFilesShareIntent(context, downloadedUris)
+                                            selectedIds.clear()
+                                            isSelectionMode = false
+                                        } else {
+                                            Toast.makeText(context, "Failed to download items for sharing", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
                                 }
                             },
                             enabled = selectedIds.isNotEmpty()
@@ -1647,6 +1943,20 @@ fun FullGalleryScreen(
                 TextButton(onClick = { showEmptyTrashDialog = false }) {
                     Text("Cancel", color = Color.LightGray)
                 }
+            }
+        )
+    }
+
+    // 7. Downloading media before sharing dialog
+    if (isGallerySharingDownloading) {
+        ShareDownloadDialog(
+            filename = galleryShareItemName,
+            progress = galleryShareProgress,
+            downloadedBytes = galleryShareBytesDownloaded,
+            totalBytes = galleryShareTotalBytes,
+            onCancel = {
+                galleryShareJob?.cancel()
+                isGallerySharingDownloading = false
             }
         )
     }
@@ -2151,6 +2461,40 @@ fun FullScreenPhotoViewer(
     // Persist last successfully loaded image URL — shown blurred while next image loads (no spinner/blank screen)
     var prevImageUrl by remember { mutableStateOf<String?>(null) }
 
+    var isViewerSharingDownloading by remember { mutableStateOf(false) }
+    var viewerShareProgress by remember { mutableFloatStateOf(0f) }
+    var viewerShareBytesDownloaded by remember { mutableLongStateOf(0L) }
+    var viewerShareTotalBytes by remember { mutableLongStateOf(0L) }
+    var viewerShareJob by remember { mutableStateOf<Job?>(null) }
+
+    val triggerShare: (CloudMedia) -> Unit = { itemToShare ->
+        viewerShareJob?.cancel()
+        viewerShareJob = coroutineScope.launch {
+            isViewerSharingDownloading = true
+            viewerShareProgress = 0f
+            viewerShareBytesDownloaded = 0L
+            viewerShareTotalBytes = itemToShare.sizeBytes
+            val uri = downloadMediaForSharing(
+                context = context,
+                item = itemToShare,
+                serverUrl = serverUrl,
+                deviceId = deviceId,
+                deviceKey = deviceKey,
+                onProgress = { p, dl, total ->
+                    viewerShareProgress = p
+                    viewerShareBytesDownloaded = dl
+                    viewerShareTotalBytes = total
+                }
+            )
+            isViewerSharingDownloading = false
+            if (uri != null) {
+                launchFileShareIntent(context, itemToShare, uri)
+            } else {
+                Toast.makeText(context, "Failed to download media for sharing", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
     LaunchedEffect(currentItem.id) {
         isViewerMediaLoading = true
     }
@@ -2448,7 +2792,7 @@ fun FullScreenPhotoViewer(
                                     leadingIcon = { Icon(Icons.Default.Share, contentDescription = null, tint = Color.LightGray) },
                                     onClick = {
                                         isMoreMenuOpen = false
-                                        shareMedia(context, currentItem, serverUrl, deviceId, deviceKey)
+                                        triggerShare(currentItem)
                                     }
                                 )
                                 DropdownMenuItem(
@@ -2524,9 +2868,9 @@ fun FullScreenPhotoViewer(
                             Icon(Icons.Default.Download, contentDescription = "Download", tint = Color.White, modifier = Modifier.size(24.dp))
                         }
 
-                        // Share
+                        // Share (Downloads real media and opens share sheet)
                         IconButton(onClick = {
-                            shareMedia(context, currentItem, serverUrl, deviceId, deviceKey)
+                            triggerShare(currentItem)
                         }) {
                             Icon(Icons.Default.Share, contentDescription = "Share", tint = Color.White, modifier = Modifier.size(24.dp))
                         }
@@ -2542,6 +2886,20 @@ fun FullScreenPhotoViewer(
                         }
                     }
                 }
+            }
+
+            // Downloading media before sharing dialog
+            if (isViewerSharingDownloading) {
+                ShareDownloadDialog(
+                    filename = currentItem.filename,
+                    progress = viewerShareProgress,
+                    downloadedBytes = viewerShareBytesDownloaded,
+                    totalBytes = viewerShareTotalBytes,
+                    onCancel = {
+                        viewerShareJob?.cancel()
+                        isViewerSharingDownloading = false
+                    }
+                )
             }
         }
     }

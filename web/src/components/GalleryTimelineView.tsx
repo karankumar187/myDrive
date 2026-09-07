@@ -1436,17 +1436,46 @@ const FullScreenViewer: React.FC<{
     }
   };
 
+  const [isSharingDownloading, setIsSharingDownloading] = useState(false);
   const handleShare = async () => {
-    if (navigator.share) {
-      try {
+    const streamUrl = getStreamUrl(item._id);
+    try {
+      setIsSharingDownloading(true);
+      // Attempt to download the actual media file for sharing to other apps
+      if (typeof navigator !== 'undefined' && navigator.canShare) {
+        try {
+          const res = await fetch(streamUrl);
+          if (res.ok) {
+            const blob = await res.blob();
+            const file = new File([blob], item.filename, {
+              type: item.mimeType || blob.type || 'image/jpeg',
+            });
+            if (navigator.canShare({ files: [file] })) {
+              await navigator.share({
+                files: [file],
+                title: item.filename,
+              });
+              return;
+            }
+          }
+        } catch (_) {}
+      }
+
+      if (navigator.share) {
         await navigator.share({
           title: item.filename,
-          url: getStreamUrl(item._id),
+          url: streamUrl,
         });
-      } catch (err) {}
-    } else {
-      navigator.clipboard.writeText(getStreamUrl(item._id));
-      alert('Link copied to clipboard!');
+      } else {
+        await navigator.clipboard.writeText(streamUrl);
+        alert('Direct media link copied to clipboard!');
+      }
+    } catch (err: any) {
+      if (err.name !== 'AbortError') {
+        console.error('Share failed:', err);
+      }
+    } finally {
+      setIsSharingDownloading(false);
     }
   };
 
