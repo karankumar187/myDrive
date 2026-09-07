@@ -445,7 +445,9 @@ export const App: React.FC = () => {
                 key={id}
                 onClick={() => setActiveTab(id)}
                 className={`px-4 py-1.5 rounded-full text-xs font-semibold transition flex items-center space-x-1 ${
-                  activeTab === id ? 'bg-white text-zinc-950 shadow-sm' : 'text-zinc-400 hover:text-white'
+                  activeTab === id
+                    ? 'bg-purple-600 text-white shadow-[0_0_12px_rgba(168,85,247,0.4)]'
+                    : 'text-zinc-400 hover:text-white'
                 }`}
               >
                 <span>{label}</span>
