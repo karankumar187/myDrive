@@ -554,6 +554,7 @@ export const App: React.FC = () => {
           <StorageSummaryView
             summary={summary}
             onRefresh={loadDashboardData}
+            currentUser={currentUser}
           />
         )}
 

@@ -11,6 +11,7 @@ export interface StorageAccount {
   id: string;
   email: string;
   name: string;
+  avatarUrl?: string;
   totalBytes: number;
   usedBytes: number;
   availableBytes: number;

@@ -60,6 +60,7 @@ export class GoogleDriveService {
     email: string;
     name: string;
     googleSubId: string;
+    avatarUrl?: string;
   }> {
     const oauth2Client = this.getOAuth2Client();
     const { tokens } = await oauth2Client.getToken(code);
@@ -80,6 +81,7 @@ export class GoogleDriveService {
       email: userInfo.data.email || 'unknown@gmail.com',
       name: userInfo.data.name || 'Google Drive',
       googleSubId: userInfo.data.id || 'unknown_id',
+      avatarUrl: userInfo.data.picture || undefined,
     };
   }
 
@@ -94,7 +96,7 @@ export class GoogleDriveService {
     const drive = google.drive({ version: 'v3', auth: oauth2Client });
 
     const about = await drive.about.get({
-      fields: 'storageQuota',
+      fields: 'storageQuota, user(displayName, photoLink, emailAddress)',
     });
 
     const quota = about.data.storageQuota;
@@ -105,6 +107,20 @@ export class GoogleDriveService {
     account.totalStorageBytes = totalBytes;
     account.usedStorageBytes = usedBytes;
     account.lastQuotaSyncAt = new Date();
+
+    // Fetch and store Google account profile picture
+    const photo = about.data.user?.photoLink;
+    if (photo) {
+      account.avatarUrl = photo;
+    } else if (!account.avatarUrl) {
+      try {
+        const oauth2 = google.oauth2({ version: 'v2', auth: oauth2Client });
+        const userInfo = await oauth2.userinfo.get();
+        if (userInfo.data.picture) {
+          account.avatarUrl = userInfo.data.picture;
+        }
+      } catch {}
+    }
 
     // Check if nearing 100% capacity
     if (usedBytes >= totalBytes - 500 * 1024 * 1024) {

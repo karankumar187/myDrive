@@ -18,6 +18,7 @@ export interface StoragePoolSummary {
     id: string;
     email: string;
     name: string;
+    avatarUrl?: string;
     totalBytes: number;
     usedBytes: number;
     availableBytes: number;
@@ -33,6 +34,14 @@ export class StorageEngineService {
    */
   static async getPoolSummary(userId: Types.ObjectId): Promise<StoragePoolSummary> {
     const accounts = await StorageAccount.find({ userId });
+
+    // Background sync avatar for any accounts missing avatarUrl
+    const accountsWithoutAvatar = accounts.filter((a) => !a.avatarUrl);
+    if (accountsWithoutAvatar.length > 0) {
+      Promise.allSettled(
+        accountsWithoutAvatar.map((acc) => GoogleDriveService.syncAccountQuota(acc))
+      ).catch(() => {});
+    }
 
     let totalCapacityBytes = 0;
     let usedCapacityBytes = 0;
@@ -53,6 +62,7 @@ export class StorageEngineService {
         id: acc._id.toString(),
         email: acc.accountEmail,
         name: acc.accountName,
+        avatarUrl: acc.avatarUrl,
         totalBytes: acc.totalStorageBytes,
         usedBytes: acc.usedStorageBytes,
         availableBytes,

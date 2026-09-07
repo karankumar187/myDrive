@@ -106,6 +106,7 @@ export class StorageController {
       if (storageAccount) {
         storageAccount.accountEmail = tokens.email;
         storageAccount.accountName = tokens.name;
+        if (tokens.avatarUrl) storageAccount.avatarUrl = tokens.avatarUrl;
         storageAccount.encryptedRefreshToken = encrypted.ciphertext;
         storageAccount.refreshTokenIv = encrypted.iv;
         storageAccount.refreshTokenAuthTag = encrypted.authTag;
@@ -115,6 +116,7 @@ export class StorageController {
           userId,
           accountEmail: tokens.email,
           accountName: tokens.name,
+          avatarUrl: tokens.avatarUrl,
           googleDriveAccountId: tokens.googleSubId,
           encryptedRefreshToken: encrypted.ciphertext,
           refreshTokenIv: encrypted.iv,

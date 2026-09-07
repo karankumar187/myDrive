@@ -58,6 +58,10 @@ const StorageAccountSchema = new Schema<IStorageAccountDocument>(
       type: Date,
       default: Date.now,
     },
+    avatarUrl: {
+      type: String,
+      trim: true,
+    },
   },
   {
     timestamps: true,

@@ -31,6 +31,7 @@ export interface IStorageAccount {
   status: StorageAccountStatus;
   isPrimary: boolean;
   lastQuotaSyncAt: Date;
+  avatarUrl?: string;
   createdAt: Date;
   updatedAt: Date;
 }

@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { StorageSummary, StorageAccount } from '../types.js';
+import React, { useState, useEffect, useRef } from 'react';
+import { StorageSummary, StorageAccount, User } from '../types.js';
 import {
   HardDrive,
   Plus,
@@ -14,6 +14,7 @@ import {
   Trash2,
   ExternalLink,
   X,
+  User as UserIcon,
 } from 'lucide-react';
 import { api } from '../services/api.js';
 import { formatBytes } from '../utils/format.js';
@@ -21,12 +22,14 @@ import { formatBytes } from '../utils/format.js';
 interface Props {
   summary: StorageSummary | null;
   onRefresh: () => void;
+  currentUser?: User | null;
 }
 
 /**
  * Google Account Avatar component.
- * Displays user's Google profile picture if available, or renders
- * a vibrant Google-style circular avatar with the user's initial.
+ * Displays user's Google profile picture (from drive.about.get or userinfo)
+ * with referrerPolicy='no-referrer' so Google's CDN doesn't block it.
+ * Falls back to an authentic Google profile silhouette with a Google-blue badge.
  */
 const AccountAvatar: React.FC<{ name: string; email: string; avatarUrl?: string }> = ({
   name,
@@ -34,51 +37,61 @@ const AccountAvatar: React.FC<{ name: string; email: string; avatarUrl?: string 
   avatarUrl,
 }) => {
   const [imgError, setImgError] = useState(false);
-  const initial = (name || email || 'G').charAt(0).toUpperCase();
 
-  const gradients = [
-    'from-purple-600 to-indigo-600',
-    'from-violet-600 to-purple-800',
-    'from-fuchsia-600 to-purple-600',
-    'from-purple-500 to-pink-600',
-    'from-indigo-600 to-violet-700',
-  ];
-  const charCode = (name || email).split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-  const gradient = gradients[Math.abs(charCode) % gradients.length];
-
-  const src =
-    avatarUrl ||
-    `https://ui-avatars.com/api/?name=${encodeURIComponent(
-      name || email
-    )}&background=7c3aed&color=fff&bold=true&size=96`;
-
-  if (!imgError) {
+  if (avatarUrl && !imgError) {
     return (
       <img
-        src={src}
+        src={avatarUrl}
         alt={name || email}
+        referrerPolicy="no-referrer"
+        crossOrigin="anonymous"
         onError={() => setImgError(true)}
         className="w-9 h-9 rounded-full object-cover ring-2 ring-purple-500/30 shadow-md flex-shrink-0"
       />
     );
   }
 
+  // Google profile avatar fallback: Google account avatar silhouette
   return (
     <div
-      className={`w-9 h-9 rounded-full bg-gradient-to-tr ${gradient} flex items-center justify-center text-white font-bold text-xs shadow-md ring-2 ring-purple-500/30 flex-shrink-0`}
+      className="w-9 h-9 rounded-full bg-[#1c192b] border border-[#373050] flex items-center justify-center relative overflow-hidden ring-2 ring-purple-500/20 shadow-md flex-shrink-0"
+      title={name ? `${name} (${email})` : email}
     >
-      {initial}
+      <UserIcon className="w-4 h-4 text-purple-300" />
+      <span className="absolute bottom-0.5 right-0.5 w-2 h-2 rounded-full bg-[#4285F4] border border-[#111018]" />
     </div>
   );
 };
 
-export const StorageSummaryView: React.FC<Props> = ({ summary, onRefresh }) => {
+export const StorageSummaryView: React.FC<Props> = ({ summary, onRefresh, currentUser }) => {
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [activeMenuId, setActiveMenuId] = useState<string | null>(null);
   const [syncingAccountId, setSyncingAccountId] = useState<string | null>(null);
   const [isSyncingAll, setIsSyncingAll] = useState(false);
+  const autoSyncAttempted = useRef(false);
+
+  // Resolves the Google account avatar (from account itself or matching currentUser)
+  const getAccountAvatarUrl = (acc: StorageAccount): string | undefined => {
+    if (acc.avatarUrl) return acc.avatarUrl;
+    if (currentUser?.avatarUrl && acc.email.toLowerCase() === currentUser?.email?.toLowerCase()) {
+      return currentUser.avatarUrl;
+    }
+    return undefined;
+  };
+
+  // Auto-sync missing account avatars in the background on initial load
+  useEffect(() => {
+    if (autoSyncAttempted.current || !summary?.accounts?.length) return;
+    const missing = summary.accounts.some(
+      (acc) => !getAccountAvatarUrl(acc)
+    );
+    if (missing) {
+      autoSyncAttempted.current = true;
+      handleSyncAll();
+    }
+  }, [summary?.accounts]);
 
   // Close open dropdown when clicking outside
   useEffect(() => {
@@ -183,7 +196,7 @@ export const StorageSummaryView: React.FC<Props> = ({ summary, onRefresh }) => {
                 className="flex items-center space-x-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-gradient-to-r from-purple-600 to-violet-500 hover:from-purple-500 hover:to-violet-400 rounded-xl shadow-[0_0_15px_rgba(168,85,247,0.4)] transition active:scale-95 disabled:opacity-50"
               >
                 <Plus className="w-3.5 h-3.5" />
-                <span>+ Connect Drive</span>
+                <span>Connect Drive</span>
               </button>
             </div>
 
@@ -382,7 +395,11 @@ export const StorageSummaryView: React.FC<Props> = ({ summary, onRefresh }) => {
                 <div className="flex items-center justify-between">
                   <div className="flex items-center space-x-3 min-w-0">
                     {/* Google Account Avatar */}
-                    <AccountAvatar name={acc.name} email={acc.email} />
+                    <AccountAvatar
+                      name={acc.name}
+                      email={acc.email}
+                      avatarUrl={getAccountAvatarUrl(acc)}
+                    />
 
                     <div className="min-w-0">
                       <p className="font-semibold text-white text-xs sm:text-sm truncate group-hover:text-purple-300 transition max-w-[150px] sm:max-w-[170px]">
@@ -503,7 +520,11 @@ export const StorageSummaryView: React.FC<Props> = ({ summary, onRefresh }) => {
               >
                 {/* Left: Avatar + Name/Email */}
                 <div className="flex items-center space-x-3 min-w-0 w-1/3">
-                  <AccountAvatar name={acc.name} email={acc.email} />
+                  <AccountAvatar
+                    name={acc.name}
+                    email={acc.email}
+                    avatarUrl={getAccountAvatarUrl(acc)}
+                  />
                   <div className="min-w-0">
                     <p className="font-semibold text-white text-xs truncate group-hover:text-purple-300 transition">
                       {acc.email}
