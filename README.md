@@ -5,10 +5,10 @@
 [![React](https://img.shields.io/badge/React-18-61DAFB?logo=react)](https://react.dev/)
 [![Android](https://img.shields.io/badge/Android-Jetpack%20Compose-3DDC84?logo=android)](https://developer.android.com/jetpack/compose)
 [![Cloudflare](https://img.shields.io/badge/Cloudflare-Workers%20%26%20Edge%20Cache-F38020?logo=cloudflare)](https://workers.cloudflare.com/)
-[![Render](https://img.shields.io/badge/Deploy-Render-46E3B7?logo=render)](https://render.com)
+[![Oracle Cloud](https://img.shields.io/badge/Oracle%20Cloud-Free%20Tier-F80000?logo=oracle)](https://www.oracle.com/cloud/free/)
 [![License](https://img.shields.io/badge/License-MIT-purple)](#license)
 
-**myDrive** is a self-hosted, enterprise-grade personal cloud storage platform that seamlessly pools multiple Google Drive accounts (15 GB free tiers) into one unified, infinite storage drive. It features zero-knowledge client-side encryption (E2EE), instant SHA-256 deduplication, a Google Photos-style timeline gallery, an Android Jetpack Compose app with background battery-aware sync, and a global Cloudflare edge caching layer.
+**myDrive** is a self-hosted, enterprise-grade personal cloud storage platform that seamlessly pools multiple Google Drive accounts (15 GB free tiers) into one unified, infinite storage drive. It features zero-knowledge client-side encryption (E2EE), instant SHA-256 deduplication, a Google Photos-style timeline gallery, an Android Jetpack Compose app with real-time Socket.IO sync and Zomato-style live backup notifications, and a global Cloudflare edge caching layer.
 
 ---
 
@@ -96,7 +96,16 @@
 - **Instant Hash Deduplication**: Pre-computes raw SHA-256 hashes before encryption. If an identical file exists in the cloud, it links immediately without consuming additional Drive space.
 
 ### 4. Android App (Jetpack Compose & Kotlin)
-- **100% Native Jetpack Compose**: Beautiful dark theme, Material 3 components, smooth animations, and edge-to-edge UI.
+- **100% Native Jetpack Compose**: Beautiful dark theme (`#08080A`), Material 3 components, smooth animations, and edge-to-edge UI.
+- **Sleek Startup Screen**: Animated "Connecting to myDrive..." startup screen with pulsing logo and ambient purple glow, eliminating empty UI flashes.
+- **Persistent Permission Enforcement**: Root-level lifecycle gate (`RootAppScreen` & `PermissionsRequiredScreen`) enforcing Gallery/Storage and Notification permissions every time the app opens until fully granted.
+- **Zomato-Style Live Notifications**: Unified across manual **"Sync Now"** and scheduled **"Auto Sync"** using a silent `IMPORTANCE_LOW` channel:
+  - Real-time progress bar, percentage, and current filename.
+  - Subtext showing destination storage account (e.g. `☁ Google Drive`).
+  - Actionable **"Stop Sync"** button directly in the notification shade to cancel transfers immediately.
+  - Completion summary notification when backup finishes.
+- **Real-Time Socket.IO Synchronization**: Bi-directional event integration via `DriveSocketManager`. Optimistic 0ms deletions and instantaneous timeline refresh on file uploads, moves, renames, and trash actions.
+- **Instant Media Previews**: 500 MB Coil disk cache with 0ms thumbnail memory placeholders and video poster frames that eliminate black loading screens.
 - **Zero-Memory Streaming Uploads**: Streams file bytes directly through Okio pipes (`ContentResolver.openInputStream(uri)`) into OkHttp request bodies. Eliminates full-file heap buffers and prevents OutOfMemory crashes on multi-GB 4K videos.
 - **Smart WorkManager Background Sync**:
   - Configurable periodic sync intervals (1h, 2h, 4h, 6h, 12h, 24h) with initial stagger offset.
@@ -105,7 +114,7 @@
   - **Network Policy**: Wi-Fi Only or Unmetered Network toggles.
 - **Inbound Sync**: Auto-downloads photos and documents uploaded from other devices or the web directly into your Android gallery.
 - **File Management**: Long-press multi-select, batch favorites, batch move, batch trash, rename dialogs, and folder picker.
-- **R8 Minification**: Pre-configured ProGuard/R8 shrinking reducing APK size to just ~7 MB.
+- **R8 Minification & Size**: Pre-configured ProGuard/R8 shrinking reducing the Release APK size to just **7.2 MB** (down from 22 MB for debug).
 
 ### 5. iOS Shortcuts Automated Backup
 - **Native iOS Shortcuts Support**: Back up iPhone camera roll and documents automatically without installing third-party apps or paying for an Apple Developer license.
@@ -137,8 +146,8 @@
 |---|---|---|
 | **Edge Gateway** | Cloudflare Workers (TypeScript) | Cloudflare Edge Network (330+ locations) |
 | **Web Frontend** | React 18, Vite 6, TailwindCSS, Lucide | Cloudflare Workers Static Assets |
-| **Backend API** | Node.js, Express, TypeScript, Passport.js | Render Web Service |
-| **Mobile App** | Kotlin, Jetpack Compose, WorkManager, OkHttp | Android 8.0+ (API 26+) |
+| **Backend API** | Node.js, Express, TypeScript, Passport.js, PM2 | Oracle Cloud Free Tier (VM.Standard.E2.1.Micro) / Render |
+| **Mobile App** | Kotlin, Jetpack Compose, WorkManager, Socket.IO | Android 8.0+ (API 26+) |
 | **Database** | MongoDB Atlas / MongoDB 7.0 | Managed Cloud / Docker Compose |
 | **Object Storage** | Google Drive API v3 (`drive.file` scope) | Pooled Google Accounts |
 
@@ -182,26 +191,61 @@ Web dashboard will start at `http://localhost:5173`.
 
 The Android project is located in `mobile-android/`.
 
-### 1. Build Release APK (Optimized & Shrunk with R8)
+### 1. Build Release APK (Optimized & Shrunk with R8 — 7.2 MB)
 ```bash
 cd mobile-android
 JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradlew assembleRelease
 ```
-The compiled, optimized release APK is located at:
+The compiled release APK is located at:
 ```
 mobile-android/app/build/outputs/apk/release/app-release.apk
 ```
 
-### 2. Install on Device via ADB
+### 2. Build Debug APK (22 MB)
 ```bash
-adb install -r app/build/outputs/apk/release/app-release.apk
+cd mobile-android
+JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradlew assembleDebug
+```
+The compiled debug APK is located at:
+```
+mobile-android/app/build/outputs/apk/debug/app-debug.apk
+```
+
+### 3. Install on Device via ADB
+```bash
+# Install Release APK
+adb install -r mobile-android/app/build/outputs/apk/release/app-release.apk
+
+# Or Install Debug APK
+adb install -r mobile-android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
 ---
 
 ## 🌐 Production Deployment Guide
 
-### Render (Backend)
+### Oracle Cloud Infrastructure (OCI Free Tier VM — Recommended)
+1. Launch an **Always Free Compute Instance** (Ubuntu or Oracle Linux).
+2. Configure Security Lists and iptables to allow ingress on ports `22` (SSH), `80` (HTTP), `443` (HTTPS), and `3000` (Backend API).
+3. Connect via SSH and install Node.js 20+ and PM2:
+   ```bash
+   sudo apt update && sudo apt install -y nodejs npm git
+   sudo npm install -g pm2
+   ```
+4. Clone the repository and configure `.env`:
+   ```bash
+   git clone https://github.com/<your-username>/Drive.git myDrive
+   cd myDrive/backend
+   npm install && npm run build
+   ```
+5. Start the backend with PM2 for auto-restart and zero downtime:
+   ```bash
+   pm2 start dist/server.js --name "mydrive-backend"
+   pm2 save
+   pm2 startup
+   ```
+
+### Render (Alternative Free Tier)
 1. Fork or push this repository to GitHub.
 2. In Render, create a new **Web Service** pointing to the repository.
 3. Configure the build and start commands:
