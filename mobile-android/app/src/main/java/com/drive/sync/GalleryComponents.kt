@@ -8,9 +8,20 @@ import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import android.media.MediaPlayer
+import android.media.MediaScannerConnection
+import com.drive.sync.network.SyncNotificationHelper
 import android.widget.MediaController
 import android.widget.Toast
 import android.widget.VideoView
+import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.ProgressiveMediaSource
+import androidx.media3.ui.AspectRatioFrameLayout
+import androidx.media3.ui.PlayerView
+import androidx.annotation.OptIn as AndroidXOptIn
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
@@ -136,40 +147,134 @@ suspend fun downloadMediaToGallery(
 ): Boolean = withContext(Dispatchers.IO) {
     try {
         val streamUrl = "${serverUrl.trimEnd('/')}/api/v1/files/${item.id}/stream?deviceId=$deviceId&deviceKey=$deviceKey"
-        val req = Request.Builder().url(streamUrl).build()
+        val req = Request.Builder()
+            .url(streamUrl)
+            .addHeader("x-device-id", deviceId)
+            .addHeader("x-device-key", deviceKey)
+            .build()
         val res = sharedHttpClient.newCall(req).execute()
-        if (!res.isSuccessful) return@withContext false
-        val bytes = res.body?.bytes() ?: return@withContext false
+        if (!res.isSuccessful) {
+            res.close()
+            return@withContext false
+        }
+        val body = res.body ?: return@withContext false
 
-        val isVideo = item.mimeType.startsWith("video/")
-        val contentValues = ContentValues().apply {
-            put(MediaStore.MediaColumns.DISPLAY_NAME, item.filename)
-            put(MediaStore.MediaColumns.MIME_TYPE, item.mimeType)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        val isVideo = item.mimeType.startsWith("video/") ||
+                item.filename.endsWith(".mp4", true) ||
+                item.filename.endsWith(".mkv", true) ||
+                item.filename.endsWith(".mov", true) ||
+                item.filename.endsWith(".webm", true)
+
+        val effectiveMime = when {
+            item.mimeType.isNotBlank() && item.mimeType != "application/octet-stream" -> item.mimeType
+            isVideo -> "video/mp4"
+            item.filename.endsWith(".png", true) -> "image/png"
+            item.filename.endsWith(".webp", true) -> "image/webp"
+            else -> "image/jpeg"
+        }
+
+        var insertedUri: Uri? = null
+        var localFilePath: String? = null
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val contentValues = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, item.filename)
+                put(MediaStore.MediaColumns.MIME_TYPE, effectiveMime)
                 put(
                     MediaStore.MediaColumns.RELATIVE_PATH,
                     if (isVideo) Environment.DIRECTORY_MOVIES + "/myDrive" else Environment.DIRECTORY_PICTURES + "/myDrive"
                 )
                 put(MediaStore.MediaColumns.IS_PENDING, 1)
             }
-        }
 
-        val collection = if (isVideo) {
-            MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+            val collection = if (isVideo) {
+                MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+            } else {
+                MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+            }
+
+            insertedUri = context.contentResolver.insert(collection, contentValues)
+            if (insertedUri == null) {
+                val dot = item.filename.lastIndexOf('.')
+                val safeName = if (dot != -1) {
+                    "${item.filename.substring(0, dot)}_${System.currentTimeMillis()}${item.filename.substring(dot)}"
+                } else {
+                    "${item.filename}_${System.currentTimeMillis()}"
+                }
+                contentValues.put(MediaStore.MediaColumns.DISPLAY_NAME, safeName)
+                insertedUri = context.contentResolver.insert(collection, contentValues)
+            }
+
+            if (insertedUri != null) {
+                context.contentResolver.openOutputStream(insertedUri)?.use { out ->
+                    body.byteStream().use { input ->
+                        input.copyTo(out)
+                    }
+                }
+                contentValues.clear()
+                contentValues.put(MediaStore.MediaColumns.IS_PENDING, 0)
+                context.contentResolver.update(insertedUri, contentValues, null, null)
+
+                try {
+                    context.contentResolver.query(insertedUri, arrayOf(MediaStore.MediaColumns.DATA), null, null, null)?.use { cursor ->
+                        if (cursor.moveToFirst()) {
+                            val idx = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DATA)
+                            localFilePath = cursor.getString(idx)
+                        }
+                    }
+                } catch (_: Exception) {}
+            }
         } else {
-            MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+            // Pre-Q (API < 29)
+            val dir = if (isVideo) {
+                java.io.File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES), "myDrive")
+            } else {
+                java.io.File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES), "myDrive")
+            }
+            dir.mkdirs()
+            var targetFile = java.io.File(dir, item.filename)
+            if (targetFile.exists()) {
+                val dot = item.filename.lastIndexOf('.')
+                val safeName = if (dot != -1) {
+                    "${item.filename.substring(0, dot)}_${System.currentTimeMillis()}${item.filename.substring(dot)}"
+                } else {
+                    "${item.filename}_${System.currentTimeMillis()}"
+                }
+                targetFile = java.io.File(dir, safeName)
+            }
+            targetFile.outputStream().use { out ->
+                body.byteStream().use { input ->
+                    input.copyTo(out)
+                }
+            }
+            localFilePath = targetFile.absolutePath
+            insertedUri = Uri.fromFile(targetFile)
         }
 
-        val uri = context.contentResolver.insert(collection, contentValues) ?: return@withContext false
-        context.contentResolver.openOutputStream(uri)?.use { out ->
-            out.write(bytes)
+        // Force immediate Gallery indexing via MediaScannerConnection and broadcast
+        if (!localFilePath.isNullOrBlank()) {
+            MediaScannerConnection.scanFile(
+                context.applicationContext,
+                arrayOf(localFilePath),
+                arrayOf(effectiveMime),
+                null
+            )
+        }
+        if (insertedUri != null) {
+            try {
+                val scanIntent = Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE, insertedUri)
+                context.sendBroadcast(scanIntent)
+            } catch (_: Exception) {}
         }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            contentValues.clear()
-            contentValues.put(MediaStore.MediaColumns.IS_PENDING, 0)
-            context.contentResolver.update(uri, contentValues, null, null)
-        }
+        // Display download notification
+        SyncNotificationHelper.showDownloadCompleteNotification(
+            context = context,
+            filename = item.filename,
+            isMedia = true,
+            fileUri = insertedUri
+        )
+
         true
     } catch (e: Exception) {
         e.printStackTrace()
@@ -379,19 +484,19 @@ enum class ProgressColorType {
 }
 
 fun getProgressColor(type: ProgressColorType): Color = when (type) {
-    ProgressColorType.DEFAULT -> Color(0xFFA855F7)
+    ProgressColorType.DEFAULT -> Color(0xFF38BDF8)
     ProgressColorType.UPLOAD -> Color(0xFF38BDF8)
     ProgressColorType.SYNC -> Color(0xFF10B981)
-    ProgressColorType.TRASH -> Color(0xFFF43F5E)
-    ProgressColorType.DECRYPT -> Color(0xFF8B5CF6)
+    ProgressColorType.TRASH -> Color(0xFFEF4444)
+    ProgressColorType.DECRYPT -> Color(0xFF0EA5E9)
 }
 
 fun getProgressTrackColor(type: ProgressColorType): Color = when (type) {
-    ProgressColorType.DEFAULT -> Color(0x22A855F7)
+    ProgressColorType.DEFAULT -> Color(0x2238BDF8)
     ProgressColorType.UPLOAD -> Color(0x2238BDF8)
     ProgressColorType.SYNC -> Color(0x2210B981)
-    ProgressColorType.TRASH -> Color(0x22F43F5E)
-    ProgressColorType.DECRYPT -> Color(0x228B5CF6)
+    ProgressColorType.TRASH -> Color(0x22EF4444)
+    ProgressColorType.DECRYPT -> Color(0x220EA5E9)
 }
 
 @Composable
@@ -497,8 +602,8 @@ private fun GalleryMediaTile(
     Box(
         modifier = Modifier
             .aspectRatio(1f)
-            .clip(RoundedCornerShape(4.dp))
-            .background(Color(0xFF14141D))
+            .clip(RoundedCornerShape(6.dp))
+            .background(Color(0xFF101014))
             .combinedClickable(
                 onClick = onClick,
                 onLongClick = onLongClick
@@ -510,7 +615,7 @@ private fun GalleryMediaTile(
                     .fillMaxSize()
                     .background(
                         Brush.verticalGradient(
-                            listOf(Color(0xFF261044), Color(0xFF101018))
+                            listOf(Color(0xFF1E2028), Color(0xFF0C0C10))
                         )
                     ),
                 contentAlignment = Alignment.Center
@@ -518,8 +623,8 @@ private fun GalleryMediaTile(
                 Icon(
                     Icons.Default.PlayArrow,
                     contentDescription = null,
-                    tint = Color(0xFFA855F7).copy(alpha = 0.75f),
-                    modifier = Modifier.size(34.dp)
+                    tint = Color.White.copy(alpha = 0.8f),
+                    modifier = Modifier.size(32.dp)
                 )
             }
         }
@@ -532,28 +637,28 @@ private fun GalleryMediaTile(
             contentScale = ContentScale.Crop
         )
 
-        // Video Indicator
+        // Video Indicator Badge
         if (isVideo) {
             Box(
                 modifier = Modifier
-                    .align(Alignment.BottomStart)
-                    .padding(3.dp)
-                    .background(Color.Black.copy(alpha = 0.7f), RoundedCornerShape(3.dp))
-                    .padding(horizontal = 4.dp, vertical = 2.dp)
+                    .align(Alignment.BottomEnd)
+                    .padding(5.dp)
+                    .background(Color.Black.copy(alpha = 0.65f), RoundedCornerShape(6.dp))
+                    .padding(horizontal = 6.dp, vertical = 3.dp)
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
                         Icons.Default.PlayArrow,
                         contentDescription = null,
                         tint = Color.White,
-                        modifier = Modifier.size(10.dp)
+                        modifier = Modifier.size(11.dp)
                     )
                     if (item.duration != null && item.duration > 0) {
-                        Spacer(modifier = Modifier.width(2.dp))
+                        Spacer(modifier = Modifier.width(3.dp))
                         Text(
-                            text = "${item.duration.toInt()}s",
+                            text = formatVideoTime((item.duration * 1000).toLong()),
                             color = Color.White,
-                            fontSize = 8.sp,
+                            fontSize = 10.sp,
                             fontWeight = FontWeight.Bold
                         )
                     }
@@ -565,16 +670,16 @@ private fun GalleryMediaTile(
         if (item.isCloudOnly) {
             Box(
                 modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(3.dp)
+                    .align(Alignment.BottomStart)
+                    .padding(4.dp)
                     .background(Color.Black.copy(alpha = 0.6f), CircleShape)
-                    .padding(2.dp)
+                    .padding(3.dp)
             ) {
                 Icon(
                     Icons.Default.Cloud,
                     contentDescription = "Cloud only",
-                    tint = Color(0xFFA855F7),
-                    modifier = Modifier.size(10.dp)
+                    tint = Color(0xFF94A3B8),
+                    modifier = Modifier.size(11.dp)
                 )
             }
         }
@@ -584,15 +689,15 @@ private fun GalleryMediaTile(
             Box(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .padding(3.dp)
+                    .padding(4.dp)
                     .background(Color.Black.copy(alpha = 0.6f), CircleShape)
-                    .padding(2.dp)
+                    .padding(3.dp)
             ) {
                 Icon(
                     Icons.Default.Favorite,
                     contentDescription = "Favorite",
                     tint = Color(0xFFEF4444),
-                    modifier = Modifier.size(10.dp)
+                    modifier = Modifier.size(11.dp)
                 )
             }
         }
@@ -602,18 +707,18 @@ private fun GalleryMediaTile(
             Box(
                 modifier = Modifier
                     .align(Alignment.TopStart)
-                    .padding(3.dp)
+                    .padding(4.dp)
                     .background(
-                        if (isSelected) Color(0xFFA855F7) else Color.Black.copy(alpha = 0.5f),
+                        if (isSelected) Color(0xFF38BDF8) else Color.Black.copy(alpha = 0.55f),
                         CircleShape
                     )
-                    .padding(2.dp)
+                    .padding(3.dp)
             ) {
                 Icon(
                     if (isSelected) Icons.Default.Check else Icons.Default.RadioButtonUnchecked,
                     contentDescription = null,
-                    tint = Color.White,
-                    modifier = Modifier.size(12.dp)
+                    tint = if (isSelected) Color.Black else Color.White,
+                    modifier = Modifier.size(13.dp)
                 )
             }
         }
@@ -714,12 +819,12 @@ fun FullGalleryScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF09090C))
+            .background(Color.Black)
     ) {
         // Top Header Bar
         Surface(
             modifier = Modifier.fillMaxWidth(),
-            color = Color(0xFF101015),
+            color = Color(0xFF0A0A0E),
             shadowElevation = 4.dp
         ) {
             Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)) {
@@ -752,10 +857,10 @@ fun FullGalleryScreen(
                                 .height(50.dp),
                             shape = RoundedCornerShape(25.dp),
                             colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = Color(0xFFA855F7),
-                                unfocusedBorderColor = Color(0xFF27273A),
-                                focusedContainerColor = Color(0xFF161622),
-                                unfocusedContainerColor = Color(0xFF161622)
+                                focusedBorderColor = Color(0xFF38BDF8),
+                                unfocusedBorderColor = Color(0xFF27272A),
+                                focusedContainerColor = Color(0xFF14141B),
+                                unfocusedContainerColor = Color(0xFF14141B)
                             )
                         )
                     } else {
@@ -773,7 +878,7 @@ fun FullGalleryScreen(
                                 Text(
                                     text = buildAnnotatedString {
                                         append("my")
-                                        withStyle(style = SpanStyle(color = Color(0xFFC084FC))) {
+                                        withStyle(style = SpanStyle(color = Color(0xFF38BDF8))) {
                                             append("Drive")
                                         }
                                     },
@@ -787,7 +892,7 @@ fun FullGalleryScreen(
                                     modifier = Modifier
                                         .size(6.dp)
                                         .clip(CircleShape)
-                                        .background(Color(0xFFA855F7))
+                                        .background(Color(0xFF38BDF8))
                                 )
                             }
                         }
@@ -806,11 +911,11 @@ fun FullGalleryScreen(
                                 DropdownMenu(
                                     expanded = isMoreMenuOpen,
                                     onDismissRequest = { isMoreMenuOpen = false },
-                                    modifier = Modifier.background(Color(0xFF1B1B26))
+                                    modifier = Modifier.background(Color(0xFF111116))
                                 ) {
                                     DropdownMenuItem(
                                         text = { Text("Select Mode", color = Color.White) },
-                                        leadingIcon = { Icon(Icons.Default.CheckCircleOutline, contentDescription = null, tint = Color(0xFFA855F7)) },
+                                        leadingIcon = { Icon(Icons.Default.CheckCircleOutline, contentDescription = null, tint = Color(0xFF38BDF8)) },
                                         onClick = {
                                             isSelectionMode = true
                                             isMoreMenuOpen = false
@@ -834,7 +939,7 @@ fun FullGalleryScreen(
                                             isMoreMenuOpen = false
                                         }
                                     )
-                                    HorizontalDivider(color = Color(0xFF28283C))
+                                    HorizontalDivider(color = Color(0xFF27272A))
                                     DropdownMenuItem(
                                         text = { Text("Empty Cloud Trash", color = Color(0xFFEF4444)) },
                                         leadingIcon = { Icon(Icons.Default.DeleteSweep, contentDescription = null, tint = Color(0xFFEF4444)) },
@@ -860,8 +965,8 @@ fun FullGalleryScreen(
                         Box {
                             Surface(
                                 shape = RoundedCornerShape(20.dp),
-                                color = Color(0xFF1E1E2C),
-                                border = BorderStroke(1.dp, Color(0xFF323247)),
+                                color = Color(0xFF14141B),
+                                border = BorderStroke(1.dp, Color(0xFF27272A)),
                                 modifier = Modifier.clickable { isFilterMenuOpen = true }
                             ) {
                                 Row(
@@ -887,14 +992,14 @@ fun FullGalleryScreen(
                             DropdownMenu(
                                 expanded = isFilterMenuOpen,
                                 onDismissRequest = { isFilterMenuOpen = false },
-                                modifier = Modifier.background(Color(0xFF1B1B26))
+                                modifier = Modifier.background(Color(0xFF111116))
                             ) {
                                 listOf("All Photos", "Favorites", "Videos", "Photos").forEach { opt ->
                                     DropdownMenuItem(
                                         text = {
                                             Text(
                                                 text = opt,
-                                                color = if (filterType == opt) Color(0xFFA855F7) else Color.White,
+                                                color = if (filterType == opt) Color(0xFF38BDF8) else Color.White,
                                                 fontWeight = if (filterType == opt) FontWeight.Bold else FontWeight.Normal
                                             )
                                         },
@@ -911,8 +1016,8 @@ fun FullGalleryScreen(
                         Box {
                             Surface(
                                 shape = RoundedCornerShape(20.dp),
-                                color = if (selectedDeviceFilters.isNotEmpty()) Color(0xFF2E1A47) else Color(0xFF1E1E2C),
-                                border = BorderStroke(1.dp, if (selectedDeviceFilters.isNotEmpty()) Color(0xFFA855F7) else Color(0xFF323247)),
+                                color = if (selectedDeviceFilters.isNotEmpty()) Color(0xFF1E293B) else Color(0xFF14141B),
+                                border = BorderStroke(1.dp, if (selectedDeviceFilters.isNotEmpty()) Color(0xFF38BDF8) else Color(0xFF27272A)),
                                 modifier = Modifier.clickable { isDeviceFilterMenuOpen = true }
                             ) {
                                 Row(
@@ -922,7 +1027,7 @@ fun FullGalleryScreen(
                                     Icon(
                                         Icons.Default.PhoneAndroid,
                                         contentDescription = null,
-                                        tint = if (selectedDeviceFilters.isNotEmpty()) Color(0xFFA855F7) else Color(0xFF94A3B8),
+                                        tint = if (selectedDeviceFilters.isNotEmpty()) Color(0xFF38BDF8) else Color(0xFF94A3B8),
                                         modifier = Modifier.size(13.dp)
                                     )
                                     Spacer(modifier = Modifier.width(4.dp))
@@ -946,7 +1051,7 @@ fun FullGalleryScreen(
                                 expanded = isDeviceFilterMenuOpen,
                                 onDismissRequest = { isDeviceFilterMenuOpen = false },
                                 modifier = Modifier
-                                    .background(Color(0xFF1B1B26))
+                                    .background(Color(0xFF111116))
                                     .width(250.dp)
                             ) {
                                 // "All Devices" checkbox
@@ -961,7 +1066,7 @@ fun FullGalleryScreen(
                                                 checked = isAllDevices,
                                                 onCheckedChange = { selectedDeviceFilters.clear() },
                                                 colors = CheckboxDefaults.colors(
-                                                    checkedColor = Color(0xFFA855F7),
+                                                    checkedColor = Color(0xFF38BDF8),
                                                     uncheckedColor = Color.Gray
                                                 )
                                             )
@@ -977,7 +1082,7 @@ fun FullGalleryScreen(
                                     onClick = { selectedDeviceFilters.clear() }
                                 )
 
-                                HorizontalDivider(color = Color(0xFF28283C))
+                                HorizontalDivider(color = Color(0xFF27272A))
 
                                 // Paired Devices
                                 pairedDevices.forEach { dev ->
@@ -995,7 +1100,7 @@ fun FullGalleryScreen(
                                                         else selectedDeviceFilters.remove(dev.deviceId)
                                                     },
                                                     colors = CheckboxDefaults.colors(
-                                                        checkedColor = Color(0xFFA855F7),
+                                                        checkedColor = Color(0xFF38BDF8),
                                                         uncheckedColor = Color.Gray
                                                     )
                                                 )
@@ -1038,7 +1143,7 @@ fun FullGalleryScreen(
                                                     else selectedDeviceFilters.remove("web")
                                                 },
                                                 colors = CheckboxDefaults.colors(
-                                                    checkedColor = Color(0xFFA855F7),
+                                                    checkedColor = Color(0xFF38BDF8),
                                                     uncheckedColor = Color.Gray
                                                 )
                                             )
@@ -1081,8 +1186,8 @@ fun FullGalleryScreen(
                     .fillMaxWidth()
                     .padding(horizontal = 10.dp, vertical = 6.dp),
                 shape = RoundedCornerShape(16.dp),
-                color = Color(0xFF1A1A28),
-                border = BorderStroke(1.dp, Color(0xFFA855F7)),
+                color = Color(0xFF111116),
+                border = BorderStroke(1.dp, Color(0xFF27272A)),
                 shadowElevation = 10.dp
             ) {
                 Row(
@@ -1101,7 +1206,7 @@ fun FullGalleryScreen(
                         )
                         Text(
                             text = if (selectedIds.size == filteredList.size) "Deselect All" else "Select All",
-                            color = Color(0xFFA855F7),
+                            color = Color(0xFF38BDF8),
                             fontSize = 11.sp,
                             fontWeight = FontWeight.SemiBold,
                             modifier = Modifier.clickable {
@@ -1138,7 +1243,7 @@ fun FullGalleryScreen(
                             },
                             enabled = selectedIds.isNotEmpty()
                         ) {
-                            Icon(Icons.Default.Download, contentDescription = "Download to Gallery", tint = Color(0xFFA855F7))
+                            Icon(Icons.Default.Download, contentDescription = "Download to Gallery", tint = Color(0xFF38BDF8))
                         }
 
                         // Bulk Favorite
@@ -1207,7 +1312,7 @@ fun FullGalleryScreen(
                             },
                             enabled = selectedIds.isNotEmpty()
                         ) {
-                            Icon(Icons.Default.Delete, contentDescription = "Trash", tint = Color(0xFFF87171))
+                            Icon(Icons.Default.Delete, contentDescription = "Trash", tint = Color(0xFFEF4444))
                         }
 
                         // Close selection
@@ -1250,10 +1355,12 @@ fun FullGalleryScreen(
                 }
             }
         } else {
-            // Main 4-Column Grid with Date Grouping
+            // Main 3-Column Grid with Date Grouping (Commercial photography app density)
             LazyVerticalGrid(
-                columns = GridCells.Fixed(4),
-                modifier = Modifier.fillMaxSize(),
+                columns = GridCells.Fixed(3),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black),
                 contentPadding = PaddingValues(bottom = 80.dp),
                 verticalArrangement = Arrangement.spacedBy(2.dp),
                 horizontalArrangement = Arrangement.spacedBy(2.dp)
@@ -1262,23 +1369,23 @@ fun FullGalleryScreen(
                     // Date Group Header
                     item(
                         key = "header_$monthYear",
-                        span = { GridItemSpan(4) },
+                        span = { GridItemSpan(3) },
                         contentType = "header"
                     ) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .background(Color(0xFF09090C))
-                                .padding(horizontal = 14.dp, vertical = 10.dp),
+                                .background(Color.Black)
+                                .padding(horizontal = 14.dp, vertical = 12.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
                                 text = monthYear,
-                                color = Color(0xFFF1F5F9),
-                                fontSize = 14.sp,
+                                color = Color(0xFFF8FAFC),
+                                fontSize = 15.sp,
                                 fontWeight = FontWeight.Bold,
-                                letterSpacing = 0.3.sp
+                                letterSpacing = 0.2.sp
                             )
                             Text(
                                 text = "${itemsInGroup.size} items",
@@ -1392,8 +1499,8 @@ fun FullGalleryScreen(
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedTextColor = Color.White,
                         unfocusedTextColor = Color.White,
-                        focusedBorderColor = Color(0xFFA855F7),
-                        unfocusedBorderColor = Color(0xFF36364D)
+                        focusedBorderColor = Color(0xFF38BDF8),
+                        unfocusedBorderColor = Color(0xFF27272A)
                     )
                 )
             },
@@ -1412,9 +1519,9 @@ fun FullGalleryScreen(
                             }
                         }
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFA855F7))
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF38BDF8))
                 ) {
-                    Text("Save", color = Color.White)
+                    Text("Save", color = Color.Black, fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {
@@ -1546,6 +1653,474 @@ fun FullGalleryScreen(
 }
 
 // ----------------------------------------------------
+// Video Time Formatter Helper
+// ----------------------------------------------------
+fun formatVideoTime(millis: Long): String {
+    val totalSeconds = (millis / 1000).coerceAtLeast(0)
+    val minutes = totalSeconds / 60
+    val seconds = totalSeconds % 60
+    val hours = minutes / 60
+    return if (hours > 0) {
+        String.format(Locale.US, "%d:%02d:%02d", hours, minutes % 60, seconds)
+    } else {
+        String.format(Locale.US, "%02d:%02d", minutes, seconds)
+    }
+}
+
+// ----------------------------------------------------
+// Real Video Player with Media3 ExoPlayer & Frosted Overlay Controls
+// ----------------------------------------------------
+@AndroidXOptIn(UnstableApi::class)
+@Composable
+fun ModernExoPlayerView(
+    streamUrl: String,
+    filename: String,
+    thumbnailUrl: String = "",
+    fileId: String = "",
+    deviceId: String = "",
+    deviceKey: String = "",
+    onClose: (() -> Unit)? = null,
+    showTopBar: Boolean = true,
+    controlsVisible: Boolean? = null,
+    onToggleControls: (() -> Unit)? = null,
+    bottomPadding: androidx.compose.ui.unit.Dp = 0.dp,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    var isPlaying by remember { mutableStateOf(true) }
+    var isBuffering by remember { mutableStateOf(true) }
+    var playbackError by remember { mutableStateOf<String?>(null) }
+    var currentPosition by remember { mutableLongStateOf(0L) }
+    var duration by remember { mutableLongStateOf(0L) }
+    var isMuted by remember { mutableStateOf(false) }
+    var internalShowControls by remember { mutableStateOf(true) }
+    var isDraggingSlider by remember { mutableStateOf(false) }
+    var sliderPosition by remember { mutableFloatStateOf(0f) }
+    var resizeMode by remember { mutableIntStateOf(AspectRatioFrameLayout.RESIZE_MODE_FIT) }
+
+    val actualShowControls = controlsVisible ?: internalShowControls
+    val toggleControls = onToggleControls ?: { internalShowControls = !internalShowControls }
+
+    val exoPlayer = remember(streamUrl) {
+        val httpDataSourceFactory = DefaultHttpDataSource.Factory()
+            .setAllowCrossProtocolRedirects(true)
+            .setConnectTimeoutMs(15000)
+            .setReadTimeoutMs(30000)
+
+        if (deviceId.isNotBlank() && deviceKey.isNotBlank()) {
+            httpDataSourceFactory.setDefaultRequestProperties(
+                mapOf(
+                    "x-device-id" to deviceId,
+                    "x-device-key" to deviceKey
+                )
+            )
+        }
+
+        val mediaSource = ProgressiveMediaSource.Factory(httpDataSourceFactory)
+            .createMediaSource(MediaItem.fromUri(Uri.parse(streamUrl)))
+
+        ExoPlayer.Builder(context).build().apply {
+            setMediaSource(mediaSource)
+            prepare()
+            playWhenReady = true
+        }
+    }
+
+    DisposableEffect(exoPlayer) {
+        val listener = object : Player.Listener {
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                when (playbackState) {
+                    Player.STATE_BUFFERING -> isBuffering = true
+                    Player.STATE_READY -> {
+                        isBuffering = false
+                        duration = exoPlayer.duration.coerceAtLeast(0L)
+                        playbackError = null
+                    }
+                    Player.STATE_ENDED -> {
+                        isPlaying = false
+                    }
+                    Player.STATE_IDLE -> {}
+                }
+            }
+
+            override fun onIsPlayingChanged(playing: Boolean) {
+                isPlaying = playing
+            }
+
+            override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                isBuffering = false
+                playbackError = error.localizedMessage ?: "Playback error (${error.errorCodeName})"
+            }
+        }
+        exoPlayer.addListener(listener)
+
+        onDispose {
+            exoPlayer.removeListener(listener)
+            exoPlayer.release()
+        }
+    }
+
+    // Live position tracking loop
+    LaunchedEffect(exoPlayer, isPlaying, isDraggingSlider) {
+        while (isPlaying && !isDraggingSlider) {
+            currentPosition = exoPlayer.currentPosition.coerceAtLeast(0L)
+            if (exoPlayer.duration > 0) {
+                duration = exoPlayer.duration
+            }
+            delay(250)
+        }
+    }
+
+    // Auto-hide controls after 3.5s of playback with no user interaction
+    LaunchedEffect(actualShowControls, isPlaying, isDraggingSlider) {
+        if (actualShowControls && isPlaying && !isDraggingSlider) {
+            delay(3500)
+            if (controlsVisible == null) {
+                internalShowControls = false
+            } else {
+                onToggleControls?.invoke()
+            }
+        }
+    }
+
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(Color.Black)
+            .pointerInput(Unit) {
+                detectTapGestures(
+                    onTap = { toggleControls() }
+                )
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        // 1. Hardware-accelerated ExoPlayer native surface
+        AndroidView(
+            factory = { ctx ->
+                PlayerView(ctx).apply {
+                    player = exoPlayer
+                    useController = false
+                    this.resizeMode = resizeMode
+                    setBackgroundColor(android.graphics.Color.BLACK)
+                }
+            },
+            update = { playerView ->
+                playerView.player = exoPlayer
+                playerView.resizeMode = resizeMode
+            },
+            modifier = Modifier.fillMaxSize()
+        )
+
+        // 2. Poster preview while buffering at initial start (no blank flicker)
+        if (isBuffering && playbackError == null && thumbnailUrl.isNotBlank() && currentPosition < 500L) {
+            AsyncImage(
+                model = ImageRequest.Builder(context)
+                    .data(thumbnailUrl)
+                    .addHeader("x-device-id", deviceId)
+                    .addHeader("x-device-key", deviceKey)
+                    .placeholderMemoryCacheKey(if (fileId.isNotBlank()) "thumb_$fileId" else null)
+                    .memoryCacheKey(if (fileId.isNotBlank()) "thumb_$fileId" else null)
+                    .diskCacheKey(if (fileId.isNotBlank()) "thumb_$fileId" else null)
+                    .crossfade(false)
+                    .build(),
+                contentDescription = filename,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Fit
+            )
+        }
+
+        // 3. Sleek buffering spinner in frosted dark circle
+        if (isBuffering && playbackError == null) {
+            Box(
+                modifier = Modifier
+                    .size(56.dp)
+                    .background(Color.Black.copy(alpha = 0.6f), CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator(
+                    color = Color(0xFF38BDF8),
+                    strokeWidth = 3.dp,
+                    modifier = Modifier.size(32.dp)
+                )
+            }
+        }
+
+        // 4. Playback Error Banner
+        if (playbackError != null) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier
+                    .background(Color(0xFF111116).copy(alpha = 0.95f), RoundedCornerShape(16.dp))
+                    .border(1.dp, Color(0xFF27272A), RoundedCornerShape(16.dp))
+                    .padding(24.dp)
+            ) {
+                Icon(
+                    Icons.Default.ErrorOutline,
+                    contentDescription = null,
+                    tint = Color(0xFFEF4444),
+                    modifier = Modifier.size(36.dp)
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+                Text("Playback Error", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(playbackError ?: "", color = Color(0xFF94A3B8), fontSize = 12.sp, textAlign = TextAlign.Center)
+                Spacer(modifier = Modifier.height(14.dp))
+                Button(
+                    onClick = {
+                        try {
+                            val intent = Intent(Intent.ACTION_VIEW).apply {
+                                setDataAndType(Uri.parse(streamUrl), "video/*")
+                                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION
+                            }
+                            context.startActivity(intent)
+                        } catch (_: Exception) {
+                            Toast.makeText(context, "No external video player found", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF38BDF8))
+                ) {
+                    Text("Open in External Player", color = Color.Black, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+
+        // 5. Frosted Glass Overlay Controls
+        AnimatedVisibility(
+            visible = actualShowControls,
+            enter = fadeIn(),
+            exit = fadeOut(),
+            modifier = Modifier.fillMaxSize()
+        ) {
+            Box(modifier = Modifier.fillMaxSize()) {
+                // Top bar (shown only if showTopBar is true)
+                if (showTopBar) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .align(Alignment.TopCenter)
+                            .background(
+                                Brush.verticalGradient(
+                                    listOf(Color.Black.copy(alpha = 0.85f), Color.Transparent)
+                                )
+                            )
+                            .padding(top = 36.dp, bottom = 16.dp, start = 12.dp, end = 12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            if (onClose != null) {
+                                IconButton(onClick = onClose) {
+                                    Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = Color.White)
+                                }
+                                Spacer(modifier = Modifier.width(4.dp))
+                            }
+                            Text(
+                                text = filename,
+                                color = Color.White,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            // Aspect Ratio Toggle
+                            IconButton(
+                                onClick = {
+                                    resizeMode = if (resizeMode == AspectRatioFrameLayout.RESIZE_MODE_FIT) {
+                                        AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                                    } else {
+                                        AspectRatioFrameLayout.RESIZE_MODE_FIT
+                                    }
+                                }
+                            ) {
+                                Icon(
+                                    if (resizeMode == AspectRatioFrameLayout.RESIZE_MODE_FIT) Icons.Default.AspectRatio else Icons.Default.FitScreen,
+                                    contentDescription = "Aspect Ratio",
+                                    tint = Color.White
+                                )
+                            }
+
+                            // Mute / Unmute
+                            IconButton(
+                                onClick = {
+                                    isMuted = !isMuted
+                                    exoPlayer.volume = if (isMuted) 0f else 1f
+                                }
+                            ) {
+                                Icon(
+                                    if (isMuted) Icons.Default.VolumeOff else Icons.Default.VolumeUp,
+                                    contentDescription = if (isMuted) "Unmute" else "Mute",
+                                    tint = if (isMuted) Color(0xFFEF4444) else Color.White
+                                )
+                            }
+
+                            // External Player
+                            IconButton(
+                                onClick = {
+                                    try {
+                                        val intent = Intent(Intent.ACTION_VIEW).apply {
+                                            setDataAndType(Uri.parse(streamUrl), "video/*")
+                                            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION
+                                        }
+                                        context.startActivity(intent)
+                                    } catch (_: Exception) {
+                                        Toast.makeText(context, "No external player available", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            ) {
+                                Icon(
+                                    Icons.AutoMirrored.Filled.OpenInNew,
+                                    contentDescription = "Open External",
+                                    tint = Color.White
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Center Controls: Rewind -10s, Play/Pause, Forward +10s
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .padding(horizontal = 24.dp),
+                    horizontalArrangement = Arrangement.spacedBy(28.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(
+                        onClick = {
+                            val target = (exoPlayer.currentPosition - 10000L).coerceAtLeast(0L)
+                            exoPlayer.seekTo(target)
+                            currentPosition = target
+                        },
+                        modifier = Modifier
+                            .size(50.dp)
+                            .background(Color.Black.copy(alpha = 0.55f), CircleShape)
+                    ) {
+                        Icon(
+                            Icons.Default.Replay10,
+                            contentDescription = "Rewind 10s",
+                            tint = Color.White,
+                            modifier = Modifier.size(28.dp)
+                        )
+                    }
+
+                    IconButton(
+                        onClick = {
+                            if (isPlaying) {
+                                exoPlayer.pause()
+                            } else {
+                                if (exoPlayer.playbackState == Player.STATE_ENDED) {
+                                    exoPlayer.seekTo(0)
+                                }
+                                exoPlayer.play()
+                            }
+                        },
+                        modifier = Modifier
+                            .size(68.dp)
+                            .background(Color.Black.copy(alpha = 0.65f), CircleShape)
+                            .border(1.5.dp, Color(0xFF38BDF8).copy(alpha = 0.7f), CircleShape)
+                    ) {
+                        Icon(
+                            if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                            contentDescription = if (isPlaying) "Pause" else "Play",
+                            tint = Color.White,
+                            modifier = Modifier.size(40.dp)
+                        )
+                    }
+
+                    IconButton(
+                        onClick = {
+                            val max = exoPlayer.duration.coerceAtLeast(0L)
+                            val target = if (max > 0) (exoPlayer.currentPosition + 10000L).coerceAtMost(max) else exoPlayer.currentPosition + 10000L
+                            exoPlayer.seekTo(target)
+                            currentPosition = target
+                        },
+                        modifier = Modifier
+                            .size(50.dp)
+                            .background(Color.Black.copy(alpha = 0.55f), CircleShape)
+                    ) {
+                        Icon(
+                            Icons.Default.Forward10,
+                            contentDescription = "Forward 10s",
+                            tint = Color.White,
+                            modifier = Modifier.size(28.dp)
+                        )
+                    }
+                }
+
+                // Bottom Scrubber Slider & Timestamp
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = bottomPadding)
+                        .background(
+                            Brush.verticalGradient(
+                                listOf(Color.Transparent, Color.Black.copy(alpha = 0.88f))
+                            )
+                        )
+                        .padding(start = 16.dp, end = 16.dp, bottom = if (bottomPadding > 0.dp) 8.dp else 28.dp, top = 16.dp)
+                ) {
+                    val displayedPosition = if (isDraggingSlider) (sliderPosition * duration).toLong() else currentPosition
+
+                    Slider(
+                        value = if (duration > 0) {
+                            if (isDraggingSlider) sliderPosition else (currentPosition.toFloat() / duration.toFloat()).coerceIn(0f, 1f)
+                        } else 0f,
+                        onValueChange = { value ->
+                            isDraggingSlider = true
+                            sliderPosition = value
+                        },
+                        onValueChangeFinished = {
+                            if (duration > 0) {
+                                val target = (sliderPosition * duration).toLong()
+                                exoPlayer.seekTo(target)
+                                currentPosition = target
+                            }
+                            isDraggingSlider = false
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(24.dp),
+                        colors = SliderDefaults.colors(
+                            thumbColor = Color(0xFF38BDF8),
+                            activeTrackColor = Color(0xFF38BDF8),
+                            inactiveTrackColor = Color(0xFF334155)
+                        )
+                    )
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = formatVideoTime(displayedPosition),
+                            color = Color(0xFFE2E8F0),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                        Text(
+                            text = formatVideoTime(duration),
+                            color = Color(0xFF94A3B8),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ----------------------------------------------------
 // 2. Full-Screen Photo Viewer with Gestures & Actions
 // ----------------------------------------------------
 @Composable
@@ -1669,144 +2244,21 @@ fun FullScreenPhotoViewer(
             ) {
                 if (isVideo) {
                     key(currentItem.id) {
-                        var isBuffering by remember { mutableStateOf(true) }
-                        var playbackError by remember { mutableStateOf<String?>(null) }
-                        var videoViewRef by remember { mutableStateOf<VideoView?>(null) }
-                        val playUrl = streamUrl
-
-                        DisposableEffect(currentItem.id) {
-                            onDispose {
-                                videoViewRef?.stopPlayback()
-                            }
-                        }
-
-                        Box(
-                            modifier = Modifier.fillMaxSize(),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            AndroidView(
-                                factory = { ctx ->
-                                    VideoView(ctx).apply {
-                                        videoViewRef = this
-                                        val mc = MediaController(ctx)
-                                        mc.setAnchorView(this)
-                                        setMediaController(mc)
-
-                                        setOnPreparedListener { mp ->
-                                            isBuffering = false
-                                            isViewerMediaLoading = false
-                                            playbackError = null
-                                            mp.isLooping = false
-                                            start()
-                                        }
-
-                                        setOnInfoListener { _, what, _ ->
-                                            if (what == MediaPlayer.MEDIA_INFO_BUFFERING_START) {
-                                                isBuffering = true
-                                                isViewerMediaLoading = true
-                                            } else if (what == MediaPlayer.MEDIA_INFO_BUFFERING_END) {
-                                                isBuffering = false
-                                                isViewerMediaLoading = false
-                                            }
-                                            true
-                                        }
-
-                                        setOnErrorListener { _, what, extra ->
-                                            isBuffering = false
-                                            isViewerMediaLoading = false
-                                            playbackError = "Unable to stream video ($what, $extra)"
-                                            true
-                                        }
-
-                                        val headers = if (deviceId.isNotBlank() && deviceKey.isNotBlank()) {
-                                            mapOf("x-device-id" to deviceId, "x-device-key" to deviceKey)
-                                        } else emptyMap()
-
-                                        if (headers.isNotEmpty()) {
-                                            setVideoURI(Uri.parse(playUrl), headers)
-                                        } else {
-                                            setVideoURI(Uri.parse(playUrl))
-                                        }
-                                    }
-                                },
-                                modifier = Modifier.fillMaxSize()
-                            )
-
-                            if (isBuffering && playbackError == null) {
-                                val thumbData = currentItem.thumbnail?.takeIf { it.isNotBlank() }
-                                    ?: "${serverUrl.trimEnd('/')}/api/v1/files/${currentItem.id}/thumbnail?deviceId=$deviceId&deviceKey=$deviceKey"
-
-                                Box(
-                                    modifier = Modifier.fillMaxSize(),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    AsyncImage(
-                                        model = ImageRequest.Builder(context)
-                                            .data(thumbData)
-                                            .addHeader("x-device-id", deviceId)
-                                            .addHeader("x-device-key", deviceKey)
-                                            .placeholderMemoryCacheKey("thumb_${currentItem.id}")
-                                            .memoryCacheKey("thumb_${currentItem.id}")
-                                            .diskCacheKey("thumb_${currentItem.id}")
-                                            .crossfade(false)
-                                            .build(),
-                                        contentDescription = currentItem.filename,
-                                        modifier = Modifier.fillMaxSize(),
-                                        contentScale = ContentScale.Fit
-                                    )
-                                    Box(
-                                        modifier = Modifier
-                                            .size(64.dp)
-                                            .background(Color.Black.copy(alpha = 0.55f), CircleShape),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Icon(
-                                            Icons.Default.PlayArrow,
-                                            contentDescription = "Loading Video",
-                                            tint = Color.White,
-                                            modifier = Modifier.size(36.dp)
-                                        )
-                                    }
-                                }
-                            }
-
-                            if (playbackError != null) {
-                                Column(
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    modifier = Modifier
-                                        .background(Color(0xFF0F0F14).copy(alpha = 0.94f), RoundedCornerShape(16.dp))
-                                        .padding(24.dp)
-                                ) {
-                                    Icon(
-                                        Icons.Default.ErrorOutline,
-                                        contentDescription = null,
-                                        tint = Color(0xFFEF4444),
-                                        modifier = Modifier.size(36.dp)
-                                    )
-                                    Spacer(modifier = Modifier.height(10.dp))
-                                    Text("Playback Error", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    Text(playbackError ?: "", color = Color(0xFF94A3B8), fontSize = 12.sp)
-                                    Spacer(modifier = Modifier.height(14.dp))
-                                    Button(
-                                        onClick = {
-                                            try {
-                                                val intent = Intent(Intent.ACTION_VIEW).apply {
-                                                    setDataAndType(Uri.parse(playUrl ?: streamUrl), "video/*")
-                                                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION
-                                                }
-                                                context.startActivity(intent)
-                                            } catch (e: Exception) {
-                                                Toast.makeText(context, "No external video player found", Toast.LENGTH_SHORT).show()
-                                            }
-                                        },
-                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF7E22CE))
-                                    ) {
-                                        Text("Open in External Player")
-                                    }
-                                }
-                            }
-                        }
+                        val thumbData = currentItem.thumbnail?.takeIf { it.isNotBlank() }
+                            ?: "${serverUrl.trimEnd('/')}/api/v1/files/${currentItem.id}/thumbnail?deviceId=$deviceId&deviceKey=$deviceKey"
+                        ModernExoPlayerView(
+                            streamUrl = streamUrl,
+                            filename = currentItem.filename,
+                            thumbnailUrl = thumbData,
+                            fileId = currentItem.id,
+                            deviceId = deviceId,
+                            deviceKey = deviceKey,
+                            onClose = onClose,
+                            showTopBar = false,
+                            controlsVisible = showControls,
+                            onToggleControls = { showControls = !showControls },
+                            bottomPadding = 88.dp
+                        )
                     }
                 } else {
                     key(currentItem.id) {
@@ -1947,11 +2399,11 @@ fun FullScreenPhotoViewer(
                             DropdownMenu(
                                 expanded = isMoreMenuOpen,
                                 onDismissRequest = { isMoreMenuOpen = false },
-                                modifier = Modifier.background(Color(0xFF1B1B26))
+                                modifier = Modifier.background(Color(0xFF111116))
                             ) {
                                 DropdownMenuItem(
                                     text = { Text("Details", color = Color.White) },
-                                    leadingIcon = { Icon(Icons.Default.Info, contentDescription = null, tint = Color(0xFFA855F7)) },
+                                    leadingIcon = { Icon(Icons.Default.Info, contentDescription = null, tint = Color(0xFF38BDF8)) },
                                     onClick = {
                                         isMoreMenuOpen = false
                                         onOpenDetails()
@@ -1967,7 +2419,7 @@ fun FullScreenPhotoViewer(
                                 )
                                 DropdownMenuItem(
                                     text = { Text("Move to Folder", color = Color.White) },
-                                    leadingIcon = { Icon(Icons.Default.DriveFileMove, contentDescription = null, tint = Color(0xFF34D399)) },
+                                    leadingIcon = { Icon(Icons.Default.DriveFileMove, contentDescription = null, tint = Color(0xFF10B981)) },
                                     onClick = {
                                         isMoreMenuOpen = false
                                         onOpenMove()
@@ -1976,7 +2428,7 @@ fun FullScreenPhotoViewer(
                                 if (isVideo) {
                                     DropdownMenuItem(
                                         text = { Text("Open in External Player", color = Color.White) },
-                                        leadingIcon = { Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null, tint = Color(0xFFA855F7)) },
+                                        leadingIcon = { Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null, tint = Color(0xFF38BDF8)) },
                                         onClick = {
                                             isMoreMenuOpen = false
                                             try {
@@ -2027,65 +2479,67 @@ fun FullScreenPhotoViewer(
             )
         }
 
-            // Bottom Action Bar: Favorite ♡, Download ⬇, Share ↗, Delete 🗑, Details ℹ
+            // Bottom Floating Frosted Glass Action Dock: Favorite ♡, Download ⬇, Share ↗, Delete 🗑, Details ℹ
             AnimatedVisibility(
                 visible = showControls,
                 enter = fadeIn(),
                 exit = fadeOut(),
-                modifier = Modifier.align(Alignment.BottomCenter)
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 24.dp)
             ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(
-                            Brush.verticalGradient(
-                                listOf(Color.Transparent, Color.Black.copy(alpha = 0.85f))
-                            )
-                        )
-                        .padding(top = 16.dp, bottom = 32.dp, start = 16.dp, end = 16.dp),
-                    horizontalArrangement = Arrangement.SpaceAround,
-                    verticalAlignment = Alignment.CenterVertically
+                Surface(
+                    shape = RoundedCornerShape(32.dp),
+                    color = Color(0xFF111116).copy(alpha = 0.92f),
+                    border = BorderStroke(1.dp, Color(0xFF27272A)),
+                    shadowElevation = 14.dp
                 ) {
-                    // Favorite
-                    IconButton(onClick = onToggleFavorite) {
-                        Icon(
-                            if (currentItem.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                            contentDescription = "Favorite",
-                            tint = if (currentItem.isFavorite) Color(0xFFEF4444) else Color.White,
-                            modifier = Modifier.size(26.dp)
-                        )
-                    }
-
-                    // Download to phone gallery
-                    IconButton(onClick = {
-                        coroutineScope.launch {
-                            Toast.makeText(context, "Saving to Gallery...", Toast.LENGTH_SHORT).show()
-                            val success = downloadMediaToGallery(context, currentItem, serverUrl, deviceId, deviceKey)
-                            if (success) {
-                                Toast.makeText(context, "Saved to Gallery!", Toast.LENGTH_SHORT).show()
-                            } else {
-                                Toast.makeText(context, "Download failed", Toast.LENGTH_SHORT).show()
-                            }
+                    Row(
+                        modifier = Modifier.padding(horizontal = 18.dp, vertical = 6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Favorite
+                        IconButton(onClick = onToggleFavorite) {
+                            Icon(
+                                if (currentItem.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                                contentDescription = "Favorite",
+                                tint = if (currentItem.isFavorite) Color(0xFFEF4444) else Color.White,
+                                modifier = Modifier.size(24.dp)
+                            )
                         }
-                    }) {
-                        Icon(Icons.Default.Download, contentDescription = "Download", tint = Color.White, modifier = Modifier.size(26.dp))
-                    }
 
-                    // Share
-                    IconButton(onClick = {
-                        shareMedia(context, currentItem, serverUrl, deviceId, deviceKey)
-                    }) {
-                        Icon(Icons.Default.Share, contentDescription = "Share", tint = Color.White, modifier = Modifier.size(26.dp))
-                    }
+                        // Download to phone gallery
+                        IconButton(onClick = {
+                            coroutineScope.launch {
+                                Toast.makeText(context, "Saving to Gallery...", Toast.LENGTH_SHORT).show()
+                                val success = downloadMediaToGallery(context, currentItem, serverUrl, deviceId, deviceKey)
+                                if (success) {
+                                    Toast.makeText(context, "Saved to Gallery!", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    Toast.makeText(context, "Download failed", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        }) {
+                            Icon(Icons.Default.Download, contentDescription = "Download", tint = Color.White, modifier = Modifier.size(24.dp))
+                        }
 
-                    // Delete
-                    IconButton(onClick = onDelete) {
-                        Icon(Icons.Default.Delete, contentDescription = "Delete", tint = Color(0xFFEF4444), modifier = Modifier.size(26.dp))
-                    }
+                        // Share
+                        IconButton(onClick = {
+                            shareMedia(context, currentItem, serverUrl, deviceId, deviceKey)
+                        }) {
+                            Icon(Icons.Default.Share, contentDescription = "Share", tint = Color.White, modifier = Modifier.size(24.dp))
+                        }
 
-                    // Details
-                    IconButton(onClick = onOpenDetails) {
-                        Icon(Icons.Default.Info, contentDescription = "Details", tint = Color.White, modifier = Modifier.size(26.dp))
+                        // Delete
+                        IconButton(onClick = onDelete) {
+                            Icon(Icons.Default.Delete, contentDescription = "Delete", tint = Color(0xFFEF4444), modifier = Modifier.size(24.dp))
+                        }
+
+                        // Details
+                        IconButton(onClick = onOpenDetails) {
+                            Icon(Icons.Default.Info, contentDescription = "Details", tint = Color.White, modifier = Modifier.size(24.dp))
+                        }
                     }
                 }
             }
@@ -2112,7 +2566,7 @@ fun PhotoDetailsDialog(item: CloudMedia, onDismiss: () -> Unit) {
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = Color(0xFF161622),
+        containerColor = Color(0xFF111116),
         shape = RoundedCornerShape(24.dp),
         title = {
             Row(
@@ -2120,7 +2574,7 @@ fun PhotoDetailsDialog(item: CloudMedia, onDismiss: () -> Unit) {
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("PHOTO DETAILS", color = Color(0xFFA855F7), fontWeight = FontWeight.Black, fontSize = 14.sp)
+                Text("PHOTO DETAILS", color = Color(0xFF38BDF8), fontWeight = FontWeight.Black, fontSize = 14.sp)
                 IconButton(onClick = onDismiss) {
                     Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.Gray)
                 }

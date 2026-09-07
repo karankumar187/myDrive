@@ -7,7 +7,7 @@ import androidx.work.WorkManager
 
 /**
  * BroadcastReceiver triggered when the user taps "Stop Sync" on the ongoing live notification.
- * Cancels both in-process manual sync and background WorkManager sync.
+ * Cancels WorkManager sync and updates notification & persistent log.
  */
 class SyncActionReceiver : BroadcastReceiver() {
     companion object {
@@ -19,9 +19,14 @@ class SyncActionReceiver : BroadcastReceiver() {
             SyncNotificationHelper.requestCancel()
             try {
                 val workManager = WorkManager.getInstance(context)
+                workManager.cancelUniqueWork("UnifiedDriveImmediateSync")
+                workManager.cancelUniqueWork("UnifiedDrivePeriodicSync")
                 workManager.cancelUniqueWork("UnifiedDriveSync")
+                workManager.cancelAllWorkByTag("UnifiedDriveSyncTag")
                 workManager.cancelAllWorkByTag("UnifiedDriveSync")
             } catch (_: Exception) {}
+            SyncLogManager.log("⏸ Sync stopped by user via notification")
+            SyncLogManager.status("Sync stopped by user")
             SyncNotificationHelper.showStopped(context)
         }
     }

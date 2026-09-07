@@ -96,8 +96,15 @@
 - **Instant Hash Deduplication**: Pre-computes raw SHA-256 hashes before encryption. If an identical file exists in the cloud, it links immediately without consuming additional Drive space.
 
 ### 4. Android App (Jetpack Compose & Kotlin)
-- **100% Native Jetpack Compose**: Beautiful dark theme (`#08080A`), Material 3 components, smooth animations, and edge-to-edge UI.
-- **Sleek Startup Screen**: Animated "Connecting to myDrive..." startup screen with pulsing logo and ambient purple glow, eliminating empty UI flashes.
+- **Ultra-Modern AMOLED Dark Theme**: Pure `#000000` pitch black background, sleek zinc/charcoal card surfaces (`#101014`, `#14141B`), precision borders (`#27272A`), and vivid Sky Blue (`#38BDF8`) & Emerald Green (`#10B981`) accents completely replacing saturated purple tones for a commercial, battery-efficient design.
+- **Professional Media3 ExoPlayer Video Player**: High-performance in-app video player replacing legacy Android `VideoView` and gingerbread `MediaController`:
+  - Frosted glass floating overlay controls with smooth auto-fade on tap and timeout.
+  - Interactive scrubber slider with decoupled drag-seeking and exact time labels (`mm:ss` / `hh:mm:ss`).
+  - Instant ±10-second fast seek buttons.
+  - Aspect ratio toggle (fit vs crop/zoom) and one-tap volume mute toggle.
+  - Video poster thumbnail frame while buffering with glowing cyan loading indicator.
+  - Authenticated streaming header support (`x-device-id`, `x-device-key`) and external player fallback.
+- **Commercial Photography Gallery & Lightbox**: Apple/Google Photos-inspired 3-column density grid, sleek date group headers, pill filter chips, frosted video duration badges, and floating bottom action dock (Favorite, Download, Share, Trash, Details).
 - **Persistent Permission Enforcement**: Root-level lifecycle gate (`RootAppScreen` & `PermissionsRequiredScreen`) enforcing Gallery/Storage and Notification permissions every time the app opens until fully granted.
 - **Zomato-Style Live Notifications**: Unified across manual **"Sync Now"** and scheduled **"Auto Sync"** using a silent `IMPORTANCE_LOW` channel:
   - Real-time progress bar, percentage, and current filename.
@@ -114,7 +121,7 @@
   - **Network Policy**: Wi-Fi Only or Unmetered Network toggles.
 - **Inbound Sync**: Auto-downloads photos and documents uploaded from other devices or the web directly into your Android gallery.
 - **File Management**: Long-press multi-select, batch favorites, batch move, batch trash, rename dialogs, and folder picker.
-- **R8 Minification & Size**: Pre-configured ProGuard/R8 shrinking reducing the Release APK size to just **7.2 MB** (down from 22 MB for debug).
+- **R8 Minification & Size**: Pre-configured ProGuard/R8 shrinking reducing the Release APK size to just **8.4 MB** (down from 23 MB for debug).
 
 ### 5. iOS Shortcuts Automated Backup
 - **Native iOS Shortcuts Support**: Back up iPhone camera roll and documents automatically without installing third-party apps or paying for an Apple Developer license.

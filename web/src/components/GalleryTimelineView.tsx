@@ -36,6 +36,7 @@ import { VaultCryptoService } from '../services/vault-crypto.js';
 import { mediaCache, mediaQueue, isVideoFile, extractVideoThumbnailFromUrl } from '../services/media-cache.js';
 import { getStreamUrl, formatBytes, formatDate, formatDateTime } from '../utils/format.js';
 import { api, startGlobalLoading, subscribeToProgress, GlobalProgressState } from '../services/api.js';
+import { ModernVideoPlayer } from './ModernVideoPlayer.js';
 
 interface Props {
   media: FileItem[];
@@ -1637,43 +1638,15 @@ const FullScreenViewer: React.FC<{
         ) : loading && !prevUrlRef.current && !isVideo ? (
           // Very first image ever — show nothing (progress line at top is enough)
           <div className="w-32 h-32" />
-        ) : isVideo && fullUrl && !videoError ? (
-          <video
-            src={fullUrl}
-            controls
-            autoPlay
-            playsInline
-            onLoadedData={() => setLoading(false)}
-            onError={() => {
-              setLoading(false);
-              setVideoError(true);
-            }}
-            onClick={(e) => e.stopPropagation()}
-            className="max-h-[82vh] max-w-full rounded-xl shadow-2xl"
-          />
-        ) : isVideo && videoError ? (
-          <div className="p-8 text-center bg-[#16161d] border border-purple-500/30 rounded-2xl max-w-md space-y-4">
-            <Film className="w-12 h-12 mx-auto text-purple-400" />
-            <div>
-              <h4 className="text-sm font-bold text-white">Video Playback</h4>
-              <p className="text-xs text-zinc-400 mt-1">This video format or codec cannot be played inline in your current browser.</p>
-            </div>
-            <div className="flex items-center justify-center space-x-3">
-              <a
-                href={getStreamUrl(item._id)}
-                download={item.filename}
-                className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white text-xs font-semibold rounded-lg flex items-center space-x-1.5 transition"
-              >
-                <Download className="w-4 h-4" />
-                <span>Download Video</span>
-              </a>
-              <button
-                onClick={() => window.open(getStreamUrl(item._id), '_blank')}
-                className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-semibold rounded-lg transition"
-              >
-                Open Stream in New Tab
-              </button>
-            </div>
+        ) : isVideo && fullUrl ? (
+          <div className="w-[90vw] max-w-4xl max-h-[82vh] flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
+            <ModernVideoPlayer
+              src={fullUrl}
+              filename={item.filename}
+              autoPlay
+              className="w-full max-h-[80vh] shadow-2xl"
+              onDownload={() => {}}
+            />
           </div>
         ) : fullUrl && !imgError ? (
           <div className="relative flex items-center justify-center max-h-[82vh] max-w-full">

@@ -2,6 +2,7 @@ package com.drive.sync
 
 import android.content.ContentValues
 import android.provider.MediaStore
+import android.media.MediaScannerConnection
 import android.app.DownloadManager
 import android.content.Context
 import android.content.Intent
@@ -26,6 +27,7 @@ import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.graphics.vector.ImageVector
 import com.drive.sync.network.AppPermissions
 import com.drive.sync.network.SyncNotificationHelper
+import com.drive.sync.network.SyncLogManager
 import com.drive.sync.crypto.VaultCrypto
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -92,6 +94,7 @@ import coil.size.Precision
 import coil.size.Size
 import com.drive.sync.network.DriveSocketManager
 import com.drive.sync.workers.SyncWorker
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -207,6 +210,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        SyncLogManager.init(this)
 
         val imageLoader = ImageLoader.Builder(this)
             .okHttpClient(sharedHttpClient)
@@ -235,13 +239,14 @@ class MainActivity : ComponentActivity() {
         setContent {
             MaterialTheme(
                 colorScheme = darkColorScheme(
-                    primary = Color(0xFF9333EA),
-                    secondary = Color(0xFFA855F7),
-                    background = Color(0xFF0D0D11),
-                    surface = Color(0xFF13131A),
-                    surfaceVariant = Color(0xFF1E1E28),
-                    onBackground = Color(0xFFF3F4F6),
-                    onSurface = Color(0xFFF3F4F6)
+                    primary = Color(0xFF38BDF8),
+                    secondary = Color(0xFF10B981),
+                    tertiary = Color(0xFF94A3B8),
+                    background = Color(0xFF000000),
+                    surface = Color(0xFF0A0A0E),
+                    surfaceVariant = Color(0xFF14141B),
+                    onBackground = Color(0xFFF8FAFC),
+                    onSurface = Color(0xFFF8FAFC)
                 )
             ) {
                 Surface(
@@ -316,11 +321,14 @@ class MainActivity : ComponentActivity() {
             if (chargingOnly) {
                 setRequiresCharging(true)
             }
-            setRequiresStorageNotLow(true)
         }.build()
 
-        val syncRequestBuilder = PeriodicWorkRequestBuilder<SyncWorker>(intervalHours, TimeUnit.HOURS)
+        val syncRequestBuilder = PeriodicWorkRequestBuilder<SyncWorker>(
+            intervalHours, TimeUnit.HOURS,
+            15, TimeUnit.MINUTES // 15-min flex window
+        )
             .setConstraints(constraints)
+            .addTag("UnifiedDriveSyncTag")
             .setInputData(
                 workDataOf(
                     "server_url" to serverUrl,
@@ -329,7 +337,8 @@ class MainActivity : ComponentActivity() {
                     "target_folder_id" to (targetFolderId ?: ""),
                     "sync_photos" to syncPhotos,
                     "sync_videos" to syncVideos,
-                    "sync_documents" to syncDocuments
+                    "sync_documents" to syncDocuments,
+                    "is_manual" to false
                 )
             )
 
@@ -338,10 +347,10 @@ class MainActivity : ComponentActivity() {
         }
 
         val syncRequest = syncRequestBuilder.build()
-        val policy = ExistingPeriodicWorkPolicy.UPDATE
+        val policy = if (forceUpdate) ExistingPeriodicWorkPolicy.UPDATE else ExistingPeriodicWorkPolicy.KEEP
 
         WorkManager.getInstance(applicationContext).enqueueUniquePeriodicWork(
-            "UnifiedDriveSync",
+            "UnifiedDrivePeriodicSync",
             policy,
             syncRequest
         )
@@ -359,9 +368,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // triggerImmediateSync is kept for API compatibility but actual implementation
-    // is done in-process via performInProcessSync() called from MainAppScreen,
-    // so we get live per-file progress in the UI.
     fun triggerImmediateSync(
         serverUrl: String,
         deviceId: String,
@@ -372,6 +378,10 @@ class MainActivity : ComponentActivity() {
         syncDocuments: Boolean,
         onComplete: (() -> Unit)? = null
     ) {
+        SyncNotificationHelper.resetCancel()
+        SyncLogManager.log("── Manual sync initiated ──")
+        SyncLogManager.status("Starting manual sync…")
+
         val inputData = Data.Builder()
             .putString("server_url", serverUrl)
             .putString("device_id", deviceId)
@@ -387,14 +397,14 @@ class MainActivity : ComponentActivity() {
             .setRequiredNetworkType(NetworkType.CONNECTED)
             .build()
 
-        val syncRequest = OneTimeWorkRequestBuilder<com.drive.sync.workers.SyncWorker>()
+        val syncRequest = OneTimeWorkRequestBuilder<SyncWorker>()
             .setConstraints(constraints)
             .setInputData(inputData)
-            .addTag("UnifiedDriveSync")
+            .addTag("UnifiedDriveSyncTag")
             .build()
 
         WorkManager.getInstance(applicationContext).enqueueUniqueWork(
-            "UnifiedDriveSync",
+            "UnifiedDriveImmediateSync",
             ExistingWorkPolicy.REPLACE,
             syncRequest
         )
@@ -505,7 +515,7 @@ fun DeviceSetupScreen(
             Text(
                 text = buildAnnotatedString {
                     append("my")
-                    withStyle(style = SpanStyle(color = Color(0xFFC084FC))) { append("Drive") }
+                    withStyle(style = SpanStyle(color = Color(0xFF38BDF8))) { append("Drive") }
                 },
                 fontSize = 30.sp,
                 fontWeight = FontWeight.ExtraBold,
@@ -554,15 +564,15 @@ fun DeviceSetupScreen(
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
                         placeholder = { Text("https://your-server.com", color = Color(0xFF52525B), fontSize = 14.sp) },
-                        leadingIcon = { Icon(Icons.Default.Cloud, contentDescription = null, tint = Color(0xFF9333EA)) },
+                        leadingIcon = { Icon(Icons.Default.Cloud, contentDescription = null, tint = Color(0xFF38BDF8)) },
                         colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = Color(0xFF9333EA),
+                            focusedBorderColor = Color(0xFF38BDF8),
                             unfocusedBorderColor = Color(0xFF27272A),
                             focusedTextColor = Color.White,
                             unfocusedTextColor = Color(0xFFD4D4D8),
-                            cursorColor = Color(0xFFA855F7),
-                            focusedContainerColor = Color(0xFF1E1E28),
-                            unfocusedContainerColor = Color(0xFF1A1A22)
+                            cursorColor = Color(0xFF38BDF8),
+                            focusedContainerColor = Color(0xFF14141B),
+                            unfocusedContainerColor = Color(0xFF0E0E14)
                         ),
                         shape = RoundedCornerShape(12.dp)
                     )
@@ -578,15 +588,15 @@ fun DeviceSetupScreen(
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
                         placeholder = { Text("your-device-id", color = Color(0xFF52525B), fontSize = 14.sp) },
-                        leadingIcon = { Icon(Icons.Default.PhoneAndroid, contentDescription = null, tint = Color(0xFF9333EA)) },
+                        leadingIcon = { Icon(Icons.Default.PhoneAndroid, contentDescription = null, tint = Color(0xFF38BDF8)) },
                         colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = Color(0xFF9333EA),
+                            focusedBorderColor = Color(0xFF38BDF8),
                             unfocusedBorderColor = Color(0xFF27272A),
                             focusedTextColor = Color.White,
                             unfocusedTextColor = Color(0xFFD4D4D8),
-                            cursorColor = Color(0xFFA855F7),
-                            focusedContainerColor = Color(0xFF1E1E28),
-                            unfocusedContainerColor = Color(0xFF1A1A22)
+                            cursorColor = Color(0xFF38BDF8),
+                            focusedContainerColor = Color(0xFF14141B),
+                            unfocusedContainerColor = Color(0xFF0E0E14)
                         ),
                         shape = RoundedCornerShape(12.dp)
                     )
@@ -602,7 +612,7 @@ fun DeviceSetupScreen(
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
                         placeholder = { Text("your-device-key", color = Color(0xFF52525B), fontSize = 14.sp) },
-                        leadingIcon = { Icon(Icons.Default.VpnKey, contentDescription = null, tint = Color(0xFF9333EA)) },
+                        leadingIcon = { Icon(Icons.Default.VpnKey, contentDescription = null, tint = Color(0xFF38BDF8)) },
                         trailingIcon = {
                             IconButton(onClick = { showKey = !showKey }) {
                                 Icon(
@@ -617,13 +627,13 @@ fun DeviceSetupScreen(
                         else
                             androidx.compose.ui.text.input.PasswordVisualTransformation(),
                         colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = Color(0xFF9333EA),
+                            focusedBorderColor = Color(0xFF38BDF8),
                             unfocusedBorderColor = Color(0xFF27272A),
                             focusedTextColor = Color.White,
                             unfocusedTextColor = Color(0xFFD4D4D8),
-                            cursorColor = Color(0xFFA855F7),
-                            focusedContainerColor = Color(0xFF1E1E28),
-                            unfocusedContainerColor = Color(0xFF1A1A22)
+                            cursorColor = Color(0xFF38BDF8),
+                            focusedContainerColor = Color(0xFF14141B),
+                            unfocusedContainerColor = Color(0xFF0E0E14)
                         ),
                         shape = RoundedCornerShape(12.dp)
                     )
@@ -667,22 +677,22 @@ fun DeviceSetupScreen(
                             .height(52.dp),
                         shape = RoundedCornerShape(14.dp),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = Color(0xFF9333EA),
-                            disabledContainerColor = Color(0xFF3B1F6B)
+                            containerColor = Color(0xFF38BDF8),
+                            disabledContainerColor = Color(0xFF1E293B)
                         )
                     ) {
                         if (isConnecting) {
                             CircularProgressIndicator(
                                 modifier = Modifier.size(20.dp),
-                                color = Color.White,
+                                color = Color.Black,
                                 strokeWidth = 2.dp
                             )
                             Spacer(modifier = Modifier.width(10.dp))
-                            Text("Connecting...", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                            Text("Connecting...", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color.Black)
                         } else {
-                            Icon(Icons.Default.Link, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Icon(Icons.Default.Link, contentDescription = null, tint = Color.Black, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text("Connect & Save", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                            Text("Connect & Save", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color.Black)
                         }
                     }
                 }
@@ -759,15 +769,15 @@ fun ConnectingToDriveScreen() {
             .background(Color(0xFF08080A)),
         contentAlignment = Alignment.Center
     ) {
-        // Ambient soft purple radial glow in background
+        // Ambient soft sky blue radial glow in background
         Box(
             modifier = Modifier
                 .size(360.dp)
                 .background(
                     brush = Brush.radialGradient(
                         colors = listOf(
-                            Color(0xFF9333EA).copy(alpha = 0.18f),
-                            Color(0xFF9333EA).copy(alpha = 0.05f),
+                            Color(0xFF38BDF8).copy(alpha = 0.14f),
+                            Color(0xFF38BDF8).copy(alpha = 0.04f),
                             Color.Transparent
                         )
                     ),
@@ -780,11 +790,11 @@ fun ConnectingToDriveScreen() {
             verticalArrangement = Arrangement.Center,
             modifier = Modifier.padding(24.dp)
         ) {
-            // App Logo with glowing purple border and gentle breathing pulse
+            // App Logo with glowing sky blue border and gentle breathing pulse
             Surface(
                 shape = RoundedCornerShape(20.dp),
-                color = Color(0xFF13131A),
-                border = BorderStroke(1.5.dp, Color(0xFFA855F7).copy(alpha = pulseAlpha)),
+                color = Color(0xFF101014),
+                border = BorderStroke(1.5.dp, Color(0xFF38BDF8).copy(alpha = pulseAlpha)),
                 shadowElevation = 18.dp,
                 modifier = Modifier
                     .size(76.dp)
@@ -806,7 +816,7 @@ fun ConnectingToDriveScreen() {
 
             Spacer(modifier = Modifier.height(22.dp))
 
-            // "Connecting to myDrive..." with pulsing purple status dot
+            // "Connecting to myDrive..." with pulsing sky blue status dot
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.Center
@@ -815,7 +825,7 @@ fun ConnectingToDriveScreen() {
                     modifier = Modifier
                         .size(8.dp)
                         .graphicsLayer(alpha = dotAlpha)
-                        .background(Color(0xFFC084FC), shape = CircleShape)
+                        .background(Color(0xFF38BDF8), shape = CircleShape)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
@@ -856,7 +866,7 @@ fun PermissionsRequiredScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF08080A))
+            .background(Color.Black)
             .padding(horizontal = 24.dp, vertical = 40.dp),
         contentAlignment = Alignment.Center
     ) {
@@ -865,7 +875,7 @@ fun PermissionsRequiredScreen(
                 .size(340.dp)
                 .background(
                     brush = Brush.radialGradient(
-                        colors = listOf(Color(0xFF9333EA).copy(alpha = 0.18f), Color.Transparent)
+                        colors = listOf(Color(0xFF38BDF8).copy(alpha = 0.14f), Color.Transparent)
                     ),
                     shape = CircleShape
                 )
@@ -880,8 +890,8 @@ fun PermissionsRequiredScreen(
         ) {
             Surface(
                 shape = RoundedCornerShape(20.dp),
-                color = Color(0xFF13131A),
-                border = BorderStroke(1.5.dp, Color(0xFFA855F7)),
+                color = Color(0xFF101014),
+                border = BorderStroke(1.5.dp, Color(0xFF38BDF8)),
                 shadowElevation = 18.dp,
                 modifier = Modifier
                     .size(76.dp)
@@ -902,27 +912,26 @@ fun PermissionsRequiredScreen(
             Text(
                 text = "Permissions Required",
                 fontSize = 22.sp,
-                fontWeight = FontWeight.Bold,
+                fontWeight = FontWeight.ExtraBold,
                 color = Color.White
             )
 
             Spacer(modifier = Modifier.height(8.dp))
 
             Text(
-                text = "myDrive requires storage and notification permissions to automatically back up your photos/videos and show live sync status.",
+                text = "myDrive requires access to your device to back up photos, videos, and show live progress.",
                 fontSize = 13.sp,
-                color = Color(0xFFA1A1AA),
+                color = Color(0xFF94A3B8),
                 textAlign = TextAlign.Center,
-                lineHeight = 18.sp,
-                modifier = Modifier.padding(horizontal = 12.dp)
+                lineHeight = 18.sp
             )
 
-            Spacer(modifier = Modifier.height(28.dp))
+            Spacer(modifier = Modifier.height(24.dp))
 
             PermissionChecklistCard(
                 icon = Icons.Default.PhotoLibrary,
-                title = "Photos & Videos Access",
-                description = "Required to scan your media and back it up safely to the cloud.",
+                title = "Gallery & Photos",
+                description = "Required to scan and sync local media to your private cloud storage.",
                 isGranted = hasStorage
             )
 
@@ -939,19 +948,19 @@ fun PermissionsRequiredScreen(
 
             Button(
                 onClick = onGrantClicked,
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF9333EA)),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF38BDF8)),
                 shape = RoundedCornerShape(12.dp),
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(50.dp)
             ) {
-                Icon(Icons.Default.CheckCircle, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+                Icon(Icons.Default.CheckCircle, contentDescription = null, tint = Color.Black, modifier = Modifier.size(18.dp))
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
                     text = "Grant Required Permissions",
                     fontSize = 15.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = Color.White
+                    fontWeight = FontWeight.Bold,
+                    color = Color.Black
                 )
             }
 
@@ -959,20 +968,20 @@ fun PermissionsRequiredScreen(
 
             OutlinedButton(
                 onClick = onOpenSettingsClicked,
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFA855F7)),
-                border = BorderStroke(1.dp, Color(0xFF3F3F46)),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF38BDF8)),
+                border = BorderStroke(1.dp, Color(0xFF27272A)),
                 shape = RoundedCornerShape(12.dp),
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(46.dp)
             ) {
-                Icon(Icons.Default.Settings, contentDescription = null, tint = Color(0xFFA855F7), modifier = Modifier.size(16.dp))
+                Icon(Icons.Default.Settings, contentDescription = null, tint = Color(0xFF38BDF8), modifier = Modifier.size(16.dp))
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
                     text = "Open App Settings",
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Medium,
-                    color = Color(0xFFA1A1AA)
+                    color = Color(0xFF38BDF8)
                 )
             }
         }
@@ -988,8 +997,8 @@ private fun PermissionChecklistCard(
 ) {
     Surface(
         shape = RoundedCornerShape(14.dp),
-        color = Color(0xFF13131A),
-        border = BorderStroke(1.dp, if (isGranted) Color(0xFF22C55E).copy(alpha = 0.4f) else Color(0xFF27272A)),
+        color = Color(0xFF101014),
+        border = BorderStroke(1.dp, if (isGranted) Color(0xFF10B981).copy(alpha = 0.4f) else Color(0xFF27272A)),
         modifier = Modifier.fillMaxWidth()
     ) {
         Row(
@@ -1002,7 +1011,7 @@ private fun PermissionChecklistCard(
                 modifier = Modifier
                     .size(40.dp)
                     .background(
-                        if (isGranted) Color(0xFF22C55E).copy(alpha = 0.15f) else Color(0xFF9333EA).copy(alpha = 0.15f),
+                        if (isGranted) Color(0xFF10B981).copy(alpha = 0.15f) else Color(0xFF38BDF8).copy(alpha = 0.15f),
                         CircleShape
                     ),
                 contentAlignment = Alignment.Center
@@ -1010,7 +1019,7 @@ private fun PermissionChecklistCard(
                 Icon(
                     imageVector = icon,
                     contentDescription = null,
-                    tint = if (isGranted) Color(0xFF4ADE80) else Color(0xFFC084FC),
+                    tint = if (isGranted) Color(0xFF10B981) else Color(0xFF38BDF8),
                     modifier = Modifier.size(20.dp)
                 )
             }
@@ -1230,8 +1239,9 @@ fun MainAppScreen(
     }
     var isSavingPolicy by remember { mutableStateOf(false) }
     var isSyncingNow by remember { mutableStateOf(false) }
-    var syncStatusText by remember { mutableStateOf("") }          // current step summary
-    val syncLogLines = remember { mutableStateListOf<String>() }   // live per-file log
+    var syncStatusText by remember { mutableStateOf("") }
+    val syncLogLines by SyncLogManager.logsFlow.collectAsState()
+    val liveSyncStatusText by SyncLogManager.currentStatusFlow.collectAsState()
 
     var isRefreshing by remember { mutableStateOf(false) }
     var isCrudOperating by remember { mutableStateOf(false) }
@@ -1246,16 +1256,13 @@ fun MainAppScreen(
     val workManager = remember { WorkManager.getInstance(context) }
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
-        val liveData = workManager.getWorkInfosForUniqueWorkLiveData("UnifiedDriveSync")
+        val liveData = workManager.getWorkInfosByTagLiveData("UnifiedDriveSyncTag")
         val observer = Observer<List<WorkInfo>> { list ->
-            val active = list?.firstOrNull { it.state == WorkInfo.State.RUNNING }
-            if (active != null) {
-                isSyncingNow = true
-                syncStatusText = "Sync running in background…"
-            } else {
-                val finished = list?.firstOrNull { it.state == WorkInfo.State.SUCCEEDED }
-                if (finished != null && isSyncingNow) {
-                    isSyncingNow = false
+            val isRunning = list?.any { it.state == WorkInfo.State.RUNNING } == true
+            isSyncingNow = isRunning
+            if (!isRunning) {
+                val lastFinished = list?.firstOrNull { it.state == WorkInfo.State.SUCCEEDED }
+                if (lastFinished != null) {
                     syncStatusText = "All items backed up securely ✓"
                 }
             }
@@ -1286,361 +1293,6 @@ fun MainAppScreen(
         }
     }
 
-    // ── In-process Sync Now ─────────────────────────────────────────────────
-    // Runs directly in a UI-scope coroutine so we can post live progress back.
-    val performInProcessSync: () -> Unit = {
-        scope.launch {
-            if (serverUrl.isBlank() || deviceId.isBlank() || deviceKey.isBlank()) return@launch
-            SyncNotificationHelper.resetCancel()
-            SyncNotificationHelper.showScanning(context, "Media")
-            isSyncingNow = true
-            syncStatusText = "Starting sync…"
-            syncLogLines.clear()
-
-            val base = serverUrl.trimEnd('/')
-            val targetFolder = targetFolderId.takeIf { it.isNotBlank() }
-
-            fun log(msg: String) { syncLogLines.add(0, msg) }  // newest first
-            fun status(msg: String) { syncStatusText = msg }
-
-            reportSyncStatusToServer(httpClient, serverUrl, deviceId, deviceKey, "syncing", "Starting manual sync", "Manual sync started from mobile app")
-
-            // Helper: fetch storage account name for display
-            var driveLabel = "Cloud Drive"
-            try {
-                withContext(Dispatchers.IO) {
-                    val req = Request.Builder()
-                        .url("$base/api/v1/storage/summary")
-                        .addHeader("x-device-id", deviceId)
-                        .addHeader("x-device-key", deviceKey)
-                        .build()
-                    val res = httpClient.newCall(req).execute()
-                    if (res.isSuccessful) {
-                        val j = org.json.JSONObject(res.body?.string() ?: "{}")
-                        val accs = j.optJSONArray("accounts")
-                        if (accs != null && accs.length() > 0) {
-                            val acc = accs.getJSONObject(0)
-                            driveLabel = acc.optString("accountEmail", "").ifBlank {
-                                acc.optString("providerType", "Google Drive")
-                            }
-                        }
-                    }
-                }
-            } catch (_: Exception) {}
-
-            var totalUploaded = 0
-            var totalSkipped = 0
-
-            // ── Local sync history helpers ────────────────────────────────
-            // Keyed by collection label → file in app internal storage.
-            // Each file holds one asset ID (Long) per line.
-            fun historyFile(label: String): java.io.File =
-                java.io.File(context.filesDir, "synced_${label.lowercase()}.txt")
-
-            fun loadHistory(label: String): MutableSet<Long> {
-                val f = historyFile(label)
-                if (!f.exists()) return mutableSetOf()
-                return f.readLines().mapNotNull { it.trim().toLongOrNull() }.toMutableSet()
-            }
-
-            fun appendHistory(label: String, id: Long) {
-                historyFile(label).appendText("$id\n")
-            }
-            // ─────────────────────────────────────────────────────────────
-
-            suspend fun syncMediaCollection(
-                collectionUri: android.net.Uri,
-                label: String,
-                defaultMime: String,
-                namePrefix: String,
-                selection: String? = null,
-                selectionArgs: Array<String>? = null
-            ) {
-                if (SyncNotificationHelper.isSyncCancelled()) return
-                status("📂 Scanning $label…")
-                log("── Scanning $label ──")
-                SyncNotificationHelper.showScanning(context, label)
-
-                val projection = arrayOf(
-                    android.provider.MediaStore.MediaColumns._ID,
-                    android.provider.MediaStore.MediaColumns.DISPLAY_NAME,
-                    android.provider.MediaStore.MediaColumns.MIME_TYPE,
-                    android.provider.MediaStore.MediaColumns.SIZE
-                )
-                val cursor = context.contentResolver.query(
-                    collectionUri, projection, selection, selectionArgs,
-                    "${android.provider.MediaStore.MediaColumns.DATE_ADDED} DESC"
-                ) ?: run { log("⚠ Could not read $label"); return }
-
-                data class PendingSyncAsset(val id: Long, val filename: String, val mimeType: String, val sizeBytes: Long)
-                val items = mutableListOf<PendingSyncAsset>()
-                cursor.use {
-                    val idCol = it.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns._ID)
-                    val nameCol = it.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns.DISPLAY_NAME)
-                    val mimeCol = it.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns.MIME_TYPE)
-                    val sizeCol = it.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns.SIZE)
-                    while (it.moveToNext()) {
-                        val sz = it.getLong(sizeCol)
-                        if (sz <= 0) continue
-                        items.add(PendingSyncAsset(it.getLong(idCol), it.getString(nameCol) ?: "${namePrefix}_${it.getLong(idCol)}", it.getString(mimeCol) ?: defaultMime, sz))
-                    }
-                }
-
-                // Load local history to skip already-synced assets
-                val history = withContext(Dispatchers.IO) { loadHistory(label) }
-                val pending = items.filter { it.id !in history }
-                val total = items.size
-                val alreadyDone = total - pending.size
-
-                status("📂 $label — $total found, ${pending.size} pending, $alreadyDone already backed up")
-                log("Found $total $label — ${pending.size} to upload, $alreadyDone in history")
-
-                pending.forEachIndexed { idx, asset ->
-                    if (SyncNotificationHelper.isSyncCancelled()) {
-                        withContext(Dispatchers.Main) {
-                            log("⚠ Sync stopped by user")
-                            status("Sync stopped by user")
-                        }
-                        return@forEachIndexed
-                    }
-                    val id = asset.id
-                    val filename = asset.filename
-                    val mimeType = asset.mimeType
-                    val sizeBytes = asset.sizeBytes
-                    val num = idx + 1
-                    SyncNotificationHelper.showProgress(
-                        context = context,
-                        filename = filename,
-                        current = num,
-                        total = pending.size,
-                        driveLabel = driveLabel
-                    )
-                    status("⬆ Uploading $filename  ($num/${pending.size})\n☁ Drive: $driveLabel")
-                    withContext(Dispatchers.IO) {
-                        try {
-                            val contentUri = android.content.ContentUris.withAppendedId(collectionUri, id)
-
-                            // Compute SHA-256 directly from stream without memory allocation
-                            val hash = try {
-                                context.contentResolver.openInputStream(contentUri)?.use { stream ->
-                                    com.drive.sync.crypto.VaultCrypto.calculateSha256(stream)
-                                }
-                            } catch (e: Exception) {
-                                withContext(Dispatchers.Main) { log("✗ $filename — read error: ${e.message}") }
-                                null
-                            } ?: return@withContext
-
-                            val initJson = org.json.JSONObject().apply {
-                                put("filename", filename); put("mimeType", mimeType)
-                                put("sizeBytes", sizeBytes); put("contentHash", hash)
-                                targetFolder?.let { put("folderId", it) }
-                            }
-                            val initReq = Request.Builder()
-                                .url("$base/api/v1/files/upload/initiate")
-                                .addHeader("x-device-id", deviceId)
-                                .addHeader("x-device-key", deviceKey)
-                                .post(initJson.toString().toRequestBody("application/json".toMediaType()))
-                                .build()
-                            val initRes = httpClient.newCall(initReq).execute()
-                            if (!initRes.isSuccessful) {
-                                withContext(Dispatchers.Main) { log("✗ $filename — initiate failed (${initRes.code})") }
-                                return@withContext
-                            }
-                            val initResult = org.json.JSONObject(initRes.body?.string() ?: "{}")
-                            if (initResult.optBoolean("isDuplicate", false)) {
-                                // Content hash match — already in cloud; record in local history
-                                appendHistory(label, id)
-                                withContext(Dispatchers.Main) {
-                                    log("⏩ $filename — already backed up (hash match)")
-                                    totalSkipped++
-                                }
-                                return@withContext
-                            }
-                            val uploadUrl = initResult.getString("uploadSessionUrl")
-                            val storageAccountId = initResult.getString("storageAccountId")
-                            val driveOpaqueName = initResult.optString("driveOpaqueName", "")
-
-                            val streamingBody = object : RequestBody() {
-                                override fun contentType() = mimeType.toMediaType()
-                                override fun contentLength() = sizeBytes
-                                override fun writeTo(sink: BufferedSink) {
-                                    context.contentResolver.openInputStream(contentUri)?.use { stream ->
-                                        sink.writeAll(stream.source())
-                                    }
-                                }
-                            }
-
-                            val putRes = httpClient.newCall(
-                                Request.Builder().url(uploadUrl).put(streamingBody).build()
-                            ).execute()
-                            if (!putRes.isSuccessful && putRes.code != 200 && putRes.code != 201) {
-                                withContext(Dispatchers.Main) { log("✗ $filename — upload to drive failed (${putRes.code})") }
-                                putRes.close(); return@withContext
-                            }
-                            val putBody = putRes.body?.string() ?: ""
-                            var providerFileId = try { if (putBody.isNotBlank()) org.json.JSONObject(putBody).optString("id", "") else "" } catch (_: Exception) { "" }
-                            if (providerFileId.isBlank()) providerFileId = driveOpaqueName
-
-                            // Extract video frame thumbnail locally if video
-                            var videoThumbBase64: String? = null
-                            val isVideo = mimeType.startsWith("video/") ||
-                                filename.lowercase().matches(Regex(".*\\.(mp4|mov|m4v|mkv|webm|avi|wmv|flv|3gp|ts)$"))
-                            if (isVideo) {
-                                try {
-                                    val bitmap = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                                        context.contentResolver.loadThumbnail(contentUri, android.util.Size(320, 320), null)
-                                    } else {
-                                        val retriever = android.media.MediaMetadataRetriever()
-                                        retriever.setDataSource(context, contentUri)
-                                        val frame = retriever.getFrameAtTime(1000000)
-                                        retriever.release()
-                                        frame
-                                    }
-                                    if (bitmap != null) {
-                                        val out = ByteArrayOutputStream()
-                                        bitmap.compress(Bitmap.CompressFormat.JPEG, 75, out)
-                                        val b64 = android.util.Base64.encodeToString(out.toByteArray(), android.util.Base64.NO_WRAP)
-                                        videoThumbBase64 = "data:image/jpeg;base64,$b64"
-                                    }
-                                } catch (_: Exception) {}
-                            }
-
-                            val completeJson = org.json.JSONObject().apply {
-                                put("filename", filename); put("mimeType", mimeType)
-                                put("sizeBytes", sizeBytes); put("contentHash", hash)
-                                put("storageAccountId", storageAccountId)
-                                put("providerFileId", providerFileId)
-                                put("driveOpaqueName", driveOpaqueName)
-                                put("deviceAssetId", id.toString())
-                                targetFolder?.let { put("folderId", it) }
-                                if (!videoThumbBase64.isNullOrBlank()) {
-                                    put("thumbnail", videoThumbBase64)
-                                }
-                            }
-                            httpClient.newCall(
-                                Request.Builder()
-                                    .url("$base/api/v1/files/upload/complete")
-                                    .addHeader("x-device-id", deviceId)
-                                    .addHeader("x-device-key", deviceKey)
-                                    .post(completeJson.toString().toRequestBody("application/json".toMediaType()))
-                                    .build()
-                            ).execute().close()
-
-                            // Record in local history so this asset is never re-uploaded
-                            appendHistory(label, id)
-
-                            withContext(Dispatchers.Main) {
-                                log("✓ $filename → $driveLabel")
-                                totalUploaded++
-                            }
-                        } catch (e: Exception) {
-                            withContext(Dispatchers.Main) { log("✗ $filename — ${e.message}") }
-                        }
-                    }
-                }
-                log("── $label done: ${pending.size} processed ──")
-            }
-
-            try {
-                if (syncPhotos) syncMediaCollection(
-                    android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                    "Photos", "image/jpeg", "photo"
-                )
-                if (syncVideos) syncMediaCollection(
-                    android.provider.MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
-                    "Videos", "video/mp4", "video"
-                )
-                if (syncDocuments) syncMediaCollection(
-                    android.provider.MediaStore.Files.getContentUri("external"),
-                    "Documents", "application/pdf", "doc",
-                    selection = "${android.provider.MediaStore.MediaColumns.MIME_TYPE} LIKE ? OR ${android.provider.MediaStore.MediaColumns.MIME_TYPE} LIKE ? OR ${android.provider.MediaStore.MediaColumns.MIME_TYPE} LIKE ?",
-                    selectionArgs = arrayOf("application/%", "text/%", "%document%")
-                )
-            } catch (e: Exception) {
-                log("❌ Sync error: ${e.message}")
-            }
-
-            // ── Inbound Sync Phase (Paired Device Downloads) ─────────────
-            status("📥 Checking paired devices for downloads…")
-            log("── Checking paired devices for downloads ──")
-            reportSyncStatusToServer(httpClient, serverUrl, deviceId, deviceKey, "syncing", "Checking paired devices for downloads")
-            var totalDownloaded = 0
-            try {
-                withContext(Dispatchers.IO) {
-                    val inReq = Request.Builder()
-                        .url("$base/api/v1/files/device/$deviceId/inbound-sync")
-                        .addHeader("x-device-id", deviceId)
-                        .addHeader("x-device-key", deviceKey)
-                        .build()
-                    val inRes = httpClient.newCall(inReq).execute()
-                    if (inRes.isSuccessful) {
-                        val inJson = JSONObject(inRes.body?.string() ?: "{}")
-                        val inFiles = inJson.optJSONArray("files")
-                        if (inFiles != null) {
-                            for (i in 0 until inFiles.length()) {
-                                val fObj = inFiles.getJSONObject(i)
-                                val isDownloaded = fObj.optBoolean("isDownloadedLocally", false)
-                                val isForce = fObj.optBoolean("isForceDownload", false)
-                                val srcDevId = fObj.optString("sourceDeviceId")
-                                val autoDl = fObj.optBoolean("autoDownloadToGallery", false) ||
-                                        (srcDevId.isNotBlank() && pairedRulesMap[srcDevId]?.autoDownloadToGallery == true)
-
-                                if (!isDownloaded && (isForce || autoDl)) {
-                                    val fId = fObj.optString("_id")
-                                    val fName = fObj.optString("filename")
-                                    val fMime = fObj.optString("mimeType")
-                                    if (fId.isNotBlank() && fName.isNotBlank()) {
-                                        withContext(Dispatchers.Main) {
-                                            status("📥 Downloading $fName to phone…")
-                                            log("⬇ Downloading $fName from paired device")
-                                        }
-                                        reportSyncStatusToServer(httpClient, serverUrl, deviceId, deviceKey, "syncing", "Downloading $fName")
-                                        val ok = downloadInboundFileLocally(context, httpClient, serverUrl, deviceId, deviceKey, fId, fName, fMime)
-                                        if (ok) {
-                                            totalDownloaded++
-                                            withContext(Dispatchers.Main) {
-                                                log("✓ $fName saved to phone storage")
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            } catch (e: Exception) {
-                log("⚠ Inbound download notice: ${e.message}")
-            }
-
-            val interval = syncIntervalHours.toLong().coerceAtLeast(1L)
-            val nextSync = System.currentTimeMillis() + (interval * 3600 * 1000L)
-            val summary = "Sync complete — $totalUploaded uploaded, $totalDownloaded downloaded, $totalSkipped skipped"
-            status("✅ $summary")
-            log("═══════════════════════════════")
-            log("✅ $summary")
-
-            if (SyncNotificationHelper.isSyncCancelled()) {
-                SyncNotificationHelper.showStopped(context)
-            } else {
-                SyncNotificationHelper.showCompletion(context, totalUploaded)
-            }
-
-            prefs.edit().apply {
-                putLong("last_sync_timestamp", System.currentTimeMillis())
-                putLong("next_sync_timestamp", nextSync)
-                putString("last_sync_status", summary)
-                putInt("last_sync_count", totalUploaded)
-                putInt("total_synced_count", prefs.getInt("total_synced_count", 0) + totalUploaded)
-                apply()
-            }
-            lastSyncTimestamp = System.currentTimeMillis()
-            nextSyncTimestamp = nextSync
-            reportSyncStatusToServer(httpClient, serverUrl, deviceId, deviceKey, "online", "Idle ($summary)", summary)
-            isSyncingNow = false
-        }
-    }
-    // ───────────────────────────────────────────────────────────────────────
-
     val saveCredentials = {
         prefs.edit().apply {
             putString("server_url", serverUrl)
@@ -1657,9 +1309,25 @@ fun MainAppScreen(
         }
     }
 
+    // ── Unified Sync Now ───────────────────────────────────────────────────
+    val performInProcessSync: () -> Unit = {
+        saveCredentials()
+        onSyncNow(serverUrl, deviceId, deviceKey, targetFolderId, syncPhotos, syncVideos, syncDocuments) {
+            isSyncingNow = true
+            syncStatusText = "Starting background sync…"
+            Toast.makeText(context, "Background sync running quietly!", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     val downloadInboundItem: (InboundSyncItem) -> Unit = { item ->
         scope.launch {
-            Toast.makeText(context, "Saving ${item.filename} to phone storage...", Toast.LENGTH_SHORT).show()
+            val isMedia = item.mimeType.startsWith("image/") || item.mimeType.startsWith("video/") ||
+                    item.filename.endsWith(".jpg", true) || item.filename.endsWith(".jpeg", true) ||
+                    item.filename.endsWith(".png", true) || item.filename.endsWith(".webp", true) ||
+                    item.filename.endsWith(".mp4", true) || item.filename.endsWith(".mov", true) ||
+                    item.filename.endsWith(".mkv", true)
+            val targetName = if (isMedia) "Phone Gallery" else "phone storage"
+            Toast.makeText(context, "Saving ${item.filename} to $targetName...", Toast.LENGTH_SHORT).show()
             val ok = downloadInboundFileLocally(
                 context = context,
                 httpClient = httpClient,
@@ -1672,7 +1340,7 @@ fun MainAppScreen(
             )
             if (ok) {
                 item.isDownloadedLocally = true
-                Toast.makeText(context, "Saved ${item.filename} to phone storage!", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "Saved ${item.filename} to $targetName ✓", Toast.LENGTH_SHORT).show()
             } else {
                 Toast.makeText(context, "Failed to download ${item.filename}", Toast.LENGTH_SHORT).show()
             }
@@ -2503,7 +2171,7 @@ fun MainAppScreen(
                             Text(
                                 text = buildAnnotatedString {
                                     append("my")
-                                    withStyle(style = SpanStyle(color = Color(0xFFC084FC))) {
+                                    withStyle(style = SpanStyle(color = Color(0xFF38BDF8))) {
                                         append("Drive")
                                     }
                                 },
@@ -2516,7 +2184,7 @@ fun MainAppScreen(
                                 modifier = Modifier
                                     .size(6.dp)
                                     .clip(CircleShape)
-                                    .background(Color(0xFFA855F7))
+                                    .background(Color(0xFF38BDF8))
                             )
                         }
                     }
@@ -2529,14 +2197,14 @@ fun MainAppScreen(
                         if (isRefreshing) {
                             CircularProgressIndicator(
                                 modifier = Modifier.size(20.dp),
-                                color = Color(0xFFA855F7),
+                                color = Color(0xFF38BDF8),
                                 strokeWidth = 2.dp
                             )
                         } else {
                             Icon(
                                 Icons.Default.Refresh,
                                 contentDescription = "Refresh Data",
-                                tint = Color(0xFFA855F7)
+                                tint = Color(0xFFE2E8F0)
                             )
                         }
                     }
@@ -2548,7 +2216,7 @@ fun MainAppScreen(
                                 .padding(end = 8.dp)
                                 .size(34.dp)
                                 .clip(CircleShape)
-                                .border(1.5.dp, Color(0xFFA855F7), CircleShape),
+                                .border(1.5.dp, Color(0xFF38BDF8), CircleShape),
                             contentScale = ContentScale.Crop
                         )
                     } else if (userName.isNotBlank()) {
@@ -2557,8 +2225,8 @@ fun MainAppScreen(
                                 .padding(end = 8.dp)
                                 .size(34.dp)
                                 .clip(CircleShape)
-                                .background(Color(0xFF9333EA))
-                                .border(1.5.dp, Color(0xFFA855F7), CircleShape),
+                                .background(Color(0xFF1E293B))
+                                .border(1.5.dp, Color(0xFF38BDF8), CircleShape),
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
@@ -2570,7 +2238,7 @@ fun MainAppScreen(
                         }
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color(0xFF0D0D11))
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color(0xFF0A0A0E))
             )
                     val globalColorType = when {
                         isManualUploading -> ProgressColorType.UPLOAD
@@ -2587,7 +2255,7 @@ fun MainAppScreen(
     },
     bottomBar = {
             NavigationBar(
-                containerColor = Color(0xFF13131A),
+                containerColor = Color(0xFF0A0A0E),
                 contentColor = Color.White
             ) {
                 NavigationBarItem(
@@ -2596,9 +2264,9 @@ fun MainAppScreen(
                     icon = { Icon(Icons.Default.Folder, contentDescription = "Files") },
                     label = { Text("Files", fontSize = 11.sp) },
                     colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = Color.White,
-                        selectedTextColor = Color(0xFFA855F7),
-                        indicatorColor = Color(0xFF9333EA),
+                        selectedIconColor = Color(0xFF38BDF8),
+                        selectedTextColor = Color(0xFF38BDF8),
+                        indicatorColor = Color(0xFF1E293B),
                         unselectedIconColor = Color(0xFF71717A),
                         unselectedTextColor = Color(0xFF71717A)
                     )
@@ -2609,9 +2277,9 @@ fun MainAppScreen(
                     icon = { Icon(Icons.Default.PhotoLibrary, contentDescription = "Gallery") },
                     label = { Text("Gallery", fontSize = 11.sp) },
                     colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = Color.White,
-                        selectedTextColor = Color(0xFFA855F7),
-                        indicatorColor = Color(0xFF9333EA),
+                        selectedIconColor = Color(0xFF38BDF8),
+                        selectedTextColor = Color(0xFF38BDF8),
+                        indicatorColor = Color(0xFF1E293B),
                         unselectedIconColor = Color(0xFF71717A),
                         unselectedTextColor = Color(0xFF71717A)
                     )
@@ -2622,9 +2290,9 @@ fun MainAppScreen(
                     icon = { Icon(Icons.Default.SyncAlt, contentDescription = "Transfers") },
                     label = { Text("Transfers", fontSize = 11.sp) },
                     colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = Color.White,
-                        selectedTextColor = Color(0xFFA855F7),
-                        indicatorColor = Color(0xFF9333EA),
+                        selectedIconColor = Color(0xFF38BDF8),
+                        selectedTextColor = Color(0xFF38BDF8),
+                        indicatorColor = Color(0xFF1E293B),
                         unselectedIconColor = Color(0xFF71717A),
                         unselectedTextColor = Color(0xFF71717A)
                     )
@@ -2635,9 +2303,9 @@ fun MainAppScreen(
                     icon = { Icon(Icons.Default.Tune, contentDescription = "Policies") },
                     label = { Text("Policies", fontSize = 11.sp) },
                     colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = Color.White,
-                        selectedTextColor = Color(0xFFA855F7),
-                        indicatorColor = Color(0xFF9333EA),
+                        selectedIconColor = Color(0xFF38BDF8),
+                        selectedTextColor = Color(0xFF38BDF8),
+                        indicatorColor = Color(0xFF1E293B),
                         unselectedIconColor = Color(0xFF71717A),
                         unselectedTextColor = Color(0xFF71717A)
                     )
@@ -2648,8 +2316,8 @@ fun MainAppScreen(
             if (selectedTab != 3 && selectedTab != 1 && !(selectedTab == 0 && isFilesSelectionMode)) {
                 FloatingActionButton(
                     onClick = { showManualUploadDialog = true },
-                    containerColor = Color(0xFFA855F7),
-                    contentColor = Color.White,
+                    containerColor = Color(0xFF38BDF8),
+                    contentColor = Color.Black,
                     shape = RoundedCornerShape(16.dp)
                 ) {
                     Row(
@@ -2708,11 +2376,11 @@ fun MainAppScreen(
                         Spacer(modifier = Modifier.width(8.dp))
                         Button(
                             onClick = { permissionLauncher.launch(requiredPermissions) },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFA855F7)),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF38BDF8)),
                             shape = RoundedCornerShape(8.dp),
                             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                         ) {
-                            Text("Allow", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                            Text("Allow", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.Black)
                         }
                     }
                 }
@@ -2820,7 +2488,7 @@ fun MainAppScreen(
                             onScheduleSync(serverUrl, deviceId, deviceKey, targetFolderId, wifiOnly, chargingOnly, syncPhotos, syncVideos, syncDocuments)
                         },
                         isSyncingNow = isSyncingNow,
-                        syncStatusText = syncStatusText,
+                        syncStatusText = liveSyncStatusText.ifBlank { syncStatusText },
                         syncLogLines = syncLogLines,
                         nextSyncTimestamp = nextSyncTimestamp,
                         syncIntervalHours = syncIntervalHours,
@@ -2952,12 +2620,12 @@ fun FilesScreen(
                             )
                             Surface(
                                 shape = CircleShape,
-                                color = Color(0xFF1E1B4B)
+                                color = Color(0xFF0F172A)
                             ) {
                                 Text(
                                     text = "${storageSummary?.connectedAccountsCount ?: 0} Drives",
                                     fontSize = 11.sp,
-                                    color = Color(0xFFC084FC),
+                                    color = Color(0xFF38BDF8),
                                     fontWeight = FontWeight.SemiBold,
                                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                                 )
@@ -2975,8 +2643,8 @@ fun FilesScreen(
                                 .fillMaxWidth()
                                 .height(6.dp)
                                 .clip(RoundedCornerShape(3.dp)),
-                            color = Color(0xFFA855F7),
-                            trackColor = Color(0xFF27273A)
+                            color = Color(0xFF38BDF8),
+                            trackColor = Color(0xFF27272A)
                         )
 
                         Spacer(modifier = Modifier.height(8.dp))
@@ -2996,7 +2664,7 @@ fun FilesScreen(
                                 text = "%.0f%%".format(storageSummary?.usagePercentage ?: 0.0),
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = Color(0xFFA855F7)
+                                color = Color(0xFF38BDF8)
                             )
                         }
                     }
@@ -3046,7 +2714,7 @@ fun FilesScreen(
                             )
                             Surface(
                                 shape = RoundedCornerShape(8.dp),
-                                color = if (isLast) Color(0xFF26193E) else Color(0xFF181824),
+                                color = if (isLast) Color(0xFF1E293B) else Color(0xFF14141B),
                                 modifier = Modifier.clickable { onSelectFilterFolder(crumb.id) }
                             ) {
                                 Row(
@@ -3056,7 +2724,7 @@ fun FilesScreen(
                                     Icon(
                                         Icons.Default.Folder,
                                         contentDescription = null,
-                                        tint = if (isLast) Color(0xFFC084FC) else Color(0xFFFBBF24),
+                                        tint = if (isLast) Color(0xFF38BDF8) else Color(0xFFFBBF24),
                                         modifier = Modifier.size(14.dp)
                                     )
                                     Spacer(modifier = Modifier.width(4.dp))
@@ -3260,8 +2928,8 @@ fun FilesScreen(
                             }
                         ),
                     shape = RoundedCornerShape(14.dp),
-                    colors = CardDefaults.cardColors(containerColor = if (isSelected) Color(0xFF26193E) else Color(0xFF14141C)),
-                    border = if (isSelected) BorderStroke(1.dp, Color(0xFFA855F7)) else null
+                    colors = CardDefaults.cardColors(containerColor = if (isSelected) Color(0xFF1E293B) else Color(0xFF14141C)),
+                    border = if (isSelected) BorderStroke(1.dp, Color(0xFF38BDF8)) else BorderStroke(1.dp, Color(0xFF27272A))
                 ) {
                     Row(
                         modifier = Modifier.padding(12.dp),
@@ -3275,7 +2943,7 @@ fun FilesScreen(
                         }
                         val iconTint = when {
                             file.mimeType.startsWith("image/") -> Color(0xFF38BDF8)
-                            file.mimeType.startsWith("video/") -> Color(0xFFA855F7)
+                            file.mimeType.startsWith("video/") -> Color(0xFF38BDF8)
                             file.mimeType.contains("pdf") -> Color(0xFFF87171)
                             else -> Color(0xFFFBBF24)
                         }
@@ -3292,7 +2960,7 @@ fun FilesScreen(
                                     checked = isSelected,
                                     onCheckedChange = null,
                                     colors = CheckboxDefaults.colors(
-                                        checkedColor = Color(0xFFA855F7),
+                                        checkedColor = Color(0xFF38BDF8),
                                         uncheckedColor = Color(0xFF71717A)
                                     )
                                 )
@@ -3348,7 +3016,8 @@ fun FilesScreen(
             ) {
                 Surface(
                     shape = RoundedCornerShape(24.dp),
-                    color = Color(0xFF26193E),
+                    color = Color(0xFF111116),
+                    border = BorderStroke(1.dp, Color(0xFF27272A)),
                     shadowElevation = 8.dp,
                     modifier = Modifier.fillMaxWidth()
                 ) {
@@ -3366,18 +3035,18 @@ fun FilesScreen(
                                 selectedFileIds.addAll(filteredFiles.map { it.id })
                             }
                         }) {
-                            Icon(Icons.Default.SelectAll, contentDescription = "Select All", tint = Color(0xFFA855F7))
+                            Icon(Icons.Default.SelectAll, contentDescription = "Select All", tint = Color(0xFF38BDF8))
                         }
                         IconButton(onClick = {
                             val itemsToDownload = filteredFiles.filter { it.id in selectedFileIds }
                             itemsToDownload.forEach { f ->
                                 val streamUrl = "${serverUrl.trimEnd('/')}/api/v1/files/${f.id}/stream?deviceId=$deviceId&deviceKey=$deviceKey"
-                                downloadFileToDevice(context, streamUrl, f.filename, deviceId, deviceKey)
+                                downloadFileToDevice(context, streamUrl, f.filename, deviceId, deviceKey, f.mimeType)
                             }
                             onSelectionModeChange(false)
                             selectedFileIds.clear()
                         }) {
-                            Icon(Icons.Default.Download, contentDescription = "Download", tint = Color(0xFFA855F7))
+                            Icon(Icons.Default.Download, contentDescription = "Download", tint = Color(0xFF38BDF8))
                         }
                         IconButton(onClick = {
                             coroutineScope.launch {
@@ -3435,7 +3104,7 @@ fun FilesScreen(
                 Column {
                     DropdownMenuItem(
                         text = { Text("Select", color = Color.White) },
-                        leadingIcon = { Icon(Icons.Default.CheckCircle, contentDescription = null, tint = Color(0xFFA855F7)) },
+                        leadingIcon = { Icon(Icons.Default.CheckCircle, contentDescription = null, tint = Color(0xFF38BDF8)) },
                         onClick = {
                             onSelectionModeChange(true)
                             if (!selectedFileIds.contains(file.id)) {
@@ -3449,7 +3118,7 @@ fun FilesScreen(
                         leadingIcon = { Icon(Icons.Default.Download, contentDescription = null, tint = Color.White) },
                         onClick = {
                             val streamUrl = "${serverUrl.trimEnd('/')}/api/v1/files/${file.id}/stream?deviceId=$deviceId&deviceKey=$deviceKey"
-                            downloadFileToDevice(context, streamUrl, file.filename, deviceId, deviceKey)
+                            downloadFileToDevice(context, streamUrl, file.filename, deviceId, deviceKey, file.mimeType)
                             selectedFileForMenu = null
                         }
                     )
@@ -3516,7 +3185,7 @@ fun FilesScreen(
             },
             confirmButton = {
                 TextButton(onClick = { selectedFileForMenu = null }) {
-                    Text("Close", color = Color(0xFFA855F7))
+                    Text("Close", color = Color(0xFF38BDF8))
                 }
             }
         )
@@ -3533,7 +3202,7 @@ fun FilesScreen(
                     onValueChange = { newFileName = it },
                     label = { Text("Filename") },
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = Color(0xFFA855F7),
+                        focusedBorderColor = Color(0xFF38BDF8),
                         unfocusedBorderColor = Color(0xFF2E2E3E),
                         focusedTextColor = Color.White,
                         unfocusedTextColor = Color.White
@@ -3554,7 +3223,7 @@ fun FilesScreen(
                     }
                     fileToRename = null
                 }) {
-                    Text("Rename", color = Color(0xFFA855F7))
+                    Text("Rename", color = Color(0xFF38BDF8))
                 }
             },
             dismissButton = {
@@ -3578,7 +3247,7 @@ fun FilesScreen(
                     Text("Type: ${f.mimeType}", color = Color.White)
                     Text("Size: ${formatBytes(f.sizeBytes)}", color = Color.White)
                     if (!f.takenAt.isNullOrBlank()) {
-                        Text("Taken Date & Time: $dateFormatted", color = Color(0xFFA855F7), fontWeight = FontWeight.SemiBold)
+                        Text("Taken Date & Time: $dateFormatted", color = Color(0xFF38BDF8), fontWeight = FontWeight.SemiBold)
                     } else {
                         Text("Created: $dateFormatted", color = Color.White)
                     }
@@ -3587,7 +3256,7 @@ fun FilesScreen(
             },
             confirmButton = {
                 TextButton(onClick = { fileToShowDetails = null }) {
-                    Text("Close", color = Color(0xFFA855F7))
+                    Text("Close", color = Color(0xFF38BDF8))
                 }
             }
         )
@@ -3680,7 +3349,7 @@ fun FilesScreen(
             },
             confirmButton = {
                 TextButton(onClick = { selectedFolderForMenu = null }) {
-                    Text("Close", color = Color(0xFFA855F7))
+                    Text("Close", color = Color(0xFF38BDF8))
                 }
             }
         )
@@ -3700,7 +3369,7 @@ fun FilesScreen(
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedTextColor = Color.White,
                         unfocusedTextColor = Color.White,
-                        focusedBorderColor = Color(0xFFA855F7),
+                        focusedBorderColor = Color(0xFF38BDF8),
                         unfocusedBorderColor = Color(0xFF333340)
                     ),
                     singleLine = true,
@@ -3726,7 +3395,7 @@ fun FilesScreen(
                     },
                     enabled = renameFolderNameInput.isNotBlank() && renameFolderNameInput.trim() != f.name
                 ) {
-                    Text("Rename", color = Color(0xFFA855F7))
+                    Text("Rename", color = Color(0xFF38BDF8))
                 }
             },
             dismissButton = {
@@ -3835,7 +3504,7 @@ fun TransfersScreen(
                     .weight(1f)
                     .clip(RoundedCornerShape(10.dp))
                     .clickable { subTab = 0; selectedCategory = "All" },
-                color = if (subTab == 0) Color(0xFF9333EA) else Color.Transparent
+                color = if (subTab == 0) Color(0xFF38BDF8) else Color.Transparent
             ) {
                 Row(
                     modifier = Modifier.padding(vertical = 10.dp),
@@ -3845,13 +3514,13 @@ fun TransfersScreen(
                     Icon(
                         Icons.Default.CloudUpload,
                         contentDescription = null,
-                        tint = if (subTab == 0) Color.White else Color(0xFF94A3B8),
+                        tint = if (subTab == 0) Color.Black else Color(0xFF94A3B8),
                         modifier = Modifier.size(16.dp)
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
                         text = "Uploaded (${uploadedFiles.size})",
-                        color = if (subTab == 0) Color.White else Color(0xFF94A3B8),
+                        color = if (subTab == 0) Color.Black else Color(0xFF94A3B8),
                         fontSize = 12.sp,
                         fontWeight = if (subTab == 0) FontWeight.Bold else FontWeight.Medium
                     )
@@ -3864,7 +3533,7 @@ fun TransfersScreen(
                     .weight(1f)
                     .clip(RoundedCornerShape(10.dp))
                     .clickable { subTab = 1; selectedCategory = "All" },
-                color = if (subTab == 1) Color(0xFF9333EA) else Color.Transparent
+                color = if (subTab == 1) Color(0xFF38BDF8) else Color.Transparent
             ) {
                 Row(
                     modifier = Modifier.padding(vertical = 10.dp),
@@ -3874,13 +3543,13 @@ fun TransfersScreen(
                     Icon(
                         Icons.Default.CloudDownload,
                         contentDescription = null,
-                        tint = if (subTab == 1) Color.White else Color(0xFF94A3B8),
+                        tint = if (subTab == 1) Color.Black else Color(0xFF94A3B8),
                         modifier = Modifier.size(16.dp)
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
                         text = "Synced (${inboundFiles.size})",
-                        color = if (subTab == 1) Color.White else Color(0xFF94A3B8),
+                        color = if (subTab == 1) Color.Black else Color(0xFF94A3B8),
                         fontSize = 12.sp,
                         fontWeight = if (subTab == 1) FontWeight.Bold else FontWeight.Medium
                     )
@@ -3902,12 +3571,12 @@ fun TransfersScreen(
                     modifier = Modifier
                         .clip(RoundedCornerShape(16.dp))
                         .clickable { selectedCategory = cat },
-                    color = if (isSelected) Color(0xFF26193E) else Color(0xFF14141C),
-                    border = BorderStroke(1.dp, if (isSelected) Color(0xFFA855F7) else Color(0xFF242432))
+                    color = if (isSelected) Color(0xFF1E293B) else Color(0xFF14141C),
+                    border = BorderStroke(1.dp, if (isSelected) Color(0xFF38BDF8) else Color(0xFF242432))
                 ) {
                     Text(
                         text = cat,
-                        color = if (isSelected) Color(0xFFD8B4FE) else Color(0xFF94A3B8),
+                        color = if (isSelected) Color(0xFF38BDF8) else Color(0xFF94A3B8),
                         fontSize = 11.sp,
                         fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
@@ -3930,13 +3599,13 @@ fun TransfersScreen(
                 Button(
                     onClick = { onTriggerUploadGallery?.invoke() },
                     modifier = Modifier.weight(1f),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF26193E)),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B)),
                     shape = RoundedCornerShape(10.dp),
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
                 ) {
-                    Icon(Icons.Default.PhotoLibrary, contentDescription = null, tint = Color(0xFFA855F7), modifier = Modifier.size(16.dp))
+                    Icon(Icons.Default.PhotoLibrary, contentDescription = null, tint = Color(0xFF38BDF8), modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("Upload Gallery", color = Color(0xFFE9D5FF), fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                    Text("Upload Gallery", color = Color(0xFFF8FAFC), fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                 }
 
                 Button(
@@ -3969,7 +3638,7 @@ fun TransfersScreen(
                     contentAlignment = Alignment.Center
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(Icons.Default.CloudUpload, contentDescription = null, tint = Color(0xFFA855F7), modifier = Modifier.size(48.dp))
+                        Icon(Icons.Default.CloudUpload, contentDescription = null, tint = Color(0xFF38BDF8), modifier = Modifier.size(48.dp))
                         Spacer(modifier = Modifier.height(12.dp))
                         Text("No uploads found yet", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 15.sp)
                         Spacer(modifier = Modifier.height(4.dp))
@@ -3983,7 +3652,10 @@ fun TransfersScreen(
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                             Button(
                                 onClick = { onTriggerUploadGallery?.invoke() },
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFA855F7)),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = Color(0xFF38BDF8),
+                                    contentColor = Color.Black
+                                ),
                                 shape = RoundedCornerShape(10.dp)
                             ) {
                                 Icon(Icons.Default.PhotoLibrary, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -4096,11 +3768,11 @@ fun TransfersScreen(
 
                                 Surface(
                                     shape = RoundedCornerShape(8.dp),
-                                    color = Color(0xFF26193E)
+                                    color = Color(0xFF1E293B)
                                 ) {
                                     Text(
                                         text = "Cloud Stored",
-                                        color = Color(0xFFC084FC),
+                                        color = Color(0xFF38BDF8),
                                         fontSize = 10.sp,
                                         fontWeight = FontWeight.Bold,
                                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
@@ -4142,7 +3814,10 @@ fun TransfersScreen(
                     Button(
                         onClick = onSyncAllToGallery,
                         shape = RoundedCornerShape(10.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFA855F7)),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFF38BDF8),
+                            contentColor = Color.Black
+                        ),
                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                     ) {
                         Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(14.dp))
@@ -4261,11 +3936,11 @@ fun TransfersScreen(
                                         Spacer(modifier = Modifier.width(6.dp))
                                         Surface(
                                             shape = RoundedCornerShape(6.dp),
-                                            color = Color(0xFF222230)
+                                            color = Color(0xFF1E293B)
                                         ) {
                                             Text(
                                                 text = "From: ${item.sourceDeviceLabel}",
-                                                color = Color(0xFFC084FC),
+                                                color = Color(0xFF38BDF8),
                                                 fontSize = 9.sp,
                                                 fontWeight = FontWeight.Medium,
                                                 modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
@@ -4280,7 +3955,7 @@ fun TransfersScreen(
                                     Icon(
                                         if (item.isDownloadedLocally) Icons.Default.CheckCircle else Icons.Default.Download,
                                         contentDescription = "Save to Gallery",
-                                        tint = if (item.isDownloadedLocally) Color(0xFF34D399) else Color(0xFFA855F7),
+                                        tint = if (item.isDownloadedLocally) Color(0xFF10B981) else Color(0xFF38BDF8),
                                         modifier = Modifier.size(22.dp)
                                     )
                                 }
@@ -4411,7 +4086,7 @@ fun DeviceAndPolicyScreen(
                         val formattedTime = if (lastSyncTimestamp > 0) {
                             SimpleDateFormat("h:mm a, MMM d", Locale.getDefault()).format(Date(lastSyncTimestamp))
                         } else "Never"
-                        Text(formattedTime, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFFA855F7))
+                        Text(formattedTime, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF38BDF8))
                     }
                     Column(horizontalAlignment = Alignment.End) {
                         Text("Next Sync", fontSize = 10.sp, color = Color(0xFF71717A))
@@ -4466,7 +4141,7 @@ fun DeviceAndPolicyScreen(
                         if (isSyncingNow) {
                             CircularProgressIndicator(
                                 modifier = Modifier.size(16.dp),
-                                color = Color(0xFFA855F7),
+                                color = Color(0xFF38BDF8),
                                 strokeWidth = 2.dp
                             )
                             Spacer(modifier = Modifier.width(6.dp))
@@ -4482,7 +4157,10 @@ fun DeviceAndPolicyScreen(
                         onClick = onScheduleSync,
                         modifier = Modifier.weight(1f),
                         enabled = isPaired,
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF7E22CE))
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFF38BDF8),
+                            contentColor = Color.Black
+                        )
                     ) {
                         Icon(Icons.Default.Schedule, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(6.dp))
@@ -4522,11 +4200,25 @@ fun DeviceAndPolicyScreen(
                             Spacer(modifier = Modifier.width(10.dp))
                         }
                         Text(
-                            text = if (isSyncingNow) "Sync in progress" else "Last sync log",
+                            text = if (isSyncingNow) "Live sync running" else "Sync history & logs",
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Bold,
-                            color = Color(0xFF6EE7B7)
+                            color = Color(0xFF6EE7B7),
+                            modifier = Modifier.weight(1f)
                         )
+                        if (syncLogLines.isNotEmpty() && !isSyncingNow) {
+                            Text(
+                                text = "Clear",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = Color(0xFF9CA3AF),
+                                modifier = Modifier
+                                    .clickable {
+                                        SyncLogManager.clear()
+                                    }
+                                    .padding(horizontal = 4.dp, vertical = 2.dp)
+                            )
+                        }
                     }
 
                     // Status / current file line
@@ -4546,7 +4238,7 @@ fun DeviceAndPolicyScreen(
                         }
                     }
 
-                    // Per-file log (newest first, max 20 lines visible)
+                    // Per-file log (newest first, max 100 lines visible)
                     if (syncLogLines.isNotEmpty()) {
                         Spacer(modifier = Modifier.height(10.dp))
                         HorizontalDivider(color = Color(0xFF1F2E1F))
@@ -4554,18 +4246,19 @@ fun DeviceAndPolicyScreen(
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .heightIn(max = 200.dp)
+                                .heightIn(max = 240.dp)
                                 .verticalScroll(rememberScrollState())
                         ) {
-                            syncLogLines.take(50).forEach { line ->
-                                val (color, icon) = when {
-                                    line.startsWith("✓") -> Pair(Color(0xFF86EFAC), "")
-                                    line.startsWith("⏩") -> Pair(Color(0xFF6B7280), "")
-                                    line.startsWith("✗") -> Pair(Color(0xFFFCA5A5), "")
-                                    line.startsWith("❌") -> Pair(Color(0xFFEF4444), "")
-                                    line.startsWith("✅") -> Pair(Color(0xFF34D399), "")
-                                    line.startsWith("──") || line.startsWith("═") -> Pair(Color(0xFF4B5563), "")
-                                    else -> Pair(Color(0xFF9CA3AF), "")
+                            syncLogLines.take(100).forEach { line ->
+                                val color = when {
+                                    line.contains("✓") -> Color(0xFF86EFAC)
+                                    line.contains("⏩") -> Color(0xFF9CA3AF)
+                                    line.contains("✗") -> Color(0xFFFCA5A5)
+                                    line.contains("❌") -> Color(0xFFEF4444)
+                                    line.contains("✅") -> Color(0xFF34D399)
+                                    line.contains("⚠") -> Color(0xFFFBBF24)
+                                    line.contains("──") || line.contains("═") -> Color(0xFF6B7280)
+                                    else -> Color(0xFFD1D5DB)
                                 }
                                 Text(
                                     text = line,
@@ -4605,12 +4298,13 @@ fun DeviceAndPolicyScreen(
         // Auto Sync Schedule & Interval Setting
         Surface(
             shape = RoundedCornerShape(12.dp),
-            color = Color(0xFF1E1830),
+            color = Color(0xFF14141B),
+            border = BorderStroke(1.dp, Color(0xFF27272A)),
             modifier = Modifier.fillMaxWidth()
         ) {
             Column(modifier = Modifier.padding(14.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.Schedule, contentDescription = null, tint = Color(0xFFA855F7), modifier = Modifier.size(16.dp))
+                    Icon(Icons.Default.Schedule, contentDescription = null, tint = Color(0xFF38BDF8), modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
                         text = "Auto-Sync Interval: Every $syncIntervalHours hours",
@@ -4639,15 +4333,15 @@ fun DeviceAndPolicyScreen(
                         val isSelected = syncIntervalHours == hrs
                         Surface(
                             shape = RoundedCornerShape(8.dp),
-                            color = if (isSelected) Color(0xFF7E22CE) else Color(0xFF14141C),
-                            border = BorderStroke(1.dp, if (isSelected) Color(0xFFA855F7) else Color(0xFF2E2E3A)),
+                            color = if (isSelected) Color(0xFF1E293B) else Color(0xFF14141C),
+                            border = BorderStroke(1.dp, if (isSelected) Color(0xFF38BDF8) else Color(0xFF2E2E3A)),
                             modifier = Modifier
                                 .weight(1f)
                                 .clickable { onSyncIntervalChange(hrs) }
                         ) {
                             Text(
                                 text = "${hrs}h",
-                                color = if (isSelected) Color.White else Color(0xFF94A3B8),
+                                color = if (isSelected) Color(0xFF38BDF8) else Color(0xFF94A3B8),
                                 fontSize = 12.sp,
                                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
                                 textAlign = TextAlign.Center,
@@ -4731,13 +4425,13 @@ fun DeviceAndPolicyScreen(
                             modifier = Modifier
                                 .size(40.dp)
                                 .clip(RoundedCornerShape(12.dp))
-                                .background(Color(0xFF26193E)),
+                                .background(Color(0xFF1E293B)),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
                                 Icons.Default.FolderSpecial,
                                 contentDescription = null,
-                                tint = Color(0xFFA855F7),
+                                tint = Color(0xFF38BDF8),
                                 modifier = Modifier.size(22.dp)
                             )
                         }
@@ -4747,7 +4441,7 @@ fun DeviceAndPolicyScreen(
                             Text(
                                 text = "Selected: $targetFolderName",
                                 fontSize = 11.sp,
-                                color = Color(0xFFC084FC),
+                                color = Color(0xFF38BDF8),
                                 fontWeight = FontWeight.SemiBold
                             )
                         }
@@ -4755,11 +4449,11 @@ fun DeviceAndPolicyScreen(
 
                     Button(
                         onClick = onOpenFolderDialog,
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF26193E)),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B)),
                         shape = RoundedCornerShape(10.dp),
                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                     ) {
-                        Text("Change", color = Color(0xFFE9D5FF), fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                        Text("Change", color = Color(0xFF38BDF8), fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                     }
                 }
             }
@@ -4784,7 +4478,7 @@ fun DeviceAndPolicyScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Image, contentDescription = null, tint = Color(0xFFA855F7), modifier = Modifier.size(18.dp))
+                        Icon(Icons.Default.Image, contentDescription = null, tint = Color(0xFF38BDF8), modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(8.dp))
                         Text("Sync Photos & Pictures", fontSize = 13.sp, color = Color(0xFFE4E4E7))
                     }
@@ -4797,7 +4491,7 @@ fun DeviceAndPolicyScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Movie, contentDescription = null, tint = Color(0xFFA855F7), modifier = Modifier.size(18.dp))
+                        Icon(Icons.Default.Movie, contentDescription = null, tint = Color(0xFF38BDF8), modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(8.dp))
                         Text("Sync Videos", fontSize = 13.sp, color = Color(0xFFE4E4E7))
                     }
@@ -4855,7 +4549,7 @@ fun DeviceAndPolicyScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Devices, contentDescription = null, tint = Color(0xFFA855F7), modifier = Modifier.size(20.dp))
+                        Icon(Icons.Default.Devices, contentDescription = null, tint = Color(0xFF38BDF8), modifier = Modifier.size(20.dp))
                         Spacer(modifier = Modifier.width(8.dp))
                         Column {
                             Text("Paired Devices Inbound Policy", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
@@ -4981,7 +4675,7 @@ fun DeviceAndPolicyScreen(
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text("Auto Download to Phone Gallery", fontSize = 12.sp, color = Color(0xFFA855F7), fontWeight = FontWeight.SemiBold)
+                                    Text("Auto Download to Phone Gallery", fontSize = 12.sp, color = Color(0xFF38BDF8), fontWeight = FontWeight.SemiBold)
                                     Switch(
                                         checked = rule.autoDownloadToGallery,
                                         onCheckedChange = { chk ->
@@ -4999,10 +4693,13 @@ fun DeviceAndPolicyScreen(
                     modifier = Modifier.fillMaxWidth(),
                     enabled = isPaired && !isSavingPolicy,
                     shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFA855F7))
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFF38BDF8),
+                        contentColor = Color.Black
+                    )
                 ) {
                     if (isSavingPolicy) {
-                        CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp)
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.Black, strokeWidth = 2.dp)
                         Spacer(modifier = Modifier.width(8.dp))
                         Text("Saving Policy to Cloud...")
                     } else {
@@ -5031,7 +4728,7 @@ fun DeviceAndPolicyScreen(
                 ) {
                     Text("Backend & Device Credentials", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
                     TextButton(onClick = { showCredentials = !showCredentials }) {
-                        Text(if (showCredentials) "Hide" else "Show / Edit", color = Color(0xFFA855F7), fontSize = 12.sp)
+                        Text(if (showCredentials) "Hide" else "Show / Edit", color = Color(0xFF38BDF8), fontSize = 12.sp)
                     }
                 }
 
@@ -5043,7 +4740,7 @@ fun DeviceAndPolicyScreen(
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
                         colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = Color(0xFFA855F7),
+                            focusedBorderColor = Color(0xFF38BDF8),
                             unfocusedBorderColor = Color(0xFF2E2E3E)
                         )
                     )
@@ -5055,7 +4752,7 @@ fun DeviceAndPolicyScreen(
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
                         colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = Color(0xFFA855F7),
+                            focusedBorderColor = Color(0xFF38BDF8),
                             unfocusedBorderColor = Color(0xFF2E2E3E)
                         )
                     )
@@ -5067,7 +4764,7 @@ fun DeviceAndPolicyScreen(
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
                         colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = Color(0xFFA855F7),
+                            focusedBorderColor = Color(0xFF38BDF8),
                             unfocusedBorderColor = Color(0xFF2E2E3E)
                         )
                     )
@@ -5153,10 +4850,10 @@ fun MediaViewerDialog(
 
                         IconButton(
                             onClick = {
-                                downloadFileToDevice(context, streamUrl, file.filename, deviceId, deviceKey)
+                                downloadFileToDevice(context, streamUrl, file.filename, deviceId, deviceKey, file.mimeType)
                             }
                         ) {
-                            Icon(Icons.Default.Download, contentDescription = "Download", tint = Color(0xFFA855F7))
+                            Icon(Icons.Default.Download, contentDescription = "Download", tint = Color(0xFF38BDF8))
                         }
                     }
                 }
@@ -5252,7 +4949,7 @@ fun MediaViewerDialog(
                             Icon(
                                 Icons.Default.Description,
                                 contentDescription = null,
-                                tint = Color(0xFFC084FC),
+                                tint = Color(0xFF38BDF8),
                                 modifier = Modifier.size(72.dp)
                             )
                             Spacer(modifier = Modifier.height(16.dp))
@@ -5274,7 +4971,7 @@ fun MediaViewerDialog(
                     OutlinedButton(
                         onClick = onDismiss,
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF94A3B8)),
-                        border = BorderStroke(1.dp, Color(0xFF27273A)),
+                        border = BorderStroke(1.dp, Color(0xFF27272A)),
                         shape = RoundedCornerShape(12.dp)
                     ) {
                         Text("Close")
@@ -5282,14 +4979,14 @@ fun MediaViewerDialog(
 
                     Button(
                         onClick = {
-                            downloadFileToDevice(context, streamUrl, file.filename, deviceId, deviceKey)
+                            downloadFileToDevice(context, streamUrl, file.filename, deviceId, deviceKey, file.mimeType)
                         },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFA855F7)),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF38BDF8)),
                         shape = RoundedCornerShape(12.dp)
                     ) {
-                        Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Icon(Icons.Default.Download, contentDescription = null, tint = Color.Black, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Save to Phone")
+                        Text("Save to Phone", color = Color.Black, fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -5310,154 +5007,16 @@ fun VideoPlayer(
     deviceKey: String = "",
     modifier: Modifier = Modifier
 ) {
-    val context = LocalContext.current
-    var isBuffering by remember { mutableStateOf(true) }
-    var playbackError by remember { mutableStateOf<String?>(null) }
-    var videoViewRef by remember { mutableStateOf<VideoView?>(null) }
-
-    DisposableEffect(streamUrl) {
-        onDispose {
-            videoViewRef?.stopPlayback()
-        }
-    }
-
-    Box(
+    ModernExoPlayerView(
+        streamUrl = streamUrl,
+        filename = filename,
+        thumbnailUrl = thumbnailUrl,
+        fileId = fileId,
+        deviceId = deviceId,
+        deviceKey = deviceKey,
+        showTopBar = true,
         modifier = modifier
-            .fillMaxSize()
-            .background(Color.Black),
-        contentAlignment = Alignment.Center
-    ) {
-        AndroidView(
-            factory = { ctx ->
-                VideoView(ctx).apply {
-                    videoViewRef = this
-                    val mc = MediaController(ctx)
-                    mc.setAnchorView(this)
-                    setMediaController(mc)
-
-                    setOnPreparedListener { mp ->
-                        isBuffering = false
-                        playbackError = null
-                        mp.isLooping = false
-                        start()
-                    }
-
-                    setOnInfoListener { _, what, _ ->
-                        if (what == MediaPlayer.MEDIA_INFO_BUFFERING_START) {
-                            isBuffering = true
-                        } else if (what == MediaPlayer.MEDIA_INFO_BUFFERING_END) {
-                            isBuffering = false
-                        }
-                        true
-                    }
-
-                    setOnErrorListener { _, what, extra ->
-                        isBuffering = false
-                        playbackError = "Unable to stream video (code: $what, extra: $extra)"
-                        true
-                    }
-
-                    val headers = if (deviceId.isNotBlank() && deviceKey.isNotBlank()) {
-                        mapOf("x-device-id" to deviceId, "x-device-key" to deviceKey)
-                    } else emptyMap()
-
-                    if (headers.isNotEmpty()) {
-                        setVideoURI(Uri.parse(streamUrl), headers)
-                    } else {
-                        setVideoURI(Uri.parse(streamUrl))
-                    }
-                }
-            },
-            modifier = Modifier.fillMaxSize()
-        )
-
-        // Instant thumbnail poster frame while video is buffering
-        if (isBuffering && playbackError == null && thumbnailUrl.isNotBlank()) {
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center
-            ) {
-                AsyncImage(
-                    model = ImageRequest.Builder(context)
-                        .data(thumbnailUrl)
-                        .addHeader("x-device-id", deviceId)
-                        .addHeader("x-device-key", deviceKey)
-                        .placeholderMemoryCacheKey(if (fileId.isNotBlank()) "thumb_$fileId" else null)
-                        .memoryCacheKey(if (fileId.isNotBlank()) "thumb_$fileId" else null)
-                        .diskCacheKey(if (fileId.isNotBlank()) "thumb_$fileId" else null)
-                        .crossfade(false)
-                        .build(),
-                    contentDescription = filename,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Fit
-                )
-                Box(
-                    modifier = Modifier
-                        .size(64.dp)
-                        .background(Color.Black.copy(alpha = 0.55f), CircleShape),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        Icons.Default.PlayArrow,
-                        contentDescription = "Loading Video",
-                        tint = Color.White,
-                        modifier = Modifier.size(36.dp)
-                    )
-                }
-            }
-        }
-
-        if (playbackError != null) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
-                modifier = Modifier
-                    .background(Color(0xFF0F0F14).copy(alpha = 0.94f), RoundedCornerShape(16.dp))
-                    .padding(24.dp)
-            ) {
-                Icon(
-                    Icons.Default.ErrorOutline,
-                    contentDescription = null,
-                    tint = Color(0xFFEF4444),
-                    modifier = Modifier.size(40.dp)
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                Text(
-                    text = "Playback Error",
-                    color = Color.White,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 15.sp
-                )
-                Spacer(modifier = Modifier.height(6.dp))
-                Text(
-                    text = playbackError ?: "Error loading stream",
-                    color = Color(0xFF94A3B8),
-                    fontSize = 12.sp,
-                    textAlign = TextAlign.Center
-                )
-                Spacer(modifier = Modifier.height(16.dp))
-                Button(
-                    onClick = {
-                        try {
-                            val intent = Intent(Intent.ACTION_VIEW).apply {
-                                setDataAndType(Uri.parse(streamUrl), "video/*")
-                                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION
-                            }
-                            context.startActivity(intent)
-                        } catch (e: Exception) {
-                            Toast.makeText(context, "No external video player found", Toast.LENGTH_SHORT).show()
-                        }
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF7E22CE)),
-                    shape = RoundedCornerShape(10.dp)
-                ) {
-                    Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Try External Player")
-                }
-            }
-        }
-    }
+    )
 }
 
 // ----------------------------------------------------
@@ -5563,7 +5122,10 @@ fun PdfViewer(
                 if (cachedFile != null && cachedFile!!.exists()) {
                     Button(
                         onClick = { openPdfInExternalApp(context, cachedFile!!) },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF7E22CE)),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFF38BDF8),
+                            contentColor = Color.Black
+                        ),
                         shape = RoundedCornerShape(12.dp)
                     ) {
                         Icon(Icons.Default.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -5593,17 +5155,17 @@ fun PdfViewer(
                         Button(
                             onClick = { openPdfInExternalApp(context, cFile) },
                             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E1A47)),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B)),
                             shape = RoundedCornerShape(8.dp)
                         ) {
                             Icon(
                                 Icons.Default.OpenInNew,
                                 contentDescription = null,
-                                tint = Color(0xFFC084FC),
+                                tint = Color(0xFF38BDF8),
                                 modifier = Modifier.size(14.dp)
                             )
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("Open in PDF App", color = Color(0xFFC084FC), fontSize = 12.sp)
+                            Text("Open in PDF App", color = Color(0xFF38BDF8), fontSize = 12.sp)
                         }
                     }
                 }
@@ -5717,12 +5279,12 @@ fun FolderPickerDialog(
                     item {
                         Surface(
                             shape = RoundedCornerShape(6.dp),
-                            color = if (browsingFolderId == null) Color(0xFF26193E) else Color(0xFF1F1F2C),
+                            color = if (browsingFolderId == null) Color(0xFF1E293B) else Color(0xFF1F1F2C),
                             modifier = Modifier.clickable { browsingFolderId = null }
                         ) {
                             Text(
                                 text = "Root",
-                                color = if (browsingFolderId == null) Color(0xFFC084FC) else Color(0xFF94A3B8),
+                                color = if (browsingFolderId == null) Color(0xFF38BDF8) else Color(0xFF94A3B8),
                                 fontSize = 11.sp,
                                 fontWeight = if (browsingFolderId == null) FontWeight.Bold else FontWeight.Normal,
                                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
@@ -5739,12 +5301,12 @@ fun FolderPickerDialog(
                         val isCurrent = item.id == browsingFolderId
                         Surface(
                             shape = RoundedCornerShape(6.dp),
-                            color = if (isCurrent) Color(0xFF26193E) else Color(0xFF1F1F2C),
+                            color = if (isCurrent) Color(0xFF1E293B) else Color(0xFF1F1F2C),
                             modifier = Modifier.clickable { browsingFolderId = item.id }
                         ) {
                             Text(
                                 text = item.name,
-                                color = if (isCurrent) Color(0xFFC084FC) else Color(0xFF94A3B8),
+                                color = if (isCurrent) Color(0xFF38BDF8) else Color(0xFF94A3B8),
                                 fontSize = 11.sp,
                                 fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
                                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
@@ -5781,7 +5343,7 @@ fun FolderPickerDialog(
                                 onSelectFolder(browsingFolderId!!, currentBrowsingFolder?.name ?: "Folder")
                             }
                         },
-                    color = if (isCurrentBrowsingSelected) Color(0xFF26193E) else Color(0xFF1C1C28)
+                    color = if (isCurrentBrowsingSelected) Color(0xFF1E293B) else Color(0xFF1C1C28)
                 ) {
                     Row(
                         modifier = Modifier.padding(12.dp),
@@ -5790,7 +5352,7 @@ fun FolderPickerDialog(
                         Icon(
                             if (browsingFolderId == null) Icons.Default.CloudQueue else Icons.Default.FolderOpen,
                             contentDescription = null,
-                            tint = if (isCurrentBrowsingSelected) Color(0xFFC084FC) else Color(0xFFA855F7),
+                            tint = if (isCurrentBrowsingSelected) Color(0xFF38BDF8) else Color(0xFF64748B),
                             modifier = Modifier.size(20.dp)
                         )
                         Spacer(modifier = Modifier.width(10.dp))
@@ -5803,7 +5365,7 @@ fun FolderPickerDialog(
                             )
                             Text(
                                 text = if (isCurrentBrowsingSelected) "Currently selected destination" else "Tap to select this folder",
-                                color = if (isCurrentBrowsingSelected) Color(0xFFC084FC) else Color(0xFF71717A),
+                                color = if (isCurrentBrowsingSelected) Color(0xFF38BDF8) else Color(0xFF71717A),
                                 fontSize = 10.sp
                             )
                         }
@@ -5811,7 +5373,7 @@ fun FolderPickerDialog(
                             Icon(
                                 Icons.Default.Check,
                                 contentDescription = "Selected",
-                                tint = Color(0xFFC084FC),
+                                tint = Color(0xFF38BDF8),
                                 modifier = Modifier.size(18.dp)
                             )
                         }
@@ -5834,7 +5396,7 @@ fun FolderPickerDialog(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(10.dp)),
-                            color = if (isThisFolderSelected) Color(0xFF26193E) else Color(0xFF1C1C28)
+                            color = if (isThisFolderSelected) Color(0xFF1E293B) else Color(0xFF1C1C28)
                         ) {
                             Row(
                                 modifier = Modifier
@@ -5851,7 +5413,7 @@ fun FolderPickerDialog(
                                     Icon(
                                         Icons.Default.Folder,
                                         contentDescription = null,
-                                        tint = if (isThisFolderSelected) Color(0xFFC084FC) else Color(0xFFFBBF24),
+                                        tint = if (isThisFolderSelected) Color(0xFF38BDF8) else Color(0xFFFBBF24),
                                         modifier = Modifier.size(20.dp)
                                     )
                                     Spacer(modifier = Modifier.width(10.dp))
@@ -5885,7 +5447,7 @@ fun FolderPickerDialog(
                                     Icon(
                                         Icons.Default.CheckCircleOutline,
                                         contentDescription = "Select this folder",
-                                        tint = if (isThisFolderSelected) Color(0xFFC084FC) else Color(0xFF71717A),
+                                        tint = if (isThisFolderSelected) Color(0xFF38BDF8) else Color(0xFF71717A),
                                         modifier = Modifier.size(20.dp)
                                     )
                                 }
@@ -5914,7 +5476,7 @@ fun FolderPickerDialog(
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedTextColor = Color.White,
                         unfocusedTextColor = Color.White,
-                        focusedBorderColor = Color(0xFFA855F7),
+                        focusedBorderColor = Color(0xFF38BDF8),
                         unfocusedBorderColor = Color(0xFF27273A)
                     )
                 )
@@ -5929,8 +5491,9 @@ fun FolderPickerDialog(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(10.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = Color(0xFFA855F7),
-                        disabledContainerColor = Color(0xFF2E1065)
+                        containerColor = Color(0xFF38BDF8),
+                        disabledContainerColor = Color(0xFF1E293B),
+                        contentColor = Color.Black
                     )
                 ) {
                     Icon(Icons.Default.CreateNewFolder, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -5964,7 +5527,7 @@ fun ManualUploadDialog(
         containerColor = Color(0xFF14141C),
         title = {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Default.CloudUpload, contentDescription = null, tint = Color(0xFFA855F7), modifier = Modifier.size(24.dp))
+                Icon(Icons.Default.CloudUpload, contentDescription = null, tint = Color(0xFF38BDF8), modifier = Modifier.size(24.dp))
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
                     text = "Upload to Cloud",
@@ -5994,10 +5557,10 @@ fun ManualUploadDialog(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text("Destination Folder", fontSize = 11.sp, color = Color(0xFF71717A))
-                            Text(targetFolderName, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFFC084FC))
+                            Text(targetFolderName, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFF38BDF8))
                         }
                         TextButton(onClick = onOpenFolderSelector) {
-                            Text("Change", color = Color(0xFFA855F7), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                            Text("Change", color = Color(0xFF38BDF8), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                         }
                     }
                 }
@@ -6010,8 +5573,8 @@ fun ManualUploadDialog(
                         .fillMaxWidth()
                         .clickable { onPickGallery() },
                     shape = RoundedCornerShape(14.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFF26193E)),
-                    border = BorderStroke(1.dp, Color(0xFF581C87))
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF14141B)),
+                    border = BorderStroke(1.dp, Color(0xFF27272A))
                 ) {
                     Row(
                         modifier = Modifier.padding(14.dp),
@@ -6021,15 +5584,15 @@ fun ManualUploadDialog(
                             modifier = Modifier
                                 .size(40.dp)
                                 .clip(RoundedCornerShape(10.dp))
-                                .background(Color(0xFF6B21A8)),
+                                .background(Color(0xFF1E293B)),
                             contentAlignment = Alignment.Center
                         ) {
-                            Icon(Icons.Default.PhotoLibrary, contentDescription = null, tint = Color.White, modifier = Modifier.size(22.dp))
+                            Icon(Icons.Default.PhotoLibrary, contentDescription = null, tint = Color(0xFF38BDF8), modifier = Modifier.size(22.dp))
                         }
                         Spacer(modifier = Modifier.width(12.dp))
                         Column {
                             Text("Photos & Videos", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                            Text("Select multiple media from Gallery", fontSize = 11.sp, color = Color(0xFFD8B4FE))
+                            Text("Select multiple media from Gallery", fontSize = 11.sp, color = Color(0xFF94A3B8))
                         }
                     }
                 }
@@ -6130,64 +5693,131 @@ suspend fun downloadInboundFileLocally(
             }
             val body = res.body ?: return@withContext false
 
-            val isImage = mimeType.startsWith("image/")
-            val isVideo = mimeType.startsWith("video/")
+            val isImage = mimeType.startsWith("image/") ||
+                    filename.endsWith(".jpg", true) ||
+                    filename.endsWith(".jpeg", true) ||
+                    filename.endsWith(".png", true) ||
+                    filename.endsWith(".webp", true) ||
+                    filename.endsWith(".heic", true) ||
+                    filename.endsWith(".gif", true) ||
+                    filename.endsWith(".bmp", true)
+
+            val isVideo = mimeType.startsWith("video/") ||
+                    filename.endsWith(".mp4", true) ||
+                    filename.endsWith(".mkv", true) ||
+                    filename.endsWith(".mov", true) ||
+                    filename.endsWith(".webm", true) ||
+                    filename.endsWith(".3gp", true)
+
             val isMedia = isImage || isVideo
+
+            val effectiveMime = when {
+                mimeType.isNotBlank() && mimeType != "application/octet-stream" -> mimeType
+                isVideo -> "video/mp4"
+                isImage -> if (filename.endsWith(".png", true)) "image/png" else "image/jpeg"
+                filename.endsWith(".pdf", true) -> "application/pdf"
+                filename.endsWith(".zip", true) -> "application/zip"
+                filename.endsWith(".txt", true) -> "text/plain"
+                else -> "application/octet-stream"
+            }
 
             val contentResolver = context.contentResolver
             var insertedUri: Uri? = null
+            var localFilePath: String? = null
 
-            if (isMedia) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val collection = when {
+                    isVideo -> MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                    isImage -> MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                    else -> MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                }
+                val relPath = when {
+                    isVideo -> Environment.DIRECTORY_MOVIES + "/myDrive"
+                    isImage -> Environment.DIRECTORY_PICTURES + "/myDrive"
+                    else -> Environment.DIRECTORY_DOWNLOADS + "/myDrive"
+                }
+
                 val contentValues = ContentValues().apply {
                     put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
-                    put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                        put(
-                            MediaStore.MediaColumns.RELATIVE_PATH,
-                            if (isVideo) Environment.DIRECTORY_MOVIES + "/myDrive" else Environment.DIRECTORY_PICTURES + "/myDrive"
-                        )
-                        put(MediaStore.MediaColumns.IS_PENDING, 1)
-                    }
+                    put(MediaStore.MediaColumns.MIME_TYPE, effectiveMime)
+                    put(MediaStore.MediaColumns.RELATIVE_PATH, relPath)
+                    put(MediaStore.MediaColumns.IS_PENDING, 1)
                 }
-                val collection = if (isVideo) {
-                    MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-                } else {
-                    MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-                }
+
                 insertedUri = contentResolver.insert(collection, contentValues)
-            } else {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    val contentValues = ContentValues().apply {
-                        put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
-                        put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
-                        put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/myDrive")
-                        put(MediaStore.MediaColumns.IS_PENDING, 1)
+                if (insertedUri == null) {
+                    val dot = filename.lastIndexOf('.')
+                    val safeName = if (dot != -1) {
+                        "${filename.substring(0, dot)}_${System.currentTimeMillis()}${filename.substring(dot)}"
+                    } else {
+                        "${filename}_${System.currentTimeMillis()}"
                     }
-                    insertedUri = contentResolver.insert(MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY), contentValues)
-                } else {
-                    val downloadsDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "myDrive")
-                    downloadsDir.mkdirs()
-                    val targetFile = File(downloadsDir, filename)
-                    targetFile.outputStream().use { outStream ->
+                    contentValues.put(MediaStore.MediaColumns.DISPLAY_NAME, safeName)
+                    insertedUri = contentResolver.insert(collection, contentValues)
+                }
+
+                if (insertedUri != null) {
+                    contentResolver.openOutputStream(insertedUri)?.use { outStream ->
                         body.byteStream().use { inStream ->
                             inStream.copyTo(outStream)
                         }
                     }
-                }
-            }
-
-            if (insertedUri != null) {
-                contentResolver.openOutputStream(insertedUri)?.use { outStream ->
-                    body.byteStream().use { inStream ->
-                        inStream.copyTo(outStream)
-                    }
-                }
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     val updateValues = ContentValues().apply {
                         put(MediaStore.MediaColumns.IS_PENDING, 0)
                     }
                     contentResolver.update(insertedUri, updateValues, null, null)
+
+                    try {
+                        contentResolver.query(insertedUri, arrayOf(MediaStore.MediaColumns.DATA), null, null, null)?.use { cursor ->
+                            if (cursor.moveToFirst()) {
+                                val idx = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DATA)
+                                localFilePath = cursor.getString(idx)
+                            }
+                        }
+                    } catch (_: Exception) {}
                 }
+            } else {
+                // Pre-Q (API < 29)
+                val baseDir = when {
+                    isVideo -> Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES)
+                    isImage -> Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES)
+                    else -> Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                }
+                val targetDir = File(baseDir, "myDrive")
+                targetDir.mkdirs()
+                var targetFile = File(targetDir, filename)
+                if (targetFile.exists()) {
+                    val dot = filename.lastIndexOf('.')
+                    val safeName = if (dot != -1) {
+                        "${filename.substring(0, dot)}_${System.currentTimeMillis()}${filename.substring(dot)}"
+                    } else {
+                        "${filename}_${System.currentTimeMillis()}"
+                    }
+                    targetFile = File(targetDir, safeName)
+                }
+                targetFile.outputStream().use { outStream ->
+                    body.byteStream().use { inStream ->
+                        inStream.copyTo(outStream)
+                    }
+                }
+                localFilePath = targetFile.absolutePath
+                insertedUri = Uri.fromFile(targetFile)
+            }
+
+            // Force native Gallery indexing via MediaScannerConnection and broadcast
+            if (!localFilePath.isNullOrBlank()) {
+                MediaScannerConnection.scanFile(
+                    context.applicationContext,
+                    arrayOf(localFilePath),
+                    arrayOf(effectiveMime),
+                    null
+                )
+            }
+            if (insertedUri != null) {
+                try {
+                    val scanIntent = Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE, insertedUri)
+                    context.sendBroadcast(scanIntent)
+                } catch (_: Exception) {}
             }
 
             // Record in history file so outbound sync never re-uploads
@@ -6201,6 +5831,14 @@ suspend fun downloadInboundFileLocally(
                 val historyFile = File(context.filesDir, "synced_$category.txt")
                 historyFile.appendText("$localId\n")
             }
+
+            // Post download completion notification
+            SyncNotificationHelper.showDownloadCompleteNotification(
+                context = context,
+                filename = filename,
+                isMedia = isMedia,
+                fileUri = insertedUri
+            )
 
             // Mark synced with backend
             val markJson = JSONObject().apply {
@@ -6230,27 +5868,178 @@ fun downloadFileToDevice(
     filename: String,
     deviceId: String,
     deviceKey: String,
+    mimeType: String = "",
     saveToGallery: Boolean = false,
     onSuccess: (() -> Unit)? = null
 ) {
-    try {
-        val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-        val uri = Uri.parse(url)
-        val dir = if (saveToGallery) Environment.DIRECTORY_PICTURES else Environment.DIRECTORY_DOWNLOADS
-        val request = DownloadManager.Request(uri).apply {
-            setTitle(filename)
-            setDescription(if (saveToGallery) "Saving to Gallery" else "Downloading from myDrive")
-            setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-            setDestinationInExternalPublicDir(dir, filename)
-            addRequestHeader("x-device-id", deviceId)
-            addRequestHeader("x-device-key", deviceKey)
+    val isImage = mimeType.startsWith("image/") ||
+            filename.endsWith(".jpg", true) ||
+            filename.endsWith(".jpeg", true) ||
+            filename.endsWith(".png", true) ||
+            filename.endsWith(".webp", true) ||
+            filename.endsWith(".heic", true) ||
+            filename.endsWith(".gif", true) ||
+            filename.endsWith(".bmp", true) ||
+            filename.endsWith(".svg", true)
+
+    val isVideo = mimeType.startsWith("video/") ||
+            filename.endsWith(".mp4", true) ||
+            filename.endsWith(".mkv", true) ||
+            filename.endsWith(".mov", true) ||
+            filename.endsWith(".webm", true) ||
+            filename.endsWith(".3gp", true) ||
+            filename.endsWith(".avi", true)
+
+    val isMedia = saveToGallery || isImage || isVideo
+    val destName = if (isMedia) "Phone Gallery" else "Downloads/myDrive"
+    Toast.makeText(context, "Saving $filename to $destName...", Toast.LENGTH_SHORT).show()
+
+    CoroutineScope(Dispatchers.IO).launch {
+        try {
+            val req = Request.Builder()
+                .url(url)
+                .addHeader("x-device-id", deviceId)
+                .addHeader("x-device-key", deviceKey)
+                .build()
+            val res = sharedHttpClient.newCall(req).execute()
+            if (!res.isSuccessful) {
+                res.close()
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(context, "Download failed (HTTP ${res.code})", Toast.LENGTH_SHORT).show()
+                }
+                return@launch
+            }
+            val body = res.body ?: run {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(context, "Download failed: Empty server response", Toast.LENGTH_SHORT).show()
+                }
+                return@launch
+            }
+
+            val effectiveMime = when {
+                mimeType.isNotBlank() && mimeType != "application/octet-stream" -> mimeType
+                isVideo -> "video/mp4"
+                isImage -> if (filename.endsWith(".png", true)) "image/png" else "image/jpeg"
+                filename.endsWith(".pdf", true) -> "application/pdf"
+                filename.endsWith(".zip", true) -> "application/zip"
+                filename.endsWith(".txt", true) -> "text/plain"
+                else -> "application/octet-stream"
+            }
+
+            var insertedUri: Uri? = null
+            var localFilePath: String? = null
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val collection = when {
+                    isVideo -> MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                    isImage -> MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                    else -> MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                }
+                val relPath = when {
+                    isVideo -> Environment.DIRECTORY_MOVIES + "/myDrive"
+                    isImage -> Environment.DIRECTORY_PICTURES + "/myDrive"
+                    else -> Environment.DIRECTORY_DOWNLOADS + "/myDrive"
+                }
+
+                val values = ContentValues().apply {
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
+                    put(MediaStore.MediaColumns.MIME_TYPE, effectiveMime)
+                    put(MediaStore.MediaColumns.RELATIVE_PATH, relPath)
+                    put(MediaStore.MediaColumns.IS_PENDING, 1)
+                }
+
+                insertedUri = context.contentResolver.insert(collection, values)
+                if (insertedUri == null) {
+                    val dot = filename.lastIndexOf('.')
+                    val safeName = if (dot != -1) {
+                        "${filename.substring(0, dot)}_${System.currentTimeMillis()}${filename.substring(dot)}"
+                    } else {
+                        "${filename}_${System.currentTimeMillis()}"
+                    }
+                    values.put(MediaStore.MediaColumns.DISPLAY_NAME, safeName)
+                    insertedUri = context.contentResolver.insert(collection, values)
+                }
+
+                if (insertedUri != null) {
+                    context.contentResolver.openOutputStream(insertedUri)?.use { out ->
+                        body.byteStream().use { input ->
+                            input.copyTo(out)
+                        }
+                    }
+                    values.clear()
+                    values.put(MediaStore.MediaColumns.IS_PENDING, 0)
+                    context.contentResolver.update(insertedUri, values, null, null)
+
+                    try {
+                        context.contentResolver.query(insertedUri, arrayOf(MediaStore.MediaColumns.DATA), null, null, null)?.use { cursor ->
+                            if (cursor.moveToFirst()) {
+                                val idx = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DATA)
+                                localFilePath = cursor.getString(idx)
+                            }
+                        }
+                    } catch (_: Exception) {}
+                }
+            } else {
+                // Pre-Q (API < 29)
+                val baseDir = when {
+                    isVideo -> Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES)
+                    isImage -> Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES)
+                    else -> Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                }
+                val targetDir = File(baseDir, "myDrive")
+                targetDir.mkdirs()
+                var targetFile = File(targetDir, filename)
+                if (targetFile.exists()) {
+                    val dot = filename.lastIndexOf('.')
+                    val safeName = if (dot != -1) {
+                        "${filename.substring(0, dot)}_${System.currentTimeMillis()}${filename.substring(dot)}"
+                    } else {
+                        "${filename}_${System.currentTimeMillis()}"
+                    }
+                    targetFile = File(targetDir, safeName)
+                }
+                targetFile.outputStream().use { out ->
+                    body.byteStream().use { input ->
+                        input.copyTo(out)
+                    }
+                }
+                localFilePath = targetFile.absolutePath
+                insertedUri = Uri.fromFile(targetFile)
+            }
+
+            if (!localFilePath.isNullOrBlank()) {
+                MediaScannerConnection.scanFile(
+                    context.applicationContext,
+                    arrayOf(localFilePath),
+                    arrayOf(effectiveMime),
+                    null
+                )
+            }
+            if (insertedUri != null) {
+                try {
+                    val scanIntent = Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE, insertedUri)
+                    context.sendBroadcast(scanIntent)
+                } catch (_: Exception) {}
+            }
+
+            SyncNotificationHelper.showDownloadCompleteNotification(
+                context = context,
+                filename = filename,
+                isMedia = isMedia,
+                fileUri = insertedUri
+            )
+
+            withContext(Dispatchers.Main) {
+                val destSuccess = if (isMedia) "Phone Gallery ✓" else "Downloads/myDrive ✓"
+                Toast.makeText(context, "Saved $filename to $destSuccess", Toast.LENGTH_SHORT).show()
+                onSuccess?.invoke()
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            withContext(Dispatchers.Main) {
+                Toast.makeText(context, "Download failed: ${e.message}", Toast.LENGTH_SHORT).show()
+            }
         }
-        dm.enqueue(request)
-        onSuccess?.invoke()
-        val dest = if (saveToGallery) "Gallery / Pictures" else "Downloads"
-        Toast.makeText(context, "Saving $filename to $dest...", Toast.LENGTH_SHORT).show()
-    } catch (e: Exception) {
-        Toast.makeText(context, "Download notice: ${e.message}", Toast.LENGTH_SHORT).show()
     }
 }
 

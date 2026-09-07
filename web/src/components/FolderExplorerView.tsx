@@ -40,6 +40,7 @@ import { uploadService, UploadTask } from '../services/UploadService.js';
 import { VaultCryptoService } from '../services/vault-crypto.js';
 import { mediaCache, generateThumbnailFromVideoFile } from '../services/media-cache.js';
 import { formatBytes, getStreamUrl } from '../utils/format.js';
+import { ModernVideoPlayer } from './ModernVideoPlayer.js';
 
 interface Props {
   files: FileItem[];
@@ -1032,10 +1033,17 @@ export const FolderExplorerView: React.FC<Props> = ({
                   className="max-w-[90vw] max-h-[85vh] object-contain rounded-lg shadow-2xl"
                   onError={() => setPreviewError('Unable to display image. The file may be corrupt or encrypted without a valid key.')}
                 />
-              ) : previewFile.mimeType.startsWith('video/') ? (
-                <video src={previewUrl} controls autoPlay className="max-w-[90vw] max-h-[85vh] rounded-lg shadow-2xl" onError={() => setPreviewError('Unable to play video format in this browser.')}>
-                  Your browser does not support the video tag.
-                </video>
+              ) : previewFile.mimeType.startsWith('video/') || previewFile.filename.toLowerCase().match(/\.(mp4|mkv|mov|webm|3gp|avi|flv)$/i) ? (
+                <div className="w-[90vw] max-w-4xl max-h-[82vh] flex items-center justify-center">
+                  <ModernVideoPlayer
+                    src={previewUrl}
+                    filename={previewFile.filename}
+                    autoPlay
+                    className="w-full max-h-[80vh] shadow-2xl"
+                    onDownload={() => {}}
+                    onError={() => setPreviewError('Unable to play video format in this browser.')}
+                  />
+                </div>
               ) : previewFile.mimeType.includes('pdf') || previewFile.filename.toLowerCase().endsWith('.pdf') ? (
                 <div className="w-[85vw] max-w-5xl h-[82vh] rounded-2xl overflow-hidden bg-[#18181f] border border-[#272733] shadow-2xl flex flex-col">
                   <div className="flex items-center justify-between px-4 py-2.5 bg-[#141418] border-b border-[#272733]">
