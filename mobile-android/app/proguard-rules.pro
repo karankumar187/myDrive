@@ -33,3 +33,10 @@
 -keep class com.drive.sync.InboundSyncItem { *; }
 -keep class com.drive.sync.StoragePoolSummary { *; }
 -keep class com.drive.sync.crypto.** { *; }
+-keep class com.drive.sync.network.** { *; }
+
+# Socket.IO & Engine.IO
+-dontwarn io.socket.**
+-keep class io.socket.** { *; }
+-keep interface io.socket.** { *; }
+
