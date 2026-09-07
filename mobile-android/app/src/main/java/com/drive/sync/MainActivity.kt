@@ -21,6 +21,7 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.Observer
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.graphics.vector.ImageVector
 import com.drive.sync.network.AppPermissions
@@ -371,7 +372,32 @@ class MainActivity : ComponentActivity() {
         syncDocuments: Boolean,
         onComplete: (() -> Unit)? = null
     ) {
-        // Immediately invoke onComplete — actual sync runs in-process (see performInProcessSync)
+        val inputData = Data.Builder()
+            .putString("server_url", serverUrl)
+            .putString("device_id", deviceId)
+            .putString("device_key", deviceKey)
+            .putString("target_folder_id", targetFolderId)
+            .putBoolean("sync_photos", syncPhotos)
+            .putBoolean("sync_videos", syncVideos)
+            .putBoolean("sync_documents", syncDocuments)
+            .putBoolean("is_manual", true)
+            .build()
+
+        val constraints = Constraints.Builder()
+            .setRequiredNetworkType(NetworkType.CONNECTED)
+            .build()
+
+        val syncRequest = OneTimeWorkRequestBuilder<com.drive.sync.workers.SyncWorker>()
+            .setConstraints(constraints)
+            .setInputData(inputData)
+            .addTag("UnifiedDriveSync")
+            .build()
+
+        WorkManager.getInstance(applicationContext).enqueueUniqueWork(
+            "UnifiedDriveSync",
+            ExistingWorkPolicy.REPLACE,
+            syncRequest
+        )
         onComplete?.invoke()
     }
 }
@@ -1216,6 +1242,29 @@ fun MainAppScreen(
     var previewItem by remember { mutableStateOf<CloudFile?>(null) }
 
     val scope = rememberCoroutineScope()
+
+    val workManager = remember { WorkManager.getInstance(context) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val liveData = workManager.getWorkInfosForUniqueWorkLiveData("UnifiedDriveSync")
+        val observer = Observer<List<WorkInfo>> { list ->
+            val active = list?.firstOrNull { it.state == WorkInfo.State.RUNNING }
+            if (active != null) {
+                isSyncingNow = true
+                syncStatusText = "Sync running in background…"
+            } else {
+                val finished = list?.firstOrNull { it.state == WorkInfo.State.SUCCEEDED }
+                if (finished != null && isSyncingNow) {
+                    isSyncingNow = false
+                    syncStatusText = "All items backed up securely ✓"
+                }
+            }
+        }
+        liveData.observe(lifecycleOwner, observer)
+        onDispose {
+            liveData.removeObserver(observer)
+        }
+    }
 
     val savePairedRulesToPrefs = {
         try {
@@ -2760,7 +2809,11 @@ fun MainAppScreen(
                         onOpenFolderDialog = { showFolderDialog = true },
                         onSyncNow = {
                             saveCredentials()
-                            performInProcessSync()
+                            onSyncNow(serverUrl, deviceId, deviceKey, targetFolderId, syncPhotos, syncVideos, syncDocuments) {
+                                isSyncingNow = true
+                                syncStatusText = "Sync running in background…"
+                                Toast.makeText(context, "Background sync running quietly!", Toast.LENGTH_SHORT).show()
+                            }
                         },
                         onScheduleSync = {
                             saveCredentials()

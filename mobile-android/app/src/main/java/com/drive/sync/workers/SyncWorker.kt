@@ -215,7 +215,8 @@ class SyncWorker(
 
         // Prevent rapid repeated syncs (debounce 3 minutes unless run attempt is a legitimate single retry)
         val lastSync = prefs.getLong("last_sync_timestamp", 0L)
-        if (System.currentTimeMillis() - lastSync < 3 * 60 * 1000L && runAttemptCount == 0) {
+        val isManual = inputData.getBoolean("is_manual", false)
+        if (!isManual && System.currentTimeMillis() - lastSync < 3 * 60 * 1000L && runAttemptCount == 0) {
             Log.d("SyncWorker", "Debouncing background sync - device synced recently.")
             return@withContext Result.success()
         }
