@@ -15,6 +15,15 @@ import android.media.MediaMetadataRetriever
 import android.os.Build
 import android.util.Base64
 import android.util.Size
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.Intent
+import android.content.pm.ServiceInfo
+import androidx.core.app.NotificationCompat
+import androidx.work.ForegroundInfo
+import com.drive.sync.MainActivity
+import com.drive.sync.R
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -31,6 +40,137 @@ class SyncWorker(
 ) : CoroutineWorker(context, params) {
 
     private val client = com.drive.sync.sharedHttpClient
+
+    companion object {
+        const val NOTIFICATION_CHANNEL_ID = "mydrive_auto_sync"
+        const val NOTIFICATION_ID = 1001
+        const val COMPLETION_NOTIFICATION_ID = 1002
+    }
+
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                NOTIFICATION_CHANNEL_ID,
+                "Auto Sync",
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "Quiet background sync progress"
+                setShowBadge(false)
+                enableVibration(false)
+                enableLights(false)
+            }
+            val nm = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.createNotificationChannel(channel)
+        }
+    }
+
+    private fun createForegroundInfo(
+        title: String,
+        content: String,
+        progress: Int = 0,
+        max: Int = 0,
+        isIndeterminate: Boolean = false
+    ): ForegroundInfo {
+        createNotificationChannel()
+
+        val openAppIntent = Intent(applicationContext, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val openAppPendingIntent = PendingIntent.getActivity(
+            applicationContext,
+            0,
+            openAppIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val cancelIntent = androidx.work.WorkManager.getInstance(applicationContext).createCancelPendingIntent(id)
+
+        val notificationBuilder = NotificationCompat.Builder(applicationContext, NOTIFICATION_CHANNEL_ID)
+            .setContentTitle(title)
+            .setContentText(content)
+            .setSmallIcon(R.drawable.ic_mydrive_logo)
+            .setContentIntent(openAppPendingIntent)
+            .setOngoing(true)
+            .setSilent(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Stop Sync", cancelIntent)
+
+        if (max > 0 || isIndeterminate) {
+            notificationBuilder.setProgress(max, progress, isIndeterminate)
+        }
+
+        val notification = notificationBuilder.build()
+
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ForegroundInfo(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+        } else {
+            ForegroundInfo(NOTIFICATION_ID, notification)
+        }
+    }
+
+    override suspend fun getForegroundInfo(): ForegroundInfo {
+        return createForegroundInfo(
+            title = "myDrive Auto-Sync",
+            content = "Checking for new media to back up...",
+            isIndeterminate = true
+        )
+    }
+
+    private fun updateNotificationProgress(title: String, content: String, progress: Int, max: Int) {
+        try {
+            val nm = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            val cancelIntent = androidx.work.WorkManager.getInstance(applicationContext).createCancelPendingIntent(id)
+            val openAppIntent = Intent(applicationContext, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            }
+            val openAppPendingIntent = PendingIntent.getActivity(
+                applicationContext,
+                0,
+                openAppIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+
+            val notification = NotificationCompat.Builder(applicationContext, NOTIFICATION_CHANNEL_ID)
+                .setContentTitle(title)
+                .setContentText(content)
+                .setSmallIcon(R.drawable.ic_mydrive_logo)
+                .setContentIntent(openAppPendingIntent)
+                .setOngoing(true)
+                .setSilent(true)
+                .setPriority(NotificationCompat.PRIORITY_LOW)
+                .setProgress(max, progress, false)
+                .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Stop Sync", cancelIntent)
+                .build()
+            nm.notify(NOTIFICATION_ID, notification)
+        } catch (_: Exception) {}
+    }
+
+    private fun showCompletionNotification(totalUploaded: Int) {
+        try {
+            val nm = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.cancel(NOTIFICATION_ID)
+            if (totalUploaded > 0) {
+                val openAppIntent = Intent(applicationContext, MainActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                }
+                val openAppPendingIntent = PendingIntent.getActivity(
+                    applicationContext,
+                    0,
+                    openAppIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                )
+                val notification = NotificationCompat.Builder(applicationContext, NOTIFICATION_CHANNEL_ID)
+                    .setContentTitle("myDrive: Backup complete")
+                    .setContentText("$totalUploaded new item(s) backed up securely.")
+                    .setSmallIcon(R.drawable.ic_mydrive_logo)
+                    .setContentIntent(openAppPendingIntent)
+                    .setAutoCancel(true)
+                    .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                    .build()
+                nm.notify(COMPLETION_NOTIFICATION_ID, notification)
+            }
+        } catch (_: Exception) {}
+    }
 
     private fun reportStatus(
         serverUrl: String,
@@ -76,6 +216,19 @@ class SyncWorker(
         if (System.currentTimeMillis() - lastSync < 3 * 60 * 1000L && runAttemptCount == 0) {
             Log.d("SyncWorker", "Debouncing background sync - device synced recently.")
             return@withContext Result.success()
+        }
+
+        // Promote to Foreground Service for reliable Play Store style background execution
+        try {
+            setForeground(
+                createForegroundInfo(
+                    title = "myDrive Auto-Sync",
+                    content = "Scanning media for background backup...",
+                    isIndeterminate = true
+                )
+            )
+        } catch (e: Exception) {
+            Log.w("SyncWorker", "Could not set foreground service: ${e.message}")
         }
 
         Log.d("SyncWorker", "Starting media sync for device $deviceId (photos=$syncPhotos, videos=$syncVideos, docs=$syncDocuments, targetFolderId=$targetFolderId)")
@@ -200,9 +353,14 @@ class SyncWorker(
             }
 
             reportStatus(serverUrl, deviceId, deviceKey, "online", "Idle ($summary)", summary)
+            showCompletionNotification(totalSynced)
             Result.success()
         } catch (e: Exception) {
             Log.e("SyncWorker", "Sync worker error: ${e.message}", e)
+            try {
+                val nm = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                nm.cancel(NOTIFICATION_ID)
+            } catch (_: Exception) {}
             val prefs = applicationContext.getSharedPreferences("drive_prefs", Context.MODE_PRIVATE)
             prefs.edit().apply {
                 putLong("last_sync_timestamp", System.currentTimeMillis())
@@ -240,6 +398,13 @@ class SyncWorker(
         }
     }
 
+    private data class PendingSyncItem(
+        val id: Long,
+        val filename: String,
+        val mimeType: String,
+        val sizeBytes: Long
+    )
+
     private fun syncCollection(
         collectionUri: Uri,
         serverUrl: String,
@@ -274,8 +439,7 @@ class SyncWorker(
             sortOrder
         ) ?: return 0
 
-        var processedCount = 0
-
+        val pendingItems = mutableListOf<PendingSyncItem>()
         cursor.use {
             val idColumn = it.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
             val nameColumn = it.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)
@@ -284,17 +448,41 @@ class SyncWorker(
 
             while (it.moveToNext()) {
                 val id = it.getLong(idColumn)
-                if (id in history) {
-                    continue
+                if (id !in history) {
+                    val filename = it.getString(nameColumn) ?: "${namePrefix}_$id"
+                    val mimeType = it.getString(mimeColumn) ?: defaultMime
+                    val sizeBytes = it.getLong(sizeColumn)
+                    if (sizeBytes > 0) {
+                        pendingItems.add(PendingSyncItem(id, filename, mimeType, sizeBytes))
+                    }
                 }
+            }
+        }
 
-                val filename = it.getString(nameColumn) ?: "${namePrefix}_$id"
-                val mimeType = it.getString(mimeColumn) ?: defaultMime
-                val sizeBytes = it.getLong(sizeColumn)
+        val totalPending = pendingItems.size
+        if (totalPending == 0) return 0
 
-                if (sizeBytes <= 0) continue
+        var processedCount = 0
 
-                val contentUri = ContentUris.withAppendedId(collectionUri, id)
+        for ((index, item) in pendingItems.withIndex()) {
+            if (isStopped) {
+                Log.d("SyncWorker", "Sync stopped/cancelled by user or system.")
+                break
+            }
+
+            val categoryTitle = category.replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
+            updateNotificationProgress(
+                title = "myDrive Auto-Sync",
+                content = "Backing up $categoryTitle (${index + 1} of $totalPending)...",
+                progress = index + 1,
+                max = totalPending
+            )
+
+            val id = item.id
+            val filename = item.filename
+            val mimeType = item.mimeType
+            val sizeBytes = item.sizeBytes
+            val contentUri = ContentUris.withAppendedId(collectionUri, id)
 
                 // Compute SHA-256 directly from stream for instant deduplication (zero heap buffer)
                 val contentHash = try {
@@ -434,10 +622,9 @@ class SyncWorker(
                 history.add(id)
                 processedCount++
             }
-        }
 
-        return processedCount
-    }
+            return processedCount
+        }
 
     private fun downloadInboundItemInternal(
         serverUrl: String,

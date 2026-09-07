@@ -633,7 +633,9 @@ fun FullGalleryScreen(
     deviceId: String,
     deviceKey: String,
     isRefreshing: Boolean,
-    onRefresh: () -> Unit
+    onRefresh: () -> Unit,
+    onDeleteMedia: ((String) -> Unit)? = null,
+    onBulkDeleteMedia: ((List<String>) -> Unit)? = null
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -1187,14 +1189,17 @@ fun FullGalleryScreen(
                         IconButton(
                             onClick = {
                                 val ids = selectedIds.toList()
+                                localList = localList.filter { !ids.contains(it.id) }
+                                onBulkDeleteMedia?.invoke(ids)
+                                selectedIds.clear()
+                                isSelectionMode = false
+                                Toast.makeText(context, "Moved to Trash", Toast.LENGTH_SHORT).show()
+
                                 coroutineScope.launch {
                                     isActionLoading = true
                                     try {
                                         apiBulkAction(serverUrl, deviceId, deviceKey, "trash", ids)
-                                        localList = localList.filter { !ids.contains(it.id) }
-                                        selectedIds.clear()
-                                        isSelectionMode = false
-                                        Toast.makeText(context, "Moved to Trash", Toast.LENGTH_SHORT).show()
+                                        onRefresh()
                                     } finally {
                                         isActionLoading = false
                                     }
@@ -1340,15 +1345,19 @@ fun FullGalleryScreen(
                 }
             },
             onDelete = {
+                val currentId = current.id
+                localList = localList.filter { it.id != currentId }
+                onDeleteMedia?.invoke(currentId)
+                if (viewerIndex != null && viewerIndex!! >= localList.size) {
+                    viewerIndex = if (localList.isNotEmpty()) localList.size - 1 else null
+                }
+                Toast.makeText(context, "Moved to Trash", Toast.LENGTH_SHORT).show()
+
                 coroutineScope.launch {
                     isActionLoading = true
                     try {
-                        apiTrashFile(serverUrl, deviceId, deviceKey, current.id)
-                        localList = localList.filter { it.id != current.id }
-                        if (viewerIndex!! >= localList.size) {
-                            viewerIndex = if (localList.isNotEmpty()) localList.size - 1 else null
-                        }
-                        Toast.makeText(context, "Moved to Trash", Toast.LENGTH_SHORT).show()
+                        apiTrashFile(serverUrl, deviceId, deviceKey, currentId)
+                        onRefresh()
                     } finally {
                         isActionLoading = false
                     }
@@ -1724,7 +1733,41 @@ fun FullScreenPhotoViewer(
                             )
 
                             if (isBuffering && playbackError == null) {
-                                // Progress line at top handles buffering UX — no circular spinner
+                                val thumbData = currentItem.thumbnail?.takeIf { it.isNotBlank() }
+                                    ?: "${serverUrl.trimEnd('/')}/api/v1/files/${currentItem.id}/thumbnail?deviceId=$deviceId&deviceKey=$deviceKey"
+
+                                Box(
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    AsyncImage(
+                                        model = ImageRequest.Builder(context)
+                                            .data(thumbData)
+                                            .addHeader("x-device-id", deviceId)
+                                            .addHeader("x-device-key", deviceKey)
+                                            .placeholderMemoryCacheKey("thumb_${currentItem.id}")
+                                            .memoryCacheKey("thumb_${currentItem.id}")
+                                            .diskCacheKey("thumb_${currentItem.id}")
+                                            .crossfade(false)
+                                            .build(),
+                                        contentDescription = currentItem.filename,
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentScale = ContentScale.Fit
+                                    )
+                                    Box(
+                                        modifier = Modifier
+                                            .size(64.dp)
+                                            .background(Color.Black.copy(alpha = 0.55f), CircleShape),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            Icons.Default.PlayArrow,
+                                            contentDescription = "Loading Video",
+                                            tint = Color.White,
+                                            modifier = Modifier.size(36.dp)
+                                        )
+                                    }
+                                }
                             }
 
                             if (playbackError != null) {
@@ -1783,6 +1826,9 @@ fun FullScreenPhotoViewer(
                                         .data(thumbData)
                                         .addHeader("x-device-id", deviceId)
                                         .addHeader("x-device-key", deviceKey)
+                                        .placeholderMemoryCacheKey("thumb_${currentItem.id}")
+                                        .memoryCacheKey("thumb_${currentItem.id}")
+                                        .diskCacheKey("thumb_${currentItem.id}")
                                         .crossfade(false)
                                         .build(),
                                     contentDescription = null,

@@ -857,6 +857,13 @@ export class FileController {
       }
 
       await CacheService.invalidateUser(userId.toString());
+      const io = getSocketIoInstance();
+      if (io) {
+        io.to(`user:${userId}`).emit('file:trashed', {
+          fileId: req.params.id,
+          trashedByDeviceId: req.device?.deviceId || 'web',
+        });
+      }
       res.json({ success: true, message: 'Moved to Trash' });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -887,6 +894,12 @@ export class FileController {
       }).catch(() => {});
 
       await CacheService.invalidateUser(userId.toString());
+      const io = getSocketIoInstance();
+      if (io) {
+        io.to(`user:${userId}`).emit('file:restored', {
+          fileId: req.params.id,
+        });
+      }
       res.json({ success: true, message: 'Restored from Trash' });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -1009,6 +1022,10 @@ export class FileController {
 
       // 2. Invalidate user cache immediately
       await CacheService.invalidateUser(userId.toString());
+      const io = getSocketIoInstance();
+      if (io) {
+        io.to(`user:${userId}`).emit('trash:emptied');
+      }
 
       // 3. Respond to client right away to avoid request timeouts
       res.json({
@@ -1130,6 +1147,10 @@ export class FileController {
       file.isFavorite = typeof isFavorite === 'boolean' ? isFavorite : !file.isFavorite;
       await file.save();
       await CacheService.invalidateUser(userId.toString());
+      const io = getSocketIoInstance();
+      if (io) {
+        io.to(`user:${userId}`).emit('file:favorite_toggled', { fileId: file._id, isFavorite: file.isFavorite });
+      }
       res.json({ success: true, isFavorite: file.isFavorite, fileId: file._id });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -1157,6 +1178,10 @@ export class FileController {
         return;
       }
       await CacheService.invalidateUser(userId.toString());
+      const io = getSocketIoInstance();
+      if (io) {
+        io.to(`user:${userId}`).emit('file:renamed', { fileId: req.params.id, filename: file.filename });
+      }
       res.json({ success: true, file });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -1180,6 +1205,10 @@ export class FileController {
         return;
       }
       await CacheService.invalidateUser(userId.toString());
+      const io = getSocketIoInstance();
+      if (io) {
+        io.to(`user:${userId}`).emit('file:moved', { fileId: req.params.id, folderId: file.folderId });
+      }
       res.json({ success: true, file });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -1225,6 +1254,10 @@ export class FileController {
       }
 
       await CacheService.invalidateUser(userId.toString());
+      const io = getSocketIoInstance();
+      if (io) {
+        io.to(`user:${userId}`).emit('file:bulk_action', { action, fileIds, folderId });
+      }
       res.json({ success: true, count: fileIds.length });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -1259,6 +1292,10 @@ export class FileController {
       });
 
       await CacheService.invalidateUser(userId.toString());
+      const io = getSocketIoInstance();
+      if (io) {
+        io.to(`user:${userId}`).emit('folder:created', { folder });
+      }
       res.json({ success: true, folder });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -1369,6 +1406,10 @@ export class FileController {
       );
 
       await CacheService.invalidateUser(userId.toString());
+      const io = getSocketIoInstance();
+      if (io) {
+        io.to(`user:${userId}`).emit('folder:deleted', { folderId: req.params.id });
+      }
       res.json({ success: true, message: `Folder "${folder.name}" and contents moved to Trash` });
     } catch (error: any) {
       res.status(500).json({ error: error.message });

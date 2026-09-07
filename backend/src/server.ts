@@ -18,6 +18,8 @@ import { storageRoutes } from './routes/storage.routes.js';
 import { fileRoutes } from './routes/file.routes.js';
 import { deviceRoutes } from './routes/device.routes.js';
 import { shortcutRoutes } from './routes/shortcut.routes.js';
+import { Device } from './models/Device.js';
+import { CryptoService } from './services/crypto.service.js';
 
 const app = express();
 const server = http.createServer(app);
@@ -77,14 +79,15 @@ io = new SocketIOServer(server, {
 });
 
 // Socket Handshake Authentication & Room Isolation (prevents IDOR on WebSockets)
-io.use((socket, next) => {
-  const token = socket.handshake.auth.token;
-  const deviceKey = socket.handshake.auth.deviceKey;
+io.use(async (socket, next) => {
+  const token = socket.handshake.auth?.token || socket.handshake.query?.token;
+  const deviceKey = socket.handshake.auth?.deviceKey || socket.handshake.query?.deviceKey || socket.handshake.headers?.['x-device-key'];
+  const deviceId = socket.handshake.auth?.deviceId || socket.handshake.query?.deviceId || socket.handshake.headers?.['x-device-id'];
 
   if (token) {
     try {
       const secret = process.env.JWT_SECRET || 'fallback_secret_key_drive';
-      const decoded = jwt.verify(token, secret) as any;
+      const decoded = jwt.verify(token as string, secret) as any;
       socket.data.userId = decoded.userId;
       return next();
     } catch {
@@ -92,7 +95,23 @@ io.use((socket, next) => {
     }
   }
 
-  // Allow connection for paired devices or dev
+  // Allow and authenticate paired physical devices (Android app, Desktop, iOS)
+  if (deviceId && deviceKey) {
+    try {
+      const keyHash = CryptoService.hashSecret(deviceKey as string);
+      const device = await Device.findOne({ deviceId, apiKeyHash: keyHash });
+      if (device) {
+        socket.data.userId = device.userId.toString();
+        socket.data.deviceId = device.deviceId;
+        socket.data.isDevice = true;
+        return next();
+      }
+    } catch (err) {
+      return next(new Error('Device authentication error'));
+    }
+  }
+
+  // Dev or unauthenticated connection
   if (deviceKey) {
     socket.data.isDevice = true;
     return next();
@@ -103,9 +122,14 @@ io.use((socket, next) => {
 
 io.on('connection', (socket) => {
   if (socket.data.userId) {
-    // Join isolated user room
+    // Join isolated user room for cross-device real-time sync
     socket.join(`user:${socket.data.userId}`);
-    console.log(`🔌 Client connected to room user:${socket.data.userId}`);
+    console.log(`🔌 Client connected to room user:${socket.data.userId} (isDevice: ${Boolean(socket.data.isDevice)})`);
+  }
+
+  if (socket.data.deviceId) {
+    // Join device-specific room for targeted remote triggers
+    socket.join(`device:${socket.data.deviceId}`);
   }
 
   socket.on('disconnect', () => {

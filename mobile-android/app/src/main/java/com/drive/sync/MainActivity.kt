@@ -68,6 +68,8 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.animation.*
+import androidx.compose.animation.core.*
 import android.media.MediaPlayer
 import android.widget.MediaController
 import android.widget.VideoView
@@ -81,6 +83,7 @@ import coil.memory.MemoryCache
 import coil.request.ImageRequest
 import coil.size.Precision
 import coil.size.Size
+import com.drive.sync.network.DriveSocketManager
 import com.drive.sync.workers.SyncWorker
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -209,13 +212,13 @@ class MainActivity : ComponentActivity() {
             .diskCache {
                 DiskCache.Builder()
                     .directory(cacheDir.resolve("image_cache"))
-                    .maxSizeBytes(150L * 1024 * 1024)
+                    .maxSizeBytes(500L * 1024 * 1024)
                     .build()
             }
             .components {
                 add(SvgDecoder.Factory())
             }
-            .crossfade(false)
+            .crossfade(true)
             .respectCacheHeaders(false)
             .build()
         Coil.setImageLoader(imageLoader)
@@ -305,8 +308,6 @@ class MainActivity : ComponentActivity() {
             }
             if (chargingOnly) {
                 setRequiresCharging(true)
-            } else {
-                setRequiresBatteryNotLow(true)
             }
             setRequiresStorageNotLow(true)
         }.build()
@@ -330,7 +331,7 @@ class MainActivity : ComponentActivity() {
         }
 
         val syncRequest = syncRequestBuilder.build()
-        val policy = if (forceUpdate) ExistingPeriodicWorkPolicy.UPDATE else ExistingPeriodicWorkPolicy.KEEP
+        val policy = ExistingPeriodicWorkPolicy.UPDATE
 
         WorkManager.getInstance(applicationContext).enqueueUniquePeriodicWork(
             "UnifiedDriveSync",
@@ -687,6 +688,117 @@ fun DeviceSetupScreen(
 }
 
 // ══════════════════════════════════════════════════════════════════
+// Connecting to myDrive Screen (Mirrors Web App 1-to-1)
+// ══════════════════════════════════════════════════════════════════
+@Composable
+fun ConnectingToDriveScreen() {
+    val infiniteTransition = rememberInfiniteTransition(label = "pulseTransition")
+    val pulseAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.6f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1200, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "pulseAlpha"
+    )
+    val pulseScale by infiniteTransition.animateFloat(
+        initialValue = 0.95f,
+        targetValue = 1.02f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1200, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "pulseScale"
+    )
+    val dotAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.3f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(800, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "dotAlpha"
+    )
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFF08080A)),
+        contentAlignment = Alignment.Center
+    ) {
+        // Ambient soft purple radial glow in background
+        Box(
+            modifier = Modifier
+                .size(360.dp)
+                .background(
+                    brush = Brush.radialGradient(
+                        colors = listOf(
+                            Color(0xFF9333EA).copy(alpha = 0.18f),
+                            Color(0xFF9333EA).copy(alpha = 0.05f),
+                            Color.Transparent
+                        )
+                    ),
+                    shape = CircleShape
+                )
+        )
+
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+            modifier = Modifier.padding(24.dp)
+        ) {
+            // App Logo with glowing purple border and gentle breathing pulse
+            Surface(
+                shape = RoundedCornerShape(20.dp),
+                color = Color(0xFF13131A),
+                border = BorderStroke(1.5.dp, Color(0xFFA855F7).copy(alpha = pulseAlpha)),
+                shadowElevation = 18.dp,
+                modifier = Modifier
+                    .size(76.dp)
+                    .graphicsLayer(
+                        scaleX = pulseScale,
+                        scaleY = pulseScale,
+                        alpha = pulseAlpha
+                    )
+            ) {
+                Image(
+                    painter = painterResource(R.drawable.ic_mydrive_logo),
+                    contentDescription = "myDrive",
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clip(RoundedCornerShape(20.dp)),
+                    contentScale = ContentScale.Crop
+                )
+            }
+
+            Spacer(modifier = Modifier.height(22.dp))
+
+            // "Connecting to myDrive..." with pulsing purple status dot
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .graphicsLayer(alpha = dotAlpha)
+                        .background(Color(0xFFC084FC), shape = CircleShape)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Connecting to myDrive...",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = Color(0xFFA1A1AA),
+                    letterSpacing = 0.3.sp
+                )
+            }
+        }
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainAppScreen(
@@ -717,16 +829,15 @@ fun MainAppScreen(
     // ────────────────────────────────────────────────────────────────────────
 
     val requiredPermissions = remember {
+        val list = mutableListOf<String>()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            arrayOf(
-                Manifest.permission.READ_MEDIA_IMAGES,
-                Manifest.permission.READ_MEDIA_VIDEO
-            )
+            list.add(Manifest.permission.READ_MEDIA_IMAGES)
+            list.add(Manifest.permission.READ_MEDIA_VIDEO)
+            list.add(Manifest.permission.POST_NOTIFICATIONS)
         } else {
-            arrayOf(
-                Manifest.permission.READ_EXTERNAL_STORAGE
-            )
+            list.add(Manifest.permission.READ_EXTERNAL_STORAGE)
         }
+        list.toTypedArray()
     }
 
     var hasMediaPermissions by remember {
@@ -754,6 +865,7 @@ fun MainAppScreen(
 
     var selectedTab by remember { mutableIntStateOf(0) }
     var isFilesSelectionMode by remember { mutableStateOf(false) }
+    var isInitialLoading by remember { mutableStateOf(true) }
 
     val initialServerUrl = remember {
         val raw = prefs.getString("server_url", "https://drive-edge-cache.karan9302451907.workers.dev") ?: "https://drive-edge-cache.karan9302451907.workers.dev"
@@ -1641,8 +1753,11 @@ fun MainAppScreen(
                     fetchError = e.localizedMessage ?: "Failed to connect to backend"
                 } finally {
                     isRefreshing = false
+                    isInitialLoading = false
                 }
             }
+        } else {
+            isInitialLoading = false
         }
     }
 
@@ -1773,6 +1888,19 @@ fun MainAppScreen(
     LaunchedEffect(isSyncingNow) {
         if (!isSyncingNow) {
             refreshData()
+        }
+    }
+
+    // Real-time Socket.IO live sync across devices (instant file:uploaded, file:trashed, etc.)
+    DisposableEffect(serverUrl, deviceId, deviceKey) {
+        if (serverUrl.isNotBlank() && deviceId.isNotBlank() && deviceKey.isNotBlank()) {
+            DriveSocketManager.connect(serverUrl, deviceId, deviceKey) { eventName ->
+                android.util.Log.d("MainActivity", "⚡ Socket.IO event received: $eventName -> refreshing data")
+                refreshData()
+            }
+        }
+        onDispose {
+            DriveSocketManager.disconnect()
         }
     }
 
@@ -2010,6 +2138,11 @@ fun MainAppScreen(
     }
 
     val isGlobalLoading = isRefreshing || isManualUploading || isSyncingNow || isSavingPolicy || isCrudOperating
+
+    if (isInitialLoading) {
+        ConnectingToDriveScreen()
+        return
+    }
 
     Scaffold(
         topBar = {
@@ -2275,7 +2408,15 @@ fun MainAppScreen(
                         deviceId = deviceId,
                         deviceKey = deviceKey,
                         isRefreshing = isRefreshing,
-                        onRefresh = refreshData
+                        onRefresh = refreshData,
+                        onDeleteMedia = { deletedId ->
+                            galleryList = galleryList.filter { it.id != deletedId }
+                            filesList = filesList.filter { it.id != deletedId }
+                        },
+                        onBulkDeleteMedia = { deletedIds ->
+                            galleryList = galleryList.filter { !deletedIds.contains(it.id) }
+                            filesList = filesList.filter { !deletedIds.contains(it.id) }
+                        }
                     )
                     2 -> TransfersScreen(
                         uploadedFiles = uploadedFilesList,
@@ -4690,37 +4831,64 @@ fun MediaViewerDialog(
                 ) {
                     if (isImage) {
                         var isLoading by remember { mutableStateOf(true) }
+                        val thumbUrl = "${serverUrl.trimEnd('/')}/api/v1/files/${file.id}/thumbnail?deviceId=$deviceId&deviceKey=$deviceKey"
 
-                        AsyncImage(
-                            model = ImageRequest.Builder(context)
-                                .data(streamUrl)
-                                .addHeader("x-device-id", deviceId)
-                                .addHeader("x-device-key", deviceKey)
-                                .crossfade(true)
-                                .listener(
-                                    onSuccess = { _, _ ->
-                                        isLoading = false
-                                        isMediaLoading = false
-                                    },
-                                    onError = { _, _ ->
-                                        isLoading = false
-                                        isMediaLoading = false
-                                    }
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (isLoading) {
+                                AsyncImage(
+                                    model = ImageRequest.Builder(context)
+                                        .data(thumbUrl)
+                                        .addHeader("x-device-id", deviceId)
+                                        .addHeader("x-device-key", deviceKey)
+                                        .placeholderMemoryCacheKey("thumb_${file.id}")
+                                        .memoryCacheKey("thumb_${file.id}")
+                                        .diskCacheKey("thumb_${file.id}")
+                                        .crossfade(false)
+                                        .build(),
+                                    contentDescription = null,
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .padding(12.dp)
+                                        .graphicsLayer(rotationZ = rotation),
+                                    contentScale = ContentScale.Fit
                                 )
-                                .build(),
-                            contentDescription = file.filename,
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(12.dp)
-                                .graphicsLayer(rotationZ = rotation),
-                            contentScale = ContentScale.Fit
-                        )
+                            }
 
-                        // Single running progress bar above preview modal handles loading indication — no circular spinner
+                            AsyncImage(
+                                model = ImageRequest.Builder(context)
+                                    .data(streamUrl)
+                                    .addHeader("x-device-id", deviceId)
+                                    .addHeader("x-device-key", deviceKey)
+                                    .crossfade(true)
+                                    .listener(
+                                        onSuccess = { _, _ ->
+                                            isLoading = false
+                                            isMediaLoading = false
+                                        },
+                                        onError = { _, _ ->
+                                            isLoading = false
+                                            isMediaLoading = false
+                                        }
+                                    )
+                                    .build(),
+                                contentDescription = file.filename,
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(12.dp)
+                                    .graphicsLayer(rotationZ = rotation),
+                                contentScale = ContentScale.Fit
+                            )
+                        }
                     } else if (isVideo) {
+                        val thumbUrl = "${serverUrl.trimEnd('/')}/api/v1/files/${file.id}/thumbnail?deviceId=$deviceId&deviceKey=$deviceKey"
                         VideoPlayer(
                             streamUrl = resolvedVideoUrl,
                             filename = file.filename,
+                            thumbnailUrl = thumbUrl,
+                            fileId = file.id,
                             deviceId = deviceId,
                             deviceKey = deviceKey
                         )
@@ -4792,6 +4960,8 @@ fun MediaViewerDialog(
 fun VideoPlayer(
     streamUrl: String,
     filename: String,
+    thumbnailUrl: String = "",
+    fileId: String = "",
     deviceId: String = "",
     deviceKey: String = "",
     modifier: Modifier = Modifier
@@ -4857,7 +5027,41 @@ fun VideoPlayer(
             modifier = Modifier.fillMaxSize()
         )
 
-        // Single running line above preview modal handles buffering indication — no circular spinner
+        // Instant thumbnail poster frame while video is buffering
+        if (isBuffering && playbackError == null && thumbnailUrl.isNotBlank()) {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                AsyncImage(
+                    model = ImageRequest.Builder(context)
+                        .data(thumbnailUrl)
+                        .addHeader("x-device-id", deviceId)
+                        .addHeader("x-device-key", deviceKey)
+                        .placeholderMemoryCacheKey(if (fileId.isNotBlank()) "thumb_$fileId" else null)
+                        .memoryCacheKey(if (fileId.isNotBlank()) "thumb_$fileId" else null)
+                        .diskCacheKey(if (fileId.isNotBlank()) "thumb_$fileId" else null)
+                        .crossfade(false)
+                        .build(),
+                    contentDescription = filename,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Fit
+                )
+                Box(
+                    modifier = Modifier
+                        .size(64.dp)
+                        .background(Color.Black.copy(alpha = 0.55f), CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        Icons.Default.PlayArrow,
+                        contentDescription = "Loading Video",
+                        tint = Color.White,
+                        modifier = Modifier.size(36.dp)
+                    )
+                }
+            }
+        }
 
         if (playbackError != null) {
             Column(
