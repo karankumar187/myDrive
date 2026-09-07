@@ -329,7 +329,7 @@ export const App: React.FC = () => {
 
   const handleGoogleLogin = () => {
     const isLocal = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
-    const authBase = isLocal ? (import.meta.env.VITE_API_URL || 'http://localhost:5001') : 'https://mydrive-sti3.onrender.com';
+    const authBase = isLocal ? (import.meta.env.VITE_API_URL || 'http://localhost:5001') : (import.meta.env.VITE_API_URL || 'https://drive-edge-cache.karan9302451907.workers.dev');
     const currentOrigin = typeof window !== 'undefined' ? encodeURIComponent(window.location.origin) : '';
     window.location.href = `${authBase}/api/v1/auth/google?client_url=${currentOrigin}`;
   };
