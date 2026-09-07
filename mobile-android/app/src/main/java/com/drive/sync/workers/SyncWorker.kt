@@ -22,6 +22,7 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import androidx.core.app.NotificationCompat
 import androidx.work.ForegroundInfo
+import com.drive.sync.network.SyncNotificationHelper
 import com.drive.sync.MainActivity
 import com.drive.sync.R
 import okhttp3.MediaType.Companion.toMediaType
@@ -109,9 +110,10 @@ class SyncWorker(
     }
 
     override suspend fun getForegroundInfo(): ForegroundInfo {
-        return createForegroundInfo(
-            title = "myDrive Auto-Sync",
-            content = "Checking for new media to back up...",
+        return SyncNotificationHelper.createForegroundInfo(
+            applicationContext,
+            title = "myDrive Live Backup ⚡",
+            message = "Checking for new media to back up...",
             isIndeterminate = true
         )
     }
@@ -218,12 +220,14 @@ class SyncWorker(
             return@withContext Result.success()
         }
 
+        SyncNotificationHelper.resetCancel()
         // Promote to Foreground Service for reliable Play Store style background execution
         try {
             setForeground(
-                createForegroundInfo(
-                    title = "myDrive Auto-Sync",
-                    content = "Scanning media for background backup...",
+                SyncNotificationHelper.createForegroundInfo(
+                    applicationContext,
+                    title = "myDrive Live Backup ⚡",
+                    message = "Scanning media for background backup...",
                     isIndeterminate = true
                 )
             )
@@ -353,7 +357,11 @@ class SyncWorker(
             }
 
             reportStatus(serverUrl, deviceId, deviceKey, "online", "Idle ($summary)", summary)
-            showCompletionNotification(totalSynced)
+            if (SyncNotificationHelper.isSyncCancelled() || isStopped) {
+                SyncNotificationHelper.showStopped(applicationContext)
+            } else {
+                SyncNotificationHelper.showCompletion(applicationContext, totalSynced)
+            }
             Result.success()
         } catch (e: Exception) {
             Log.e("SyncWorker", "Sync worker error: ${e.message}", e)
@@ -422,6 +430,7 @@ class SyncWorker(
             else -> "documents"
         }
         val history = loadHistory(category)
+        SyncNotificationHelper.showScanning(applicationContext, category)
 
         val projection = arrayOf(
             MediaStore.MediaColumns._ID,
@@ -465,17 +474,16 @@ class SyncWorker(
         var processedCount = 0
 
         for ((index, item) in pendingItems.withIndex()) {
-            if (isStopped) {
+            if (isStopped || SyncNotificationHelper.isSyncCancelled()) {
                 Log.d("SyncWorker", "Sync stopped/cancelled by user or system.")
                 break
             }
 
-            val categoryTitle = category.replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
-            updateNotificationProgress(
-                title = "myDrive Auto-Sync",
-                content = "Backing up $categoryTitle (${index + 1} of $totalPending)...",
-                progress = index + 1,
-                max = totalPending
+            SyncNotificationHelper.showProgress(
+                context = applicationContext,
+                filename = item.filename,
+                current = index + 1,
+                total = totalPending
             )
 
             val id = item.id

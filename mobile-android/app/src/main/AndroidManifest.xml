@@ -8,7 +8,9 @@
     <!-- Storage & Media permissions for photo/video backup -->
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
 
     <!-- Battery & background scheduling permissions -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
@@ -25,6 +27,15 @@
         android:supportsRtl="true"
         android:usesCleartextTraffic="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
+
+        <!-- BroadcastReceiver for Stop Sync notification action -->
+        <receiver
+            android:name="com.drive.sync.network.SyncActionReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.drive.sync.ACTION_STOP_SYNC" />
+            </intent-filter>
+        </receiver>
 
         <!-- WorkManager SystemForegroundService with dataSync for Android 14+ background sync -->
         <service

@@ -19,6 +19,12 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.graphics.vector.ImageVector
+import com.drive.sync.network.AppPermissions
+import com.drive.sync.network.SyncNotificationHelper
 import com.drive.sync.crypto.VaultCrypto
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -241,7 +247,7 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    MainAppScreen(
+                    RootAppScreen(
                         prefs = prefs,
                         onScheduleSync = { serverUrl, deviceId, deviceKey, targetFolderId, wifiOnly, chargingOnly, syncPhotos, syncVideos, syncDocuments ->
                             scheduleBackupWork(serverUrl, deviceId, deviceKey, targetFolderId, wifiOnly, chargingOnly, syncPhotos, syncVideos, syncDocuments, forceUpdate = true)
@@ -799,6 +805,291 @@ fun ConnectingToDriveScreen() {
 }
 
 // ══════════════════════════════════════════════════════════════════
+// Permissions Required Screen & Root App Gate
+// ══════════════════════════════════════════════════════════════════
+@Composable
+fun PermissionsRequiredScreen(
+    onGrantClicked: () -> Unit,
+    onOpenSettingsClicked: () -> Unit
+) {
+    val context = LocalContext.current
+    val hasStorage = AppPermissions.hasStoragePermission(context)
+    val hasNotification = AppPermissions.hasNotificationPermission(context)
+
+    val infiniteTransition = rememberInfiniteTransition(label = "perm_pulse")
+    val pulseScale by infiniteTransition.animateFloat(
+        initialValue = 0.96f,
+        targetValue = 1.04f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1600, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "perm_scale"
+    )
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFF08080A))
+            .padding(horizontal = 24.dp, vertical = 40.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Box(
+            modifier = Modifier
+                .size(340.dp)
+                .background(
+                    brush = Brush.radialGradient(
+                        colors = listOf(Color(0xFF9333EA).copy(alpha = 0.18f), Color.Transparent)
+                    ),
+                    shape = CircleShape
+                )
+        )
+
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+        ) {
+            Surface(
+                shape = RoundedCornerShape(20.dp),
+                color = Color(0xFF13131A),
+                border = BorderStroke(1.5.dp, Color(0xFFA855F7)),
+                shadowElevation = 18.dp,
+                modifier = Modifier
+                    .size(76.dp)
+                    .graphicsLayer(scaleX = pulseScale, scaleY = pulseScale)
+            ) {
+                Image(
+                    painter = painterResource(R.drawable.ic_mydrive_logo),
+                    contentDescription = "myDrive",
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clip(RoundedCornerShape(20.dp)),
+                    contentScale = ContentScale.Crop
+                )
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            Text(
+                text = "Permissions Required",
+                fontSize = 22.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color.White
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Text(
+                text = "myDrive requires storage and notification permissions to automatically back up your photos/videos and show live sync status.",
+                fontSize = 13.sp,
+                color = Color(0xFFA1A1AA),
+                textAlign = TextAlign.Center,
+                lineHeight = 18.sp,
+                modifier = Modifier.padding(horizontal = 12.dp)
+            )
+
+            Spacer(modifier = Modifier.height(28.dp))
+
+            PermissionChecklistCard(
+                icon = Icons.Default.PhotoLibrary,
+                title = "Photos & Videos Access",
+                description = "Required to scan your media and back it up safely to the cloud.",
+                isGranted = hasStorage
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            PermissionChecklistCard(
+                icon = Icons.Default.Notifications,
+                title = "Live Notifications",
+                description = "Required to display live backup status, progress percentage, and summaries.",
+                isGranted = hasNotification
+            )
+
+            Spacer(modifier = Modifier.height(32.dp))
+
+            Button(
+                onClick = onGrantClicked,
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF9333EA)),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(50.dp)
+            ) {
+                Icon(Icons.Default.CheckCircle, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Grant Required Permissions",
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color.White
+                )
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            OutlinedButton(
+                onClick = onOpenSettingsClicked,
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFA855F7)),
+                border = BorderStroke(1.dp, Color(0xFF3F3F46)),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(46.dp)
+            ) {
+                Icon(Icons.Default.Settings, contentDescription = null, tint = Color(0xFFA855F7), modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Open App Settings",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = Color(0xFFA1A1AA)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PermissionChecklistCard(
+    icon: ImageVector,
+    title: String,
+    description: String,
+    isGranted: Boolean
+) {
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = Color(0xFF13131A),
+        border = BorderStroke(1.dp, if (isGranted) Color(0xFF22C55E).copy(alpha = 0.4f) else Color(0xFF27272A)),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .padding(14.dp)
+                .fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .background(
+                        if (isGranted) Color(0xFF22C55E).copy(alpha = 0.15f) else Color(0xFF9333EA).copy(alpha = 0.15f),
+                        CircleShape
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = if (isGranted) Color(0xFF4ADE80) else Color(0xFFC084FC),
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+
+            Spacer(modifier = Modifier.width(12.dp))
+
+            Column(modifier = Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = title,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color.White
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    if (isGranted) {
+                        Text(
+                            text = "✓ Granted",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF4ADE80)
+                        )
+                    } else {
+                        Text(
+                            text = "Required",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFFFBBF24)
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = description,
+                    fontSize = 12.sp,
+                    color = Color(0xFF71717A),
+                    lineHeight = 16.sp
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun RootAppScreen(
+    prefs: android.content.SharedPreferences,
+    onScheduleSync: (String, String, String, String?, Boolean, Boolean, Boolean, Boolean, Boolean) -> Unit,
+    onSyncNow: (String, String, String, String?, Boolean, Boolean, Boolean, (() -> Unit)?) -> Unit,
+    httpClient: OkHttpClient
+) {
+    val context = LocalContext.current
+    var hasAllPermissions by remember {
+        mutableStateOf(AppPermissions.hasAllRequiredPermissions(context))
+    }
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) {
+        hasAllPermissions = AppPermissions.hasAllRequiredPermissions(context)
+    }
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                val granted = AppPermissions.hasAllRequiredPermissions(context)
+                hasAllPermissions = granted
+                if (!granted) {
+                    permissionLauncher.launch(AppPermissions.getRequiredPermissions())
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        if (!hasAllPermissions) {
+            permissionLauncher.launch(AppPermissions.getRequiredPermissions())
+        }
+    }
+
+    if (!hasAllPermissions) {
+        PermissionsRequiredScreen(
+            onGrantClicked = {
+                permissionLauncher.launch(AppPermissions.getRequiredPermissions())
+            },
+            onOpenSettingsClicked = {
+                AppPermissions.openAppSettings(context)
+            }
+        )
+        return
+    }
+
+    MainAppScreen(
+        prefs = prefs,
+        onScheduleSync = onScheduleSync,
+        onSyncNow = onSyncNow,
+        httpClient = httpClient
+    )
+}
+
+// ══════════════════════════════════════════════════════════════════
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainAppScreen(
@@ -828,39 +1119,15 @@ fun MainAppScreen(
     }
     // ────────────────────────────────────────────────────────────────────────
 
-    val requiredPermissions = remember {
-        val list = mutableListOf<String>()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            list.add(Manifest.permission.READ_MEDIA_IMAGES)
-            list.add(Manifest.permission.READ_MEDIA_VIDEO)
-            list.add(Manifest.permission.POST_NOTIFICATIONS)
-        } else {
-            list.add(Manifest.permission.READ_EXTERNAL_STORAGE)
-        }
-        list.toTypedArray()
-    }
-
+    val requiredPermissions = remember { AppPermissions.getRequiredPermissions() }
     var hasMediaPermissions by remember {
-        mutableStateOf(
-            requiredPermissions.all {
-                ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
-            }
-        )
+        mutableStateOf(AppPermissions.hasStoragePermission(context))
     }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) { results ->
-        hasMediaPermissions = results.values.all { it }
-        if (hasMediaPermissions) {
-            Toast.makeText(context, "Gallery permissions granted for background sync!", Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    LaunchedEffect(Unit) {
-        if (!hasMediaPermissions) {
-            permissionLauncher.launch(requiredPermissions)
-        }
+    ) {
+        hasMediaPermissions = AppPermissions.hasStoragePermission(context)
     }
 
     var selectedTab by remember { mutableIntStateOf(0) }
@@ -975,6 +1242,8 @@ fun MainAppScreen(
     val performInProcessSync: () -> Unit = {
         scope.launch {
             if (serverUrl.isBlank() || deviceId.isBlank() || deviceKey.isBlank()) return@launch
+            SyncNotificationHelper.resetCancel()
+            SyncNotificationHelper.showScanning(context, "Media")
             isSyncingNow = true
             syncStatusText = "Starting sync…"
             syncLogLines.clear()
@@ -1038,8 +1307,10 @@ fun MainAppScreen(
                 selection: String? = null,
                 selectionArgs: Array<String>? = null
             ) {
+                if (SyncNotificationHelper.isSyncCancelled()) return
                 status("📂 Scanning $label…")
                 log("── Scanning $label ──")
+                SyncNotificationHelper.showScanning(context, label)
 
                 val projection = arrayOf(
                     android.provider.MediaStore.MediaColumns._ID,
@@ -1076,11 +1347,25 @@ fun MainAppScreen(
                 log("Found $total $label — ${pending.size} to upload, $alreadyDone in history")
 
                 pending.forEachIndexed { idx, asset ->
+                    if (SyncNotificationHelper.isSyncCancelled()) {
+                        withContext(Dispatchers.Main) {
+                            log("⚠ Sync stopped by user")
+                            status("Sync stopped by user")
+                        }
+                        return@forEachIndexed
+                    }
                     val id = asset.id
                     val filename = asset.filename
                     val mimeType = asset.mimeType
                     val sizeBytes = asset.sizeBytes
                     val num = idx + 1
+                    SyncNotificationHelper.showProgress(
+                        context = context,
+                        filename = filename,
+                        current = num,
+                        total = pending.size,
+                        driveLabel = driveLabel
+                    )
                     status("⬆ Uploading $filename  ($num/${pending.size})\n☁ Drive: $driveLabel")
                     withContext(Dispatchers.IO) {
                         try {
@@ -1284,6 +1569,12 @@ fun MainAppScreen(
             status("✅ $summary")
             log("═══════════════════════════════")
             log("✅ $summary")
+
+            if (SyncNotificationHelper.isSyncCancelled()) {
+                SyncNotificationHelper.showStopped(context)
+            } else {
+                SyncNotificationHelper.showCompletion(context, totalUploaded)
+            }
 
             prefs.edit().apply {
                 putLong("last_sync_timestamp", System.currentTimeMillis())
