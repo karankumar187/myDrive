@@ -23,10 +23,12 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 object SyncNotificationHelper {
     const val CHANNEL_ID = "mydrive_sync_live_channel"
+    const val ALERT_CHANNEL_ID = "mydrive_sync_alerts_channel"
     const val SYNC_NOTIFICATION_ID = 1001
     const val COMPLETION_NOTIFICATION_ID = 1002
     const val STOPPED_NOTIFICATION_ID = 1003
     const val ERROR_NOTIFICATION_ID = 1004
+    const val TRIGGER_NOTIFICATION_ID = 1005
 
     private val isCancelled = AtomicBoolean(false)
 
@@ -43,7 +45,7 @@ object SyncNotificationHelper {
     fun ensureNotificationChannel(context: Context) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
-            val channel = NotificationChannel(
+            val liveChannel = NotificationChannel(
                 CHANNEL_ID,
                 "myDrive Live Backup",
                 NotificationManager.IMPORTANCE_LOW
@@ -53,7 +55,19 @@ object SyncNotificationHelper {
                 enableVibration(false)
                 enableLights(false)
             }
-            nm.createNotificationChannel(channel)
+            nm.createNotificationChannel(liveChannel)
+
+            val alertChannel = NotificationChannel(
+                ALERT_CHANNEL_ID,
+                "myDrive Sync Alerts",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Heads-up notifications when auto-sync triggers or finishes"
+                setShowBadge(true)
+                enableVibration(true)
+                enableLights(true)
+            }
+            nm.createNotificationChannel(alertChannel)
         }
     }
 
@@ -197,8 +211,30 @@ object SyncNotificationHelper {
         } catch (_: Exception) {}
     }
 
+    fun showAutoSyncTriggered(context: Context, intervalHours: Int) {
+        try {
+            ensureNotificationChannel(context)
+            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+            if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) return
+
+            val notification = NotificationCompat.Builder(context, ALERT_CHANNEL_ID)
+                .setContentTitle("myDrive Auto-Sync ⚡")
+                .setContentText("Scheduled auto-sync starting. Scanning device for new media…")
+                .setSmallIcon(R.drawable.ic_mydrive_logo)
+                .setColor(0xFF38BDF8.toInt())
+                .setContentIntent(getOpenAppPendingIntent(context))
+                .setAutoCancel(true)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setDefaults(NotificationCompat.DEFAULT_ALL)
+                .build()
+
+            nm.notify(TRIGGER_NOTIFICATION_ID, notification)
+        } catch (_: Exception) {}
+    }
+
     fun showCompletion(context: Context, totalUploaded: Int, totalFailed: Int = 0) {
         try {
+            ensureNotificationChannel(context)
             val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
             nm.cancel(SYNC_NOTIFICATION_ID)
 
@@ -213,14 +249,15 @@ object SyncNotificationHelper {
                     else ->
                         Pair("myDrive: Up to date", "Everything is already backed up and up to date.")
                 }
-                val notification = NotificationCompat.Builder(context, CHANNEL_ID)
+                val notification = NotificationCompat.Builder(context, ALERT_CHANNEL_ID)
                     .setContentTitle(title)
                     .setContentText(text)
                     .setSmallIcon(R.drawable.ic_mydrive_logo)
                     .setColor(0xFF38BDF8.toInt())
                     .setContentIntent(getOpenAppPendingIntent(context))
                     .setAutoCancel(true)
-                    .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                    .setPriority(NotificationCompat.PRIORITY_HIGH)
+                    .setDefaults(NotificationCompat.DEFAULT_ALL)
                     .build()
                 nm.notify(COMPLETION_NOTIFICATION_ID, notification)
             }

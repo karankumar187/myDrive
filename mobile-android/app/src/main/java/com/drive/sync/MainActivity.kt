@@ -257,6 +257,7 @@ class MainActivity : ComponentActivity() {
                         prefs = prefs,
                         onScheduleSync = { serverUrl, deviceId, deviceKey, targetFolderId, wifiOnly, chargingOnly, syncPhotos, syncVideos, syncDocuments ->
                             scheduleBackupWork(serverUrl, deviceId, deviceKey, targetFolderId, wifiOnly, chargingOnly, syncPhotos, syncVideos, syncDocuments, forceUpdate = true)
+                            com.drive.sync.network.SyncAlarmScheduler.scheduleNextAlarm(this)
                             Toast.makeText(this, "Periodic background backup scheduled!", Toast.LENGTH_SHORT).show()
                         },
                         onSyncNow = { serverUrl, deviceId, deviceKey, targetFolderId, syncPhotos, syncVideos, syncDocuments, onComplete ->
@@ -287,12 +288,8 @@ class MainActivity : ComponentActivity() {
         val syncDocuments = prefs.getBoolean("sync_documents", true)
 
         if (deviceId.isNotBlank() && deviceKey.isNotBlank()) {
-            val lastScheduled = prefs.getLong("last_work_scheduled_timestamp", 0L)
-            val now = System.currentTimeMillis()
-            // Avoid rescheduling on every single app switch unless > 24h passed
-            if (lastScheduled == 0L || (now - lastScheduled) > 24 * 3600 * 1000L) {
-                scheduleBackupWork(serverUrl, deviceId, deviceKey, targetFolderId, wifiOnly, chargingOnly, syncPhotos, syncVideos, syncDocuments, forceUpdate = false)
-            }
+            scheduleBackupWork(serverUrl, deviceId, deviceKey, targetFolderId, wifiOnly, chargingOnly, syncPhotos, syncVideos, syncDocuments, forceUpdate = true)
+            com.drive.sync.network.SyncAlarmScheduler.scheduleNextAlarm(this)
         }
     }
 
@@ -366,6 +363,9 @@ class MainActivity : ComponentActivity() {
             putLong("last_work_scheduled_timestamp", System.currentTimeMillis())
             apply()
         }
+
+        // Also schedule exact RTC_WAKEUP alarm for reliable Doze-mode wakeup
+        com.drive.sync.network.SyncAlarmScheduler.scheduleNextAlarm(applicationContext)
     }
 
     fun triggerImmediateSync(
@@ -2464,11 +2464,31 @@ fun MainAppScreen(
                         onServerUrlChange = { serverUrl = it; saveCredentials() },
                         onDeviceIdChange = { deviceId = it; saveCredentials() },
                         onDeviceKeyChange = { deviceKey = it; saveCredentials() },
-                        onWifiOnlyChange = { wifiOnly = it; saveCredentials() },
-                        onChargingOnlyChange = { chargingOnly = it; saveCredentials() },
-                        onSyncPhotosChange = { syncPhotos = it; saveCredentials() },
-                        onSyncVideosChange = { syncVideos = it; saveCredentials() },
-                        onSyncDocumentsChange = { syncDocuments = it; saveCredentials() },
+                        onWifiOnlyChange = {
+                            wifiOnly = it
+                            saveCredentials()
+                            onScheduleSync(serverUrl, deviceId, deviceKey, targetFolderId, it, chargingOnly, syncPhotos, syncVideos, syncDocuments)
+                        },
+                        onChargingOnlyChange = {
+                            chargingOnly = it
+                            saveCredentials()
+                            onScheduleSync(serverUrl, deviceId, deviceKey, targetFolderId, wifiOnly, it, syncPhotos, syncVideos, syncDocuments)
+                        },
+                        onSyncPhotosChange = {
+                            syncPhotos = it
+                            saveCredentials()
+                            onScheduleSync(serverUrl, deviceId, deviceKey, targetFolderId, wifiOnly, chargingOnly, it, syncVideos, syncDocuments)
+                        },
+                        onSyncVideosChange = {
+                            syncVideos = it
+                            saveCredentials()
+                            onScheduleSync(serverUrl, deviceId, deviceKey, targetFolderId, wifiOnly, chargingOnly, syncPhotos, it, syncDocuments)
+                        },
+                        onSyncDocumentsChange = {
+                            syncDocuments = it
+                            saveCredentials()
+                            onScheduleSync(serverUrl, deviceId, deviceKey, targetFolderId, wifiOnly, chargingOnly, syncPhotos, syncVideos, it)
+                        },
                         onUpdatePairedRule = { sId, updatedRule ->
                             pairedRulesMap[sId] = updatedRule
                             savePairedRulesToPrefs()

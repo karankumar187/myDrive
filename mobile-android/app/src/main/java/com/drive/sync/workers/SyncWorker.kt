@@ -102,6 +102,20 @@ class SyncWorker(
         val syncDocuments = inputData.getBoolean("sync_documents", prefs.getBoolean("sync_documents", true))
         val targetFolderId = inputData.getString("target_folder_id") ?: prefs.getString("target_folder_id", null)
         val isManual = inputData.getBoolean("is_manual", false)
+        val wifiOnly = inputData.getBoolean("wifi_only", prefs.getBoolean("wifi_only", false))
+        val chargingOnly = inputData.getBoolean("charging_only", prefs.getBoolean("charging_only", false))
+
+        // Check Wi-Fi & Charging constraints directly at runtime
+        if (!isManual) {
+            if (wifiOnly && !com.drive.sync.network.SyncAlarmReceiver.isWifiConnected(applicationContext)) {
+                SyncLogManager.log("⏸ Sync postponed: Wi-Fi connection required by settings.")
+                return@withContext Result.retry()
+            }
+            if (chargingOnly && !com.drive.sync.network.SyncAlarmReceiver.isDeviceCharging(applicationContext)) {
+                SyncLogManager.log("⏸ Sync postponed: Device charging required by settings.")
+                return@withContext Result.retry()
+            }
+        }
 
         // Prevent rapid repeated background syncs (debounce 3 minutes)
         val lastSync = prefs.getLong("last_sync_timestamp", 0L)
@@ -248,6 +262,9 @@ class SyncWorker(
             } else {
                 SyncNotificationHelper.showCompletion(applicationContext, totalUploaded, totalFailed)
             }
+
+            // Continuously re-arm the next exact background alarm
+            com.drive.sync.network.SyncAlarmScheduler.scheduleNextAlarm(applicationContext)
 
             Result.success()
         } catch (e: Exception) {
