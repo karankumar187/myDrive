@@ -21,7 +21,7 @@ export const LockScreen: React.FC<LockScreenProps> = ({
   const [failCount, setFailCount] = useState(0);
   const [cooldown, setCooldown] = useState(0);
   const [biometricAvailable, setBiometricAvailable] = useState(false);
-  const MAX_PIN_LENGTH = 6;
+  const MAX_PIN_LENGTH = 4;
   const MAX_ATTEMPTS = 5;
   const COOLDOWN_SECONDS = 30;
 
@@ -63,26 +63,8 @@ export const LockScreen: React.FC<LockScreenProps> = ({
     return () => clearInterval(timer);
   }, [cooldown]);
 
-  const handleDigit = useCallback((digit: string) => {
-    if (cooldown > 0) return;
-    setError('');
-    setPin(prev => {
-      if (prev.length >= MAX_PIN_LENGTH) return prev;
-      return prev + digit;
-    });
-  }, [cooldown]);
-
-  const handleDelete = useCallback(() => {
-    setPin(prev => prev.slice(0, -1));
-    setError('');
-  }, []);
-
-  const handleSubmit = useCallback(async () => {
-    if (pin.length < 4) {
-      setError('PIN must be at least 4 digits');
-      return;
-    }
-    const valid = await LockSecurityService.verifyPin(pin);
+  const verifyAndUnlock = useCallback(async (pinToVerify: string) => {
+    const valid = await LockSecurityService.verifyPin(pinToVerify);
     if (valid) {
       onUnlock();
     } else {
@@ -98,7 +80,35 @@ export const LockScreen: React.FC<LockScreenProps> = ({
         setError(`Wrong PIN (${MAX_ATTEMPTS - newFails} attempts left)`);
       }
     }
-  }, [pin, failCount, onUnlock]);
+  }, [failCount, onUnlock]);
+
+  const handleDigit = useCallback((digit: string) => {
+    if (cooldown > 0) return;
+    setError('');
+    setPin(prev => {
+      if (prev.length >= MAX_PIN_LENGTH) return prev;
+      const nextPin = prev + digit;
+      if (nextPin.length === 4) {
+        setTimeout(() => {
+          verifyAndUnlock(nextPin);
+        }, 60);
+      }
+      return nextPin;
+    });
+  }, [cooldown, verifyAndUnlock]);
+
+  const handleDelete = useCallback(() => {
+    setPin(prev => prev.slice(0, -1));
+    setError('');
+  }, []);
+
+  const handleSubmit = useCallback(() => {
+    if (pin.length !== 4) {
+      setError('PIN must be 4 digits');
+      return;
+    }
+    verifyAndUnlock(pin);
+  }, [pin, verifyAndUnlock]);
 
   // Keyboard support
   useEffect(() => {
@@ -110,7 +120,7 @@ export const LockScreen: React.FC<LockScreenProps> = ({
       } else if (e.key === 'Backspace') {
         e.preventDefault();
         handleDelete();
-      } else if (e.key === 'Enter' && pin.length >= 4) {
+      } else if (e.key === 'Enter' && pin.length === 4) {
         e.preventDefault();
         handleSubmit();
       }
@@ -158,17 +168,17 @@ export const LockScreen: React.FC<LockScreenProps> = ({
           </div>
         </div>
 
-        {/* PIN dots */}
+        {/* PIN dots (4 digits) */}
         <div
-          className="flex items-center justify-center space-x-3"
+          className="flex items-center justify-center space-x-4"
           style={shake ? { animation: 'shake 0.5s ease-in-out' } : undefined}
         >
-          {Array.from({ length: 6 }).map((_, i) => (
+          {Array.from({ length: 4 }).map((_, i) => (
             <div
               key={i}
-              className={`w-3.5 h-3.5 rounded-full transition-all duration-200 ${
+              className={`w-4 h-4 rounded-full transition-all duration-200 ${
                 i < pin.length
-                  ? 'bg-purple-400 scale-110 shadow-[0_0_8px_rgba(168,85,247,0.5)]'
+                  ? 'bg-purple-400 scale-110 shadow-[0_0_10px_rgba(168,85,247,0.6)]'
                   : 'bg-zinc-700/50 border border-zinc-600/50'
               }`}
             />

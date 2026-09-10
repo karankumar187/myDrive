@@ -53,11 +53,11 @@ export const SecuritySettings: React.FC<SecuritySettingsProps> = ({
 
   const handleSetPin = async () => {
     setPinError('');
-    if (newPin.length < 4 || newPin.length > 6) {
-      setPinError('PIN must be 4-6 digits');
+    if (newPin.length !== 4) {
+      setPinError('PIN must be exactly 4 digits');
       return;
     }
-    if (!/^\d+$/.test(newPin)) {
+    if (!/^\d{4}$/.test(newPin)) {
       setPinError('PIN must contain only digits');
       return;
     }
@@ -202,10 +202,11 @@ export const SecuritySettings: React.FC<SecuritySettingsProps> = ({
                     type={showPin ? 'text' : 'password'}
                     value={currentPin}
                     onChange={e =>
-                      setCurrentPin(e.target.value.replace(/\D/g, '').slice(0, 6))
+                      setCurrentPin(e.target.value.replace(/\D/g, '').slice(0, 4))
                     }
-                    placeholder="Current PIN"
-                    className="w-full bg-[#151518] border border-[#2a2a30] rounded-xl px-3.5 py-2.5 text-sm text-white placeholder:text-zinc-600 focus:border-purple-500/50 focus:outline-none transition"
+                    placeholder="Current 4-digit PIN"
+                    maxLength={4}
+                    className="w-full bg-[#151518] border border-[#2a2a30] rounded-xl px-3.5 py-2.5 text-sm text-white placeholder:text-zinc-600 focus:border-purple-500/50 focus:outline-none transition tracking-widest text-center"
                     inputMode="numeric"
                     autoComplete="off"
                   />
@@ -215,10 +216,11 @@ export const SecuritySettings: React.FC<SecuritySettingsProps> = ({
                     type={showPin ? 'text' : 'password'}
                     value={newPin}
                     onChange={e =>
-                      setNewPin(e.target.value.replace(/\D/g, '').slice(0, 6))
+                      setNewPin(e.target.value.replace(/\D/g, '').slice(0, 4))
                     }
-                    placeholder="New PIN (4-6 digits)"
-                    className="w-full bg-[#151518] border border-[#2a2a30] rounded-xl px-3.5 py-2.5 text-sm text-white placeholder:text-zinc-600 focus:border-purple-500/50 focus:outline-none transition pr-10"
+                    placeholder="New 4-digit PIN"
+                    maxLength={4}
+                    className="w-full bg-[#151518] border border-[#2a2a30] rounded-xl px-3.5 py-2.5 text-sm text-white placeholder:text-zinc-600 focus:border-purple-500/50 focus:outline-none transition pr-10 tracking-widest text-center"
                     inputMode="numeric"
                     autoComplete="off"
                   />
@@ -234,10 +236,11 @@ export const SecuritySettings: React.FC<SecuritySettingsProps> = ({
                   type={showPin ? 'text' : 'password'}
                   value={confirmPin}
                   onChange={e =>
-                    setConfirmPin(e.target.value.replace(/\D/g, '').slice(0, 6))
+                    setConfirmPin(e.target.value.replace(/\D/g, '').slice(0, 4))
                   }
-                  placeholder="Confirm New PIN"
-                  className="w-full bg-[#151518] border border-[#2a2a30] rounded-xl px-3.5 py-2.5 text-sm text-white placeholder:text-zinc-600 focus:border-purple-500/50 focus:outline-none transition"
+                  placeholder="Confirm 4-digit PIN"
+                  maxLength={4}
+                  className="w-full bg-[#151518] border border-[#2a2a30] rounded-xl px-3.5 py-2.5 text-sm text-white placeholder:text-zinc-600 focus:border-purple-500/50 focus:outline-none transition tracking-widest text-center"
                   inputMode="numeric"
                   autoComplete="off"
                 />
@@ -271,16 +274,17 @@ export const SecuritySettings: React.FC<SecuritySettingsProps> = ({
             {showRemovePin && (
               <div className="bg-[#0d0d10] rounded-2xl p-4 space-y-3 border border-red-500/20">
                 <p className="text-xs text-red-400 font-medium">
-                  Enter your current PIN to disable lock screen
+                  Enter your current 4-digit PIN to disable lock screen
                 </p>
                 <input
                   type="password"
                   value={removePinInput}
                   onChange={e =>
-                    setRemovePinInput(e.target.value.replace(/\D/g, '').slice(0, 6))
+                    setRemovePinInput(e.target.value.replace(/\D/g, '').slice(0, 4))
                   }
-                  placeholder="Current PIN"
-                  className="w-full bg-[#151518] border border-[#2a2a30] rounded-xl px-3.5 py-2.5 text-sm text-white placeholder:text-zinc-600 focus:border-red-500/50 focus:outline-none transition"
+                  placeholder="Current 4-digit PIN"
+                  maxLength={4}
+                  className="w-full bg-[#151518] border border-[#2a2a30] rounded-xl px-3.5 py-2.5 text-sm text-white placeholder:text-zinc-600 focus:border-red-500/50 focus:outline-none transition tracking-widest text-center"
                   inputMode="numeric"
                   autoComplete="off"
                 />
