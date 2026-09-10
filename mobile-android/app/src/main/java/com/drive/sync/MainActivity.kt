@@ -277,10 +277,10 @@ class MainActivity : ComponentActivity() {
         val deviceKey = prefs.getString("device_key", "") ?: ""
         val targetFolderId = prefs.getString("target_folder_id", "") ?: ""
         val rawServerUrl = prefs.getString("server_url", "https://drive-edge-cache.karan9302451907.workers.dev") ?: "https://drive-edge-cache.karan9302451907.workers.dev"
-        val serverUrl = if (rawServerUrl == "https://mydrive-sti3.onrender.com") {
+        val serverUrl = if (rawServerUrl.contains("onrender.com") || rawServerUrl.isBlank()) {
             prefs.edit().putString("server_url", "https://drive-edge-cache.karan9302451907.workers.dev").apply()
             "https://drive-edge-cache.karan9302451907.workers.dev"
-        } else rawServerUrl
+        } else rawServerUrl.trimEnd('/')
         val wifiOnly = prefs.getBoolean("wifi_only", false)
         val chargingOnly = prefs.getBoolean("charging_only", false)
         val syncPhotos = prefs.getBoolean("sync_photos", true)
@@ -1171,10 +1171,10 @@ fun MainAppScreen(
 
     val initialServerUrl = remember {
         val raw = prefs.getString("server_url", "https://drive-edge-cache.karan9302451907.workers.dev") ?: "https://drive-edge-cache.karan9302451907.workers.dev"
-        if (raw == "https://mydrive-sti3.onrender.com") {
+        if (raw.contains("onrender.com") || raw.isBlank()) {
             prefs.edit().putString("server_url", "https://drive-edge-cache.karan9302451907.workers.dev").apply()
             "https://drive-edge-cache.karan9302451907.workers.dev"
-        } else raw
+        } else raw.trimEnd('/')
     }
     var serverUrl by remember { mutableStateOf(initialServerUrl) }
     var deviceId by remember { mutableStateOf(prefs.getString("device_id", "") ?: "") }
@@ -4095,20 +4095,21 @@ fun DeviceAndPolicyScreen(
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.Top
                 ) {
-                    Column {
+                    Column(modifier = Modifier.weight(0.9f)) {
                         Text("Total Uploaded", fontSize = 10.sp, color = Color(0xFF71717A))
-                        Text("$totalSyncedCount files", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
+                        Text("$totalSyncedCount files", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
                     }
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Column(modifier = Modifier.weight(1.1f), horizontalAlignment = Alignment.CenterHorizontally) {
                         Text("Last Sync", fontSize = 10.sp, color = Color(0xFF71717A))
                         val formattedTime = if (lastSyncTimestamp > 0) {
                             SimpleDateFormat("h:mm a, MMM d", Locale.getDefault()).format(Date(lastSyncTimestamp))
                         } else "Never"
-                        Text(formattedTime, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF38BDF8))
+                        Text(formattedTime, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF38BDF8), textAlign = TextAlign.Center)
                     }
-                    Column(horizontalAlignment = Alignment.End) {
+                    Column(modifier = Modifier.weight(1.1f), horizontalAlignment = Alignment.End) {
                         Text("Next Sync", fontSize = 10.sp, color = Color(0xFF71717A))
                         val nextFormatted = if (nextSyncTimestamp > 0) {
                             val diffMs = nextSyncTimestamp - System.currentTimeMillis()
@@ -4117,9 +4118,9 @@ fun DeviceAndPolicyScreen(
                                 diffMs < 3600 * 1000L -> "in ${diffMs / (60 * 1000L)}m"
                                 else -> "in ${diffMs / (3600 * 1000L)}h ${(diffMs % (3600 * 1000L)) / (60 * 1000L)}m"
                             }
-                            "${SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(nextSyncTimestamp))} ($relative)"
+                            "${SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(nextSyncTimestamp))}\n($relative)"
                         } else "In ~$syncIntervalHours hrs"
-                        Text(nextFormatted, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF34D399))
+                        Text(nextFormatted, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF34D399), textAlign = TextAlign.End)
                     }
                 }
 
