@@ -26,6 +26,9 @@ import { UploadDrawer } from './components/UploadDrawer.js';
 import { uploadService } from './services/UploadService.js';
 import { VaultModal } from './components/VaultModal.js';
 import { VaultCryptoService } from './services/vault-crypto.js';
+import { LockScreen } from './components/LockScreen.js';
+import { SecuritySettings } from './components/SecuritySettings.js';
+import { LockSecurityService } from './services/lock-security.js';
 
 type Tab = 'dashboard' | 'folders' | 'gallery' | 'devices' | 'trash';
 
@@ -104,6 +107,11 @@ export const App: React.FC = () => {
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
   const [logModalDevice, setLogModalDevice] = useState<DeviceItem | null>(null);
 
+  // Lock screen state
+  const [isLocked, setIsLocked] = useState(() => LockSecurityService.isPinSet());
+  const [showSecuritySettings, setShowSecuritySettings] = useState(false);
+  const lockTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // Initial authentication check & OAuth callback handling
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
@@ -125,6 +133,16 @@ export const App: React.FC = () => {
         .getCurrentUser()
         .then((res) => {
           setCurrentUser(res.user);
+          // Handle forgot-PIN flow: if user just re-authenticated to reset PIN
+          if (LockSecurityService.isResetPending()) {
+            const success = LockSecurityService.completeReset(res.user.id || res.user.email);
+            if (success) {
+              setIsLocked(false);
+            } else {
+              alert('PIN reset failed: You signed in with a different account than the one that set the PIN.');
+              LockSecurityService.clearResetPending();
+            }
+          }
         })
         .catch((err) => {
           console.error('Failed to get current user:', err);
@@ -144,6 +162,41 @@ export const App: React.FC = () => {
     VaultCryptoService.restoreKeyFromSession().then((key) => {
       if (key) setVaultKey(key);
     });
+  }, []);
+
+  // Auto-lock when tab loses visibility (respects configured timeout)
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (!LockSecurityService.isPinSet()) return;
+      if (document.hidden) {
+        const timeout = LockSecurityService.getAutoLockTimeout();
+        if (timeout === 0) {
+          setIsLocked(true);
+        } else {
+          lockTimerRef.current = setTimeout(() => setIsLocked(true), timeout);
+        }
+      } else {
+        // Tab became visible again — cancel pending lock timer
+        if (lockTimerRef.current) {
+          clearTimeout(lockTimerRef.current);
+          lockTimerRef.current = null;
+        }
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibility);
+      if (lockTimerRef.current) clearTimeout(lockTimerRef.current);
+    };
+  }, []);
+
+  // Forgot PIN: redirect to Google re-auth, which will clear PIN on success
+  const handleForgotPin = useCallback(() => {
+    LockSecurityService.setResetPending();
+    const isLocal = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+    const authBase = isLocal ? (import.meta.env.VITE_API_URL || 'http://localhost:5001') : (import.meta.env.VITE_API_URL || 'https://drive-edge-cache.karan9302451907.workers.dev');
+    const currentOrigin = typeof window !== 'undefined' ? encodeURIComponent(window.location.origin) : '';
+    window.location.href = `${authBase}/api/v1/auth/google?client_url=${currentOrigin}`;
   }, []);
 
   // Socket.io Real-time connection
@@ -417,6 +470,18 @@ export const App: React.FC = () => {
     );
   }
 
+  // Lock screen gate — shown after OAuth but before main app
+  if (isLocked && LockSecurityService.isPinSet()) {
+    return (
+      <LockScreen
+        userName={currentUser.name}
+        userAvatar={currentUser.avatarUrl}
+        onUnlock={() => setIsLocked(false)}
+        onForgotPin={handleForgotPin}
+      />
+    );
+  }
+
   const firstName = currentUser.name.split(' ')[0] || 'there';
 
   return (
@@ -513,6 +578,16 @@ export const App: React.FC = () => {
                     <p className="text-xs font-bold text-white truncate">{currentUser.name}</p>
                     <p className="text-[10px] text-zinc-400 truncate">{currentUser.email}</p>
                   </div>
+                  <button
+                    onClick={() => { setShowSecuritySettings(true); setShowProfileMenu(false); }}
+                    className="w-full flex items-center space-x-2 px-3 py-2 text-xs text-zinc-300 hover:bg-purple-600/10 rounded-xl transition"
+                  >
+                    <Shield className="w-3.5 h-3.5 text-purple-400" />
+                    <span>Security</span>
+                    {LockSecurityService.isPinSet() && (
+                      <span className="ml-auto text-[9px] font-semibold text-green-400 bg-green-400/10 px-1.5 py-0.5 rounded-full">ON</span>
+                    )}
+                  </button>
                   <button
                     onClick={api.logout}
                     className="w-full flex items-center space-x-2 px-3 py-2 text-xs text-red-400 hover:bg-red-500/10 rounded-xl transition"
@@ -646,6 +721,21 @@ export const App: React.FC = () => {
 
       {/* Floating Background Upload Drawer */}
       <UploadDrawer />
+
+      {/* Security Settings Modal */}
+      {showSecuritySettings && (
+        <SecuritySettings
+          userId={currentUser.id || currentUser.email}
+          userName={currentUser.name}
+          onClose={() => setShowSecuritySettings(false)}
+          onPinChanged={() => {
+            // If PIN was removed, ensure app stays unlocked
+            if (!LockSecurityService.isPinSet()) {
+              setIsLocked(false);
+            }
+          }}
+        />
+      )}
     </div>
   );
 };
