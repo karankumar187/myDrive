@@ -274,15 +274,22 @@ export const App: React.FC = () => {
       setCurrentFolder(cached.currentFolder);
     } else {
       // Check localStorage for offline/fast load
+      let foundLocal = false;
       try {
         const localFiles = localStorage.getItem(`drive_cache_files_${cacheKey}`);
         const localFolders = localStorage.getItem(`drive_cache_folders_${cacheKey}`);
         if (localFiles && localFolders) {
           setFiles(JSON.parse(localFiles));
           setFolders(JSON.parse(localFolders));
+          foundLocal = true;
         }
       } catch {
         // ignore
+      }
+      if (!foundLocal) {
+        // Clear immediately so we don't show the PREVIOUS folder's contents while loading
+        setFiles([]);
+        setFolders([]);
       }
     }
 
