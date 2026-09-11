@@ -92,6 +92,8 @@ import coil.memory.MemoryCache
 import coil.request.ImageRequest
 import coil.size.Precision
 import coil.size.Size
+import androidx.compose.runtime.saveable.rememberSaveable
+import com.drive.sync.network.DriveDataCache
 import com.drive.sync.network.DriveSocketManager
 import com.drive.sync.workers.SyncWorker
 import kotlinx.coroutines.CoroutineScope
@@ -211,6 +213,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         SyncLogManager.init(this)
+        DriveDataCache.init(this)
 
         val imageLoader = ImageLoader.Builder(this)
             .okHttpClient(sharedHttpClient)
@@ -1165,9 +1168,9 @@ fun MainAppScreen(
         hasMediaPermissions = AppPermissions.hasStoragePermission(context)
     }
 
-    var selectedTab by remember { mutableIntStateOf(0) }
+    var selectedTab by rememberSaveable { mutableIntStateOf(prefs.getInt("selected_tab", 0)) }
     var isFilesSelectionMode by remember { mutableStateOf(false) }
-    var isInitialLoading by remember { mutableStateOf(true) }
+    var isInitialLoading by remember { mutableStateOf(!DriveDataCache.hasData()) }
 
     val initialServerUrl = remember {
         val raw = prefs.getString("server_url", "https://drive-edge-cache.karan9302451907.workers.dev") ?: "https://drive-edge-cache.karan9302451907.workers.dev"
@@ -1198,19 +1201,19 @@ fun MainAppScreen(
     var lastSyncStatus by remember { mutableStateOf(prefs.getString("last_sync_status", "Never synced") ?: "Never synced") }
 
     // Cloud Data States
-    var storageSummary by remember { mutableStateOf<StoragePoolSummary?>(null) }
-    var filesList by remember { mutableStateOf<List<CloudFile>>(emptyList()) }
-    var galleryList by remember { mutableStateOf<List<CloudMedia>>(emptyList()) }
-    var foldersList by remember { mutableStateOf<List<CloudFolder>>(emptyList()) }
+    var storageSummary by remember { mutableStateOf(DriveDataCache.storageSummary) }
+    var filesList by remember { mutableStateOf(DriveDataCache.filesList) }
+    var galleryList by remember { mutableStateOf(DriveDataCache.galleryList) }
+    var foldersList by remember { mutableStateOf(DriveDataCache.foldersList) }
     var selectedFilterFolderId by remember { mutableStateOf<String?>(null) }
     var userAvatarUrl by remember { mutableStateOf(prefs.getString("user_avatar_url", "") ?: "") }
     var userName by remember { mutableStateOf(prefs.getString("user_name", "") ?: "") }
     var userEmail by remember { mutableStateOf(prefs.getString("user_email", "") ?: "") }
 
     // Activity & Paired Devices States
-    var uploadedFilesList by remember { mutableStateOf<List<DeviceUploadItem>>(emptyList()) }
-    var inboundSyncList by remember { mutableStateOf<List<InboundSyncItem>>(emptyList()) }
-    var pairedDevicesList by remember { mutableStateOf<List<PairedDevice>>(emptyList()) }
+    var uploadedFilesList by remember { mutableStateOf(DriveDataCache.uploadedFilesList) }
+    var inboundSyncList by remember { mutableStateOf(DriveDataCache.inboundSyncList) }
+    var pairedDevicesList by remember { mutableStateOf(DriveDataCache.pairedDevicesList) }
     val pairedRulesMap = remember {
         val map = mutableStateMapOf<String, PairedDeviceRule>()
         try {
@@ -1389,7 +1392,7 @@ fun MainAppScreen(
                             val dFiles = async {
                                 try {
                                     val req = Request.Builder()
-                                        .url("$baseUrl/api/v1/files?all=true")
+                                        .url("$baseUrl/api/v1/files?all=true&limit=300")
                                         .addHeader("x-device-id", deviceId)
                                         .addHeader("x-device-key", deviceKey)
                                         .build()
@@ -1437,7 +1440,7 @@ fun MainAppScreen(
                             val dGallery = async {
                                 try {
                                     val req = Request.Builder()
-                                        .url("$baseUrl/api/v1/files/gallery")
+                                        .url("$baseUrl/api/v1/files/gallery?limit=300")
                                         .addHeader("x-device-id", deviceId)
                                         .addHeader("x-device-key", deviceKey)
                                         .build()
@@ -1613,9 +1616,9 @@ fun MainAppScreen(
 
                             withContext(Dispatchers.Main) {
                                 if (sRes != null) storageSummary = sRes
-                                if (fRes != null) filesList = fRes
-                                if (gRes != null) galleryList = gRes
-                                if (foRes != null) foldersList = foRes
+                                if (fRes != null && (fRes.isNotEmpty() || filesList.isEmpty())) filesList = fRes
+                                if (gRes != null && (gRes.isNotEmpty() || galleryList.isEmpty())) galleryList = gRes
+                                if (foRes != null && (foRes.isNotEmpty() || foldersList.isEmpty())) foldersList = foRes
                                 if (upRes != null) uploadedFilesList = upRes
                                 if (inRes != null) {
                                     inboundSyncList = inRes
@@ -1628,6 +1631,16 @@ fun MainAppScreen(
                                         }
                                     }
                                 }
+
+                                DriveDataCache.updateCache(
+                                    context = context,
+                                    summary = sRes,
+                                    files = fRes,
+                                    gallery = gRes,
+                                    folders = foRes,
+                                    uploads = upRes,
+                                    inbound = inRes
+                                )
                             }
                         }
 
@@ -1690,6 +1703,7 @@ fun MainAppScreen(
                                     }
                                 }
                                 pairedDevicesList = pList
+                                DriveDataCache.updateCache(context = context, pairedDevices = pList)
                                 val polObj = json.optJSONObject("policy")
                                 if (polObj != null) {
                                     val rArr = polObj.optJSONArray("pairedDeviceRules")
@@ -2260,7 +2274,7 @@ fun MainAppScreen(
             ) {
                 NavigationBarItem(
                     selected = selectedTab == 0,
-                    onClick = { selectedTab = 0 },
+                    onClick = { selectedTab = 0; prefs.edit().putInt("selected_tab", 0).apply() },
                     icon = { Icon(Icons.Default.Folder, contentDescription = "Files") },
                     label = { Text("Files", fontSize = 11.sp) },
                     colors = NavigationBarItemDefaults.colors(
@@ -2273,7 +2287,7 @@ fun MainAppScreen(
                 )
                 NavigationBarItem(
                     selected = selectedTab == 1,
-                    onClick = { selectedTab = 1 },
+                    onClick = { selectedTab = 1; prefs.edit().putInt("selected_tab", 1).apply() },
                     icon = { Icon(Icons.Default.PhotoLibrary, contentDescription = "Gallery") },
                     label = { Text("Gallery", fontSize = 11.sp) },
                     colors = NavigationBarItemDefaults.colors(
@@ -2286,7 +2300,7 @@ fun MainAppScreen(
                 )
                 NavigationBarItem(
                     selected = selectedTab == 2,
-                    onClick = { selectedTab = 2 },
+                    onClick = { selectedTab = 2; prefs.edit().putInt("selected_tab", 2).apply() },
                     icon = { Icon(Icons.Default.SyncAlt, contentDescription = "Transfers") },
                     label = { Text("Transfers", fontSize = 11.sp) },
                     colors = NavigationBarItemDefaults.colors(
@@ -2299,7 +2313,7 @@ fun MainAppScreen(
                 )
                 NavigationBarItem(
                     selected = selectedTab == 3,
-                    onClick = { selectedTab = 3 },
+                    onClick = { selectedTab = 3; prefs.edit().putInt("selected_tab", 3).apply() },
                     icon = { Icon(Icons.Default.Tune, contentDescription = "Policies") },
                     label = { Text("Policies", fontSize = 11.sp) },
                     colors = NavigationBarItemDefaults.colors(
@@ -2420,10 +2434,12 @@ fun MainAppScreen(
                         onDeleteMedia = { deletedId ->
                             galleryList = galleryList.filter { it.id != deletedId }
                             filesList = filesList.filter { it.id != deletedId }
+                            DriveDataCache.updateCache(context = context, files = filesList, gallery = galleryList)
                         },
                         onBulkDeleteMedia = { deletedIds ->
                             galleryList = galleryList.filter { !deletedIds.contains(it.id) }
                             filesList = filesList.filter { !deletedIds.contains(it.id) }
+                            DriveDataCache.updateCache(context = context, files = filesList, gallery = galleryList)
                         }
                     )
                     2 -> TransfersScreen(

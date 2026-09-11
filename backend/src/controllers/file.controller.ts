@@ -223,12 +223,19 @@ export class FileController {
         filter.filename = { $regex: search, $options: 'i' };
       }
 
-      let fileQuery = File.find(filter).sort({ createdAt: -1 }).lean();
+      let fileQuery = File.find(filter)
+        .select('_id filename mimeType sizeBytes createdAt folderId metadata.takenAt metadata.thumbnail isFavorite isTrash sourceDeviceIds')
+        .sort({ createdAt: -1 })
+        .lean();
       if (req.query.limit) {
-        const parsedLimit = parseInt(req.query.limit as string, 10);
-        if (!isNaN(parsedLimit) && parsedLimit > 0) {
-          fileQuery = fileQuery.limit(parsedLimit);
+        if (req.query.limit !== 'all' && req.query.limit !== '-1') {
+          const parsedLimit = parseInt(req.query.limit as string, 10);
+          if (!isNaN(parsedLimit) && parsedLimit > 0) {
+            fileQuery = fileQuery.limit(parsedLimit);
+          }
         }
+      } else {
+        fileQuery = fileQuery.limit(300);
       }
       const rawFiles: any[] = await fileQuery;
 
@@ -278,44 +285,30 @@ export class FileController {
         isTrash: false,
       };
 
-      const videoExtRegex = '\\.(mp4|mov|m4v|mkv|webm|avi|wmv|flv|3gp|ts)$';
-      const imageExtRegex = '\\.(jpg|jpeg|png|webp|gif|heic|bmp|tiff)$';
       if (filter === 'favorites') {
         mediaFilter.isFavorite = true;
-        mediaFilter.$or = [
-          { mimeType: { $regex: '^image/' } },
-          { mimeType: { $regex: '^video/' } },
-          { filename: { $regex: videoExtRegex, $options: 'i' } },
-          { filename: { $regex: imageExtRegex, $options: 'i' } },
-        ];
+        mediaFilter.mimeType = { $regex: '^(image|video)/' };
       } else if (filter === 'videos') {
-        mediaFilter.$or = [
-          { mimeType: { $regex: '^video/' } },
-          { filename: { $regex: videoExtRegex, $options: 'i' } },
-        ];
+        mediaFilter.mimeType = { $regex: '^video/' };
       } else if (filter === 'photos') {
-        mediaFilter.$or = [
-          { mimeType: { $regex: '^image/' } },
-          { filename: { $regex: imageExtRegex, $options: 'i' } },
-        ];
+        mediaFilter.mimeType = { $regex: '^image/' };
       } else {
-        mediaFilter.$or = [
-          { mimeType: { $regex: '^image/' } },
-          { mimeType: { $regex: '^video/' } },
-          { filename: { $regex: videoExtRegex, $options: 'i' } },
-          { filename: { $regex: imageExtRegex, $options: 'i' } },
-        ];
+        mediaFilter.mimeType = { $regex: '^(image|video)/' };
       }
 
       if (search && typeof search === 'string' && search.trim()) {
         mediaFilter.filename = { $regex: search.trim(), $options: 'i' };
       }
 
-      let parsedLimit: number | null = null;
+      let parsedLimit: number | null = 300;
       if (req.query.limit) {
-        const pl = parseInt(req.query.limit as string, 10);
-        if (!isNaN(pl) && pl > 0) {
-          parsedLimit = pl;
+        if (req.query.limit === 'all' || req.query.limit === '-1') {
+          parsedLimit = null;
+        } else {
+          const pl = parseInt(req.query.limit as string, 10);
+          if (!isNaN(pl) && pl > 0) {
+            parsedLimit = pl;
+          }
         }
       }
 
@@ -382,11 +375,14 @@ export class FileController {
         return;
       }
 
-      let galleryQuery = File.find(mediaFilter).sort({
-        'metadata.takenAt': -1,
-        createdAt: -1,
-        _id: -1,
-      }).lean();
+      let galleryQuery = File.find(mediaFilter)
+        .select('_id filename mimeType sizeBytes createdAt isFavorite sourceDeviceIds folderId versions.storageAccountId metadata')
+        .sort({
+          'metadata.takenAt': -1,
+          createdAt: -1,
+          _id: -1,
+        })
+        .lean();
 
       if (parsedLimit) {
         // Fetch parsedLimit + 1 to detect if next page exists
@@ -483,7 +479,7 @@ export class FileController {
           status: d.status || 'offline',
         })),
       };
-      await CacheService.set(cacheKey, payload, 60);
+      await CacheService.set(cacheKey, payload, 300);
 
       res.json(payload);
     } catch (error: any) {
