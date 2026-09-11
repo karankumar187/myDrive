@@ -234,8 +234,8 @@ export class FileController {
             fileQuery = fileQuery.limit(parsedLimit);
           }
         }
-      } else {
-        fileQuery = fileQuery.limit(300);
+      } else if (req.query.all !== 'true') {
+        fileQuery = fileQuery.limit(500);
       }
       const rawFiles: any[] = await fileQuery;
 
@@ -243,7 +243,9 @@ export class FileController {
         const obj = { ...f };
         obj.hasThumbnail = !!(obj.metadata?.thumbnail && obj.metadata.thumbnail.length > 0);
         obj.thumbnailUrl = `/api/v1/files/${obj._id}/thumbnail`;
-        if (obj.metadata?.thumbnail) {
+        // Preserve high-speed Google CDN URLs (http...) and compact thumbnails.
+        // Only strip oversized base64 strings (>50KB) to prevent payload bloat.
+        if (obj.metadata?.thumbnail && obj.metadata.thumbnail.startsWith('data:') && obj.metadata.thumbnail.length > 50000) {
           delete obj.metadata.thumbnail;
         }
         return obj;
@@ -300,7 +302,7 @@ export class FileController {
         mediaFilter.filename = { $regex: search.trim(), $options: 'i' };
       }
 
-      let parsedLimit: number | null = 300;
+      let parsedLimit: number | null = null;
       if (req.query.limit) {
         if (req.query.limit === 'all' || req.query.limit === '-1') {
           parsedLimit = null;
@@ -457,12 +459,12 @@ export class FileController {
           : 'Google Drive Account';
         obj.status = 'safely_backed_up';
         
-        // Strip heavy base64 strings and short-lived HTTP links from list JSON.
-        // Provide lightweight flag and thumbnail URL so clients fetch via cached /thumbnail endpoint.
         const hasThumb = !!(obj.metadata?.thumbnail && obj.metadata.thumbnail.length > 0);
         obj.hasThumbnail = hasThumb;
         obj.thumbnailUrl = `/api/v1/files/${file._id}/thumbnail`;
-        if (obj.metadata?.thumbnail) {
+        // Preserve high-speed Google CDN URLs (http...) and compact thumbnails!
+        // Only strip oversized base64 (>50KB) so clients load images directly from Google's CDN with zero backend proxy bottleneck.
+        if (obj.metadata?.thumbnail && obj.metadata.thumbnail.startsWith('data:') && obj.metadata.thumbnail.length > 50000) {
           delete obj.metadata.thumbnail;
         }
         return obj;

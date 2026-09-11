@@ -1398,17 +1398,14 @@ fun MainAppScreen(
                             launch {
                                 try {
                                     val req = Request.Builder()
-                                        .url("$baseUrl/api/v1/files?all=true&limit=300")
+                                        .url("$baseUrl/api/v1/files?all=true")
                                         .addHeader("x-device-id", deviceId)
                                         .addHeader("x-device-key", deviceKey)
                                         .build()
                                     val res = httpClient.newCall(req).execute()
                                     if (res.isSuccessful) {
                                         val json = JSONObject(res.body?.string() ?: "{}")
-                                        var array = json.optJSONArray("files")
-                                        if ((array == null || array.length() == 0) && json.has("recentFiles")) {
-                                            array = json.optJSONArray("recentFiles")
-                                        }
+                                        val array = json.optJSONArray("files")
                                         val list = mutableListOf<CloudFile>()
                                         if (array != null) {
                                             for (i in 0 until array.length()) {
@@ -1453,7 +1450,7 @@ fun MainAppScreen(
                             launch {
                                 try {
                                     val req = Request.Builder()
-                                        .url("$baseUrl/api/v1/files/gallery?limit=300")
+                                        .url("$baseUrl/api/v1/files/gallery")
                                         .addHeader("x-device-id", deviceId)
                                         .addHeader("x-device-key", deviceKey)
                                         .build()
