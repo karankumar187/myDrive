@@ -1450,7 +1450,7 @@ fun MainAppScreen(
                             launch {
                                 try {
                                     val req = Request.Builder()
-                                        .url("$baseUrl/api/v1/files/gallery")
+                                        .url("$baseUrl/api/v1/files/gallery?limit=all")
                                         .addHeader("x-device-id", deviceId)
                                         .addHeader("x-device-key", deviceKey)
                                         .build()

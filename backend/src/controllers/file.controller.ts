@@ -243,9 +243,9 @@ export class FileController {
         const obj = { ...f };
         obj.hasThumbnail = !!(obj.metadata?.thumbnail && obj.metadata.thumbnail.length > 0);
         obj.thumbnailUrl = `/api/v1/files/${obj._id}/thumbnail`;
-        // Preserve high-speed Google CDN URLs (http...) and compact thumbnails.
-        // Only strip oversized base64 strings (>50KB) to prevent payload bloat.
-        if (obj.metadata?.thumbnail && obj.metadata.thumbnail.startsWith('data:') && obj.metadata.thumbnail.length > 50000) {
+        // Strip ALL base64 thumbnails from list APIs — they bloat the payload.
+        // Keep Google CDN URLs (tiny, ~171 bytes) for direct browser loading.
+        if (obj.metadata?.thumbnail && !obj.metadata.thumbnail.startsWith('http')) {
           delete obj.metadata.thumbnail;
         }
         return obj;
@@ -302,7 +302,7 @@ export class FileController {
         mediaFilter.filename = { $regex: search.trim(), $options: 'i' };
       }
 
-      let parsedLimit: number | null = null;
+      let parsedLimit: number | null = 200; // Default to 200 for fast web pagination; clients pass limit=all for full dataset
       if (req.query.limit) {
         if (req.query.limit === 'all' || req.query.limit === '-1') {
           parsedLimit = null;
@@ -378,7 +378,7 @@ export class FileController {
       }
 
       let galleryQuery = File.find(mediaFilter)
-        .select('_id filename mimeType sizeBytes createdAt isFavorite sourceDeviceIds folderId versions.storageAccountId metadata')
+        .select('_id filename mimeType sizeBytes createdAt isFavorite sourceDeviceIds folderId versions.storageAccountId contentHash metadata.takenAt metadata.thumbnail metadata.width metadata.height metadata.duration')
         .sort({
           'metadata.takenAt': -1,
           createdAt: -1,
@@ -462,9 +462,10 @@ export class FileController {
         const hasThumb = !!(obj.metadata?.thumbnail && obj.metadata.thumbnail.length > 0);
         obj.hasThumbnail = hasThumb;
         obj.thumbnailUrl = `/api/v1/files/${file._id}/thumbnail`;
-        // Preserve high-speed Google CDN URLs (http...) and compact thumbnails!
-        // Only strip oversized base64 (>50KB) so clients load images directly from Google's CDN with zero backend proxy bottleneck.
-        if (obj.metadata?.thumbnail && obj.metadata.thumbnail.startsWith('data:') && obj.metadata.thumbnail.length > 50000) {
+        // For list API: keep Google CDN URLs (tiny, ~171 bytes) so browser loads directly from CDN.
+        // Strip ALL base64 data URIs — even small ones bloat the list payload massively at scale.
+        // Clients fall back to the /thumbnail endpoint for items without a CDN URL.
+        if (obj.metadata?.thumbnail && !obj.metadata.thumbnail.startsWith('http')) {
           delete obj.metadata.thumbnail;
         }
         return obj;

@@ -191,6 +191,7 @@ export const GalleryTimelineView: React.FC<Props> = ({
       try {
         setIsLoadingMore(true);
         const res = await api.getGallery({
+          limit: 200,
           filter: filterType !== 'all' ? filterType : undefined,
           search: searchQuery.trim() || undefined,
         });
