@@ -4,9 +4,6 @@ export class CacheService {
   private static isConnected = false;
 
   static {
-    redisConnection.on('connect', () => {
-      CacheService.isConnected = true;
-    });
     redisConnection.on('ready', () => {
       CacheService.isConnected = true;
     });
@@ -14,6 +11,9 @@ export class CacheService {
       CacheService.isConnected = false;
     });
     redisConnection.on('close', () => {
+      CacheService.isConnected = false;
+    });
+    redisConnection.on('end', () => {
       CacheService.isConnected = false;
     });
   }

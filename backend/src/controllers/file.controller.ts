@@ -1492,14 +1492,18 @@ export class FileController {
         isTrash: false,
         $or: [{ sourceDeviceIds: deviceId }, { _id: { $in: stateFileIds } }],
       })
+        .select('_id filename mimeType sizeBytes createdAt folderId sourceDeviceIds')
         .populate('folderId', 'name path')
-        .sort({ createdAt: -1 });
+        .sort({ createdAt: -1 })
+        .lean();
 
       if (req.query.limit) {
         const parsedLimit = parseInt(req.query.limit as string, 10);
         if (!isNaN(parsedLimit) && parsedLimit > 0) {
           deviceFilesQuery = deviceFilesQuery.limit(parsedLimit);
         }
+      } else {
+        deviceFilesQuery = deviceFilesQuery.limit(200);
       }
 
       const files = await deviceFilesQuery;
@@ -1532,17 +1536,21 @@ export class FileController {
         userId,
         isTrash: false,
       })
+        .select('_id filename mimeType sizeBytes createdAt folderId sourceDeviceIds')
         .populate('folderId', 'name path')
-        .sort({ createdAt: -1 });
+        .sort({ createdAt: -1 })
+        .lean();
 
       if (req.query.limit) {
         const parsedLimit = parseInt(req.query.limit as string, 10);
         if (!isNaN(parsedLimit) && parsedLimit > 0) {
           candidateQuery = candidateQuery.limit(parsedLimit);
         }
+      } else {
+        candidateQuery = candidateQuery.limit(150);
       }
 
-      const candidateFiles = await candidateQuery;
+      const candidateFiles: any[] = await candidateQuery;
 
       // Fetch DeviceFileState records for this device to determine local sync and force-download status
       const localStates = await DeviceFileState.find({ userId, deviceId });
@@ -1563,7 +1571,10 @@ export class FileController {
           _id: { $in: forceFileIds },
           userId,
           isTrash: false,
-        }).populate('folderId', 'name path');
+        })
+          .select('_id filename mimeType sizeBytes createdAt folderId sourceDeviceIds')
+          .populate('folderId', 'name path')
+          .lean();
       }
 
       const combinedCandidates = [...candidateFiles];

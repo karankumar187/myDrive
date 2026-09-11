@@ -143,6 +143,21 @@ val sharedHttpClient: OkHttpClient by lazy {
         .build()
 }
 
+val apiHttpClient: OkHttpClient by lazy {
+    val dispatcher = Dispatcher().apply {
+        maxRequests = 32
+        maxRequestsPerHost = 16
+    }
+    OkHttpClient.Builder()
+        .dispatcher(dispatcher)
+        .connectionPool(ConnectionPool(8, 5, java.util.concurrent.TimeUnit.MINUTES))
+        .connectTimeout(25, java.util.concurrent.TimeUnit.SECONDS)
+        .readTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
+        .writeTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
+        .retryOnConnectionFailure(true)
+        .build()
+}
+
 suspend fun downloadMediaToGallery(
     context: Context,
     item: CloudMedia,

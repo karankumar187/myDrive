@@ -208,7 +208,7 @@ data class InboundSyncItem(
 
 class MainActivity : ComponentActivity() {
 
-    private val httpClient = sharedHttpClient
+    private val httpClient = apiHttpClient
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -1361,7 +1361,7 @@ fun MainAppScreen(
                     withContext(Dispatchers.IO) {
                         coroutineScope {
                             // 1. Fetch Storage Pool Summary in parallel
-                            val dSummary = async {
+                            launch {
                                 try {
                                     val req = Request.Builder()
                                         .url("$baseUrl/api/v1/storage/summary")
@@ -1376,20 +1376,26 @@ fun MainAppScreen(
                                         val totalAcc = if (json.has("totalAccounts")) json.optInt("totalAccounts", 0) else json.optInt("connectedAccountsCount", 0)
                                         val pctUsed = if (json.has("percentUsed")) json.optDouble("percentUsed", 0.0) else json.optDouble("usagePercentage", 0.0)
 
-                                        StoragePoolSummary(
+                                        val summary = StoragePoolSummary(
                                             totalCapacityBytes = totalCap,
                                             totalUsedBytes = usedCap,
                                             connectedAccountsCount = totalAcc,
                                             usagePercentage = pctUsed
                                         )
-                                    } else null
+                                        withContext(Dispatchers.Main) {
+                                            storageSummary = summary
+                                            DriveDataCache.updateCache(context = context, summary = summary)
+                                        }
+                                    } else {
+                                        android.util.Log.e("MainActivity", "StorageSummary failed: HTTP ${res.code}")
+                                    }
                                 } catch (e: Exception) {
-                                    null
+                                    android.util.Log.e("MainActivity", "StorageSummary error: ${e.message}")
                                 }
                             }
 
-                            // 2. Fetch Files in parallel (handle null folderId properly)
-                            val dFiles = async {
+                            // 2. Fetch Files in parallel (immediate display!)
+                            launch {
                                 try {
                                     val req = Request.Builder()
                                         .url("$baseUrl/api/v1/files?all=true&limit=300")
@@ -1429,15 +1435,22 @@ fun MainAppScreen(
                                                 )
                                             }
                                         }
-                                        list
-                                    } else null
+                                        withContext(Dispatchers.Main) {
+                                            if (list.isNotEmpty() || filesList.isEmpty()) {
+                                                filesList = list
+                                            }
+                                            DriveDataCache.updateCache(context = context, files = list)
+                                        }
+                                    } else {
+                                        android.util.Log.e("MainActivity", "dFiles failed: HTTP ${res.code}")
+                                    }
                                 } catch (e: Exception) {
-                                    null
+                                    android.util.Log.e("MainActivity", "dFiles error: ${e.message}")
                                 }
                             }
 
-                            // 3. Fetch Gallery Media in parallel
-                            val dGallery = async {
+                            // 3. Fetch Gallery Media in parallel (immediate display!)
+                            launch {
                                 try {
                                     val req = Request.Builder()
                                         .url("$baseUrl/api/v1/files/gallery?limit=300")
@@ -1454,6 +1467,12 @@ fun MainAppScreen(
                                                 val item = array.getJSONObject(i)
                                                 val meta = item.optJSONObject("metadata")
                                                 val sourceIds = item.optJSONArray("sourceDeviceIds")
+                                                val rawThumb = meta?.optString("thumbnail")?.ifBlank { null }
+                                                    ?: item.optString("thumbnailUrl").ifBlank { null }
+                                                val finalThumb = if (rawThumb != null && rawThumb.startsWith("/")) {
+                                                    "$baseUrl$rawThumb?deviceId=$deviceId&deviceKey=$deviceKey"
+                                                } else rawThumb
+
                                                 list.add(
                                                     CloudMedia(
                                                         id = item.optString("_id"),
@@ -1466,7 +1485,7 @@ fun MainAppScreen(
                                                         width = if (meta != null && meta.has("width")) meta.optInt("width") else null,
                                                         height = if (meta != null && meta.has("height")) meta.optInt("height") else null,
                                                         duration = if (meta != null && meta.has("duration")) meta.optDouble("duration") else null,
-                                                        thumbnail = meta?.optString("thumbnail")?.ifBlank { null },
+                                                        thumbnail = finalThumb,
                                                         cameraMake = meta?.optString("cameraMake")?.ifBlank { null },
                                                         cameraModel = meta?.optString("cameraModel")?.ifBlank { null },
                                                         latitude = if (meta != null && meta.has("latitude")) meta.optDouble("latitude") else null,
@@ -1481,15 +1500,22 @@ fun MainAppScreen(
                                                 )
                                             }
                                         }
-                                        list
-                                    } else null
+                                        withContext(Dispatchers.Main) {
+                                            if (list.isNotEmpty() || galleryList.isEmpty()) {
+                                                galleryList = list
+                                            }
+                                            DriveDataCache.updateCache(context = context, gallery = list)
+                                        }
+                                    } else {
+                                        android.util.Log.e("MainActivity", "dGallery failed: HTTP ${res.code}")
+                                    }
                                 } catch (e: Exception) {
-                                    null
+                                    android.util.Log.e("MainActivity", "dGallery error: ${e.message}")
                                 }
                             }
 
-                            // 4. Fetch Folders in parallel (handle null parentFolderId properly)
-                            val dFolders = async {
+                            // 4. Fetch Folders in parallel
+                            launch {
                                 try {
                                     val req = Request.Builder()
                                         .url("$baseUrl/api/v1/files/folders/list?all=true")
@@ -1522,18 +1548,25 @@ fun MainAppScreen(
                                                 )
                                             }
                                         }
-                                        list
-                                    } else null
+                                        withContext(Dispatchers.Main) {
+                                            if (list.isNotEmpty() || foldersList.isEmpty()) {
+                                                foldersList = list
+                                            }
+                                            DriveDataCache.updateCache(context = context, folders = list)
+                                        }
+                                    } else {
+                                        android.util.Log.e("MainActivity", "dFolders failed: HTTP ${res.code}")
+                                    }
                                 } catch (e: Exception) {
-                                    null
+                                    android.util.Log.e("MainActivity", "dFolders error: ${e.message}")
                                 }
                             }
 
                             // 5. Fetch Uploaded Files by This Device in parallel
-                            val dUploads = async {
+                            launch {
                                 try {
                                     val req = Request.Builder()
-                                        .url("$baseUrl/api/v1/files/device/$deviceId/uploads")
+                                        .url("$baseUrl/api/v1/files/device/$deviceId/uploads?limit=200")
                                         .addHeader("x-device-id", deviceId)
                                         .addHeader("x-device-key", deviceKey)
                                         .build()
@@ -1558,18 +1591,23 @@ fun MainAppScreen(
                                                 )
                                             }
                                         }
-                                        list
-                                    } else null
+                                        withContext(Dispatchers.Main) {
+                                            uploadedFilesList = list
+                                            DriveDataCache.updateCache(context = context, uploads = list)
+                                        }
+                                    } else {
+                                        android.util.Log.e("MainActivity", "dUploads failed: HTTP ${res.code}")
+                                    }
                                 } catch (e: Exception) {
-                                    null
+                                    android.util.Log.e("MainActivity", "dUploads error: ${e.message}")
                                 }
                             }
 
                             // 6. Fetch Inbound Synced Files in parallel
-                            val dInbound = async {
+                            launch {
                                 try {
                                     val req = Request.Builder()
-                                        .url("$baseUrl/api/v1/files/device/$deviceId/inbound-sync")
+                                        .url("$baseUrl/api/v1/files/device/$deviceId/inbound-sync?limit=150")
                                         .addHeader("x-device-id", deviceId)
                                         .addHeader("x-device-key", deviceKey)
                                         .build()
@@ -1599,48 +1637,24 @@ fun MainAppScreen(
                                                 )
                                             }
                                         }
-                                        list
-                                    } else null
-                                } catch (e: Exception) {
-                                    null
-                                }
-                            }
-
-                            // Await all parallel requests simultaneously
-                            val sRes = dSummary.await()
-                            val fRes = dFiles.await()
-                            val gRes = dGallery.await()
-                            val foRes = dFolders.await()
-                            val upRes = dUploads.await()
-                            val inRes = dInbound.await()
-
-                            withContext(Dispatchers.Main) {
-                                if (sRes != null) storageSummary = sRes
-                                if (fRes != null && (fRes.isNotEmpty() || filesList.isEmpty())) filesList = fRes
-                                if (gRes != null && (gRes.isNotEmpty() || galleryList.isEmpty())) galleryList = gRes
-                                if (foRes != null && (foRes.isNotEmpty() || foldersList.isEmpty())) foldersList = foRes
-                                if (upRes != null) uploadedFilesList = upRes
-                                if (inRes != null) {
-                                    inboundSyncList = inRes
-                                    val autoPending = inRes.filter {
-                                        !it.isDownloadedLocally && (it.isForceDownload || it.autoDownloadToGallery || (it.sourceDeviceId != null && pairedRulesMap[it.sourceDeviceId]?.autoDownloadToGallery == true))
-                                    }
-                                    if (autoPending.isNotEmpty()) {
-                                        autoPending.forEach { fItem ->
-                                            downloadInboundItem(fItem)
+                                        withContext(Dispatchers.Main) {
+                                            inboundSyncList = list
+                                            DriveDataCache.updateCache(context = context, inbound = list)
+                                            val autoPending = list.filter {
+                                                !it.isDownloadedLocally && (it.isForceDownload || it.autoDownloadToGallery || (it.sourceDeviceId != null && pairedRulesMap[it.sourceDeviceId]?.autoDownloadToGallery == true))
+                                            }
+                                            if (autoPending.isNotEmpty()) {
+                                                autoPending.forEach { fItem ->
+                                                    downloadInboundItem(fItem)
+                                                }
+                                            }
                                         }
+                                    } else {
+                                        android.util.Log.e("MainActivity", "dInbound failed: HTTP ${res.code}")
                                     }
+                                } catch (e: Exception) {
+                                    android.util.Log.e("MainActivity", "dInbound error: ${e.message}")
                                 }
-
-                                DriveDataCache.updateCache(
-                                    context = context,
-                                    summary = sRes,
-                                    files = fRes,
-                                    gallery = gRes,
-                                    folders = foRes,
-                                    uploads = upRes,
-                                    inbound = inRes
-                                )
                             }
                         }
 
