@@ -69,8 +69,15 @@ app.use(morgan('dev'));
 configurePassport();
 app.use(passport.initialize());
 
-// 3. Socket.io Real-time Setup
+// 3. Socket.io Real-time Setup (with Redis Adapter for PM2 cluster mode)
+import { createAdapter } from '@socket.io/redis-adapter';
+import { redisConnection } from './config/redis.js';
+
+const pubClient = redisConnection.duplicate();
+const subClient = redisConnection.duplicate();
+
 io = new SocketIOServer(server, {
+  adapter: createAdapter(pubClient, subClient),
   cors: {
     origin: allowedOrigins,
     methods: ['GET', 'POST'],

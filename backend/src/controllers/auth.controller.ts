@@ -46,7 +46,9 @@ export class AuthController {
       }
 
       if (err || !user) {
-        return res.redirect(`${clientUrl}/?error=auth_failed`);
+        console.error('❌ Google OAuth callback failed:', err, 'user:', user);
+        const errMessage = (err?.message || (req.query.error as string) || 'auth_failed').replace(/[^a-zA-Z0-9_-]/g, '_');
+        return res.redirect(`${clientUrl}/?error=${errMessage}`);
       }
 
       const token = generateUserJwt(user);

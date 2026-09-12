@@ -378,7 +378,7 @@ export class FileController {
       }
 
       let galleryQuery = File.find(mediaFilter)
-        .select('_id filename mimeType sizeBytes createdAt isFavorite sourceDeviceIds folderId versions.storageAccountId contentHash metadata.takenAt metadata.thumbnail metadata.width metadata.height metadata.duration')
+        .select('_id filename mimeType sizeBytes createdAt isFavorite sourceDeviceIds folderId versions.storageAccountId contentHash metadata.takenAt metadata.width metadata.height metadata.duration')
         .sort({
           'metadata.takenAt': -1,
           createdAt: -1,
@@ -442,6 +442,21 @@ export class FileController {
         ).toString('base64url');
       }
 
+      // Fetch base64 thumbnails ONLY for the first 50 items to keep DB transfer ultra fast
+      const first50Ids = uniqueMediaFiles.slice(0, 50).map(f => f._id);
+      if (first50Ids.length > 0) {
+        const thumbs = await File.find({ _id: { $in: first50Ids } }).select('_id metadata.thumbnail').lean();
+        const thumbMap = new Map();
+        thumbs.forEach((t: any) => thumbMap.set(t._id.toString(), t.metadata?.thumbnail));
+        uniqueMediaFiles.forEach((f: any, idx: number) => {
+          if (idx < 50) {
+            f.metadata = f.metadata || {};
+            f.metadata.thumbnail = thumbMap.get(f._id.toString());
+          }
+        });
+      }
+
+      let index = 0;
       const enrichedMedia = uniqueMediaFiles.map((file: any) => {
         const obj: any = { ...file };
         obj.mimeType = getEffectiveMimeType(file.filename, file.mimeType);
@@ -462,12 +477,21 @@ export class FileController {
         const hasThumb = !!(obj.metadata?.thumbnail && obj.metadata.thumbnail.length > 0);
         obj.hasThumbnail = hasThumb;
         obj.thumbnailUrl = `/api/v1/files/${file._id}/thumbnail`;
-        // For list API: keep Google CDN URLs (tiny, ~171 bytes) so browser loads directly from CDN.
-        // Strip ALL base64 data URIs — even small ones bloat the list payload massively at scale.
-        // Clients fall back to the /thumbnail endpoint for items without a CDN URL.
+        
+        // Retain base64 thumbnails for the first 50 items so the initial screen renders blurred placeholders instantly.
+        // Strip for the rest to prevent payload bloat, and strip any massive (>40KB) base64 strings regardless.
         if (obj.metadata?.thumbnail && !obj.metadata.thumbnail.startsWith('http')) {
-          delete obj.metadata.thumbnail;
+          if (index >= 50 || obj.metadata.thumbnail.length > 40000) {
+            delete obj.metadata.thumbnail;
+          }
         }
+        
+        // Strip backend-only or redundant fields to minimize payload size further
+        delete obj.contentHash;
+        delete obj.sourceDeviceIds;
+        delete obj.folderId;
+        
+        index++;
         return obj;
       });
 
@@ -1447,15 +1471,21 @@ export class FileController {
           filter.parentFolderId = new Types.ObjectId(parentFolderId);
           currentFolder = await Folder.findOne({ _id: parentFolderId, userId });
 
-          // Trace breadcrumbs upwards
+          // Trace breadcrumbs upwards efficiently to prevent N+1 query latency over network
           const trail: Array<{ id: string; name: string }> = [];
-          let curr = currentFolder;
-          while (curr) {
-            trail.unshift({ id: curr._id.toString(), name: curr.name });
-            if (curr.parentFolderId) {
-              curr = await Folder.findOne({ _id: curr.parentFolderId, userId });
-            } else {
-              break;
+          if (currentFolder) {
+            const allFolders = await Folder.find({ userId }).select('_id name parentFolderId').lean();
+            const folderMap = new Map();
+            allFolders.forEach(f => folderMap.set(f._id.toString(), f));
+            
+            let curr: any = currentFolder;
+            while (curr) {
+              trail.unshift({ id: curr._id.toString(), name: curr.name });
+              if (curr.parentFolderId && folderMap.has(curr.parentFolderId.toString())) {
+                curr = folderMap.get(curr.parentFolderId.toString());
+              } else {
+                break;
+              }
             }
           }
           breadcrumbs = [{ id: null, name: 'My Drive' }, ...trail];
