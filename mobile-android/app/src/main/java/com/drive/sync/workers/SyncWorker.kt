@@ -87,15 +87,18 @@ class SyncWorker(
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         SyncLogManager.init(applicationContext)
-        val prefs = applicationContext.getSharedPreferences("drive_prefs", Context.MODE_PRIVATE)
-        var rawServerUrl = inputData.getString("server_url") ?: prefs.getString("server_url", "") ?: ""
-        if (rawServerUrl.contains("drive-edge-cache.karan9302451907.workers.dev") || rawServerUrl.contains("onrender.com")) {
-            prefs.edit().remove("server_url").apply()
-            rawServerUrl = ""
+        val defaultEdgeUrl = "https://drive-edge-cache.karan9302451907.workers.dev"
+        var rawServerUrl = inputData.getString("server_url")?.takeIf { it.isNotBlank() }
+            ?: prefs.getString("server_url", defaultEdgeUrl)
+            ?: defaultEdgeUrl
+        if (rawServerUrl.isBlank() || rawServerUrl.contains("onrender.com")) {
+            rawServerUrl = defaultEdgeUrl
+            prefs.edit().putString("server_url", defaultEdgeUrl).apply()
         }
-        val serverUrl = if (rawServerUrl.isBlank()) {
-            ""
-        } else rawServerUrl.trimEnd('/')
+        var serverUrl = rawServerUrl.trim().trimEnd('/')
+        if (!serverUrl.startsWith("http://") && !serverUrl.startsWith("https://")) {
+            serverUrl = if (serverUrl.matches(Regex("^\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}(:\\d+)?.*"))) "http://$serverUrl" else "https://$serverUrl"
+        }
         val deviceId = inputData.getString("device_id") ?: prefs.getString("device_id", "") ?: return@withContext Result.failure()
         val deviceKey = inputData.getString("device_key") ?: prefs.getString("device_key", "") ?: return@withContext Result.failure()
 

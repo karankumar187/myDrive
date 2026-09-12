@@ -32,14 +32,16 @@ class SyncAlarmReceiver : BroadcastReceiver() {
             return
         }
 
-        var rawServerUrl = prefs.getString("server_url", "") ?: ""
-        if (rawServerUrl.contains("drive-edge-cache.karan9302451907.workers.dev") || rawServerUrl.contains("onrender.com")) {
-            prefs.edit().remove("server_url").apply()
-            rawServerUrl = ""
+        val defaultEdgeUrl = "https://drive-edge-cache.karan9302451907.workers.dev"
+        var rawServerUrl = prefs.getString("server_url", defaultEdgeUrl) ?: defaultEdgeUrl
+        if (rawServerUrl.isBlank() || rawServerUrl.contains("onrender.com")) {
+            rawServerUrl = defaultEdgeUrl
+            prefs.edit().putString("server_url", defaultEdgeUrl).apply()
         }
-        val serverUrl = if (rawServerUrl.isBlank()) {
-            ""
-        } else rawServerUrl.trimEnd('/')
+        var serverUrl = rawServerUrl.trim().trimEnd('/')
+        if (!serverUrl.startsWith("http://") && !serverUrl.startsWith("https://")) {
+            serverUrl = if (serverUrl.matches(Regex("^\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}(:\\d+)?.*"))) "http://$serverUrl" else "https://$serverUrl"
+        }
         val targetFolderId = prefs.getString("target_folder_id", "") ?: ""
         val wifiOnly = prefs.getBoolean("wifi_only", false)
         val chargingOnly = prefs.getBoolean("charging_only", false)

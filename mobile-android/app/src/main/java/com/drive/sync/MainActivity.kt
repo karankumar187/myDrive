@@ -206,6 +206,18 @@ data class InboundSyncItem(
     val autoDownloadToGallery: Boolean = false
 )
 
+fun normalizeServerUrl(rawUrl: String?): String {
+    val defaultUrl = "https://drive-edge-cache.karan9302451907.workers.dev"
+    if (rawUrl.isNullOrBlank() || rawUrl.contains("onrender.com")) {
+        return defaultUrl
+    }
+    var clean = rawUrl.trim().trimEnd('/')
+    if (!clean.startsWith("http://") && !clean.startsWith("https://")) {
+        clean = if (clean.matches(Regex("^\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}(:\\d+)?.*"))) "http://$clean" else "https://$clean"
+    }
+    return clean
+}
+
 class MainActivity : ComponentActivity() {
 
     private val httpClient = apiHttpClient
@@ -278,15 +290,8 @@ class MainActivity : ComponentActivity() {
         val prefs = getSharedPreferences("drive_prefs", Context.MODE_PRIVATE)
         val deviceId = prefs.getString("device_id", "") ?: ""
         val deviceKey = prefs.getString("device_key", "") ?: ""
-        val targetFolderId = prefs.getString("target_folder_id", "") ?: ""
-        var rawServerUrl = prefs.getString("server_url", "") ?: ""
-        if (rawServerUrl.contains("drive-edge-cache.karan9302451907.workers.dev") || rawServerUrl.contains("onrender.com")) {
-            prefs.edit().remove("server_url").apply()
-            rawServerUrl = ""
-        }
-        val serverUrl = if (rawServerUrl.isBlank()) {
-            ""
-        } else rawServerUrl.trimEnd('/')
+        val serverUrl = normalizeServerUrl(prefs.getString("server_url", null))
+        prefs.edit().putString("server_url", serverUrl).apply()
         val wifiOnly = prefs.getBoolean("wifi_only", false)
         val chargingOnly = prefs.getBoolean("charging_only", false)
         val syncPhotos = prefs.getBoolean("sync_photos", true)
@@ -326,6 +331,12 @@ class MainActivity : ComponentActivity() {
             }
         }.build()
 
+        val defaultEdgeUrl = "https://drive-edge-cache.karan9302451907.workers.dev"
+        var effectiveUrl = if (serverUrl.isBlank() || serverUrl.contains("onrender.com")) defaultEdgeUrl else serverUrl.trim().trimEnd('/')
+        if (!effectiveUrl.startsWith("http://") && !effectiveUrl.startsWith("https://")) {
+            effectiveUrl = if (effectiveUrl.matches(Regex("^\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}(:\\d+)?.*"))) "http://$effectiveUrl" else "https://$effectiveUrl"
+        }
+
         val syncRequestBuilder = PeriodicWorkRequestBuilder<SyncWorker>(
             intervalHours, TimeUnit.HOURS,
             15, TimeUnit.MINUTES // 15-min flex window
@@ -334,7 +345,7 @@ class MainActivity : ComponentActivity() {
             .addTag("UnifiedDriveSyncTag")
             .setInputData(
                 workDataOf(
-                    "server_url" to serverUrl,
+                    "server_url" to effectiveUrl,
                     "device_id" to deviceId,
                     "device_key" to deviceKey,
                     "target_folder_id" to (targetFolderId ?: ""),
@@ -386,10 +397,14 @@ class MainActivity : ComponentActivity() {
     ) {
         SyncNotificationHelper.resetCancel()
         SyncLogManager.log("── Manual sync initiated ──")
-        SyncLogManager.status("Starting manual sync…")
+        val defaultEdgeUrl = "https://drive-edge-cache.karan9302451907.workers.dev"
+        var effectiveUrl = if (serverUrl.isBlank() || serverUrl.contains("onrender.com")) defaultEdgeUrl else serverUrl.trim().trimEnd('/')
+        if (!effectiveUrl.startsWith("http://") && !effectiveUrl.startsWith("https://")) {
+            effectiveUrl = if (effectiveUrl.matches(Regex("^\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}(:\\d+)?.*"))) "http://$effectiveUrl" else "https://$effectiveUrl"
+        }
 
         val inputData = Data.Builder()
-            .putString("server_url", serverUrl)
+            .putString("server_url", effectiveUrl)
             .putString("device_id", deviceId)
             .putString("device_key", deviceKey)
             .putString("target_folder_id", targetFolderId)
@@ -432,11 +447,7 @@ fun DeviceSetupScreen(
     val scope = rememberCoroutineScope()
 
     var serverUrl by remember { 
-        var raw = prefs.getString("server_url", "") ?: ""
-        if (raw.contains("drive-edge-cache.karan9302451907.workers.dev") || raw.contains("onrender.com")) {
-            raw = ""
-        }
-        mutableStateOf(raw) 
+        mutableStateOf(normalizeServerUrl(prefs.getString("server_url", null))) 
     }
     var deviceId by remember { mutableStateOf(prefs.getString("device_id", "") ?: "") }
     var deviceKey by remember { mutableStateOf(prefs.getString("device_key", "") ?: "") }
@@ -458,7 +469,7 @@ fun DeviceSetupScreen(
         isConnecting = true
         scope.launch(Dispatchers.IO) {
             try {
-                val base = serverUrl.trimEnd('/')
+                val base = normalizeServerUrl(serverUrl)
                 val req = Request.Builder()
                     .url("$base/api/v1/storage/summary")
                     .addHeader("x-device-id", deviceId.trim())
@@ -470,7 +481,7 @@ fun DeviceSetupScreen(
                     if (res.isSuccessful) {
                         // Save credentials
                         prefs.edit().apply {
-                            putString("server_url", serverUrl.trimEnd('/'))
+                            putString("server_url", base)
                             putString("device_id", deviceId.trim())
                             putString("device_key", deviceKey.trim())
                             apply()
@@ -1182,14 +1193,9 @@ fun MainAppScreen(
     var isInitialLoading by remember { mutableStateOf(!DriveDataCache.hasData()) }
 
     val initialServerUrl = remember {
-        var raw = prefs.getString("server_url", "") ?: ""
-        if (raw.contains("drive-edge-cache.karan9302451907.workers.dev") || raw.contains("onrender.com")) {
-            prefs.edit().remove("server_url").apply()
-            raw = ""
-        }
-        if (raw.isBlank()) {
-            ""
-        } else raw.trimEnd('/')
+        val clean = normalizeServerUrl(prefs.getString("server_url", null))
+        prefs.edit().putString("server_url", clean).apply()
+        clean
     }
     var serverUrl by remember { mutableStateOf(initialServerUrl) }
     var deviceId by remember { mutableStateOf(prefs.getString("device_id", "") ?: "") }
@@ -1309,8 +1315,9 @@ fun MainAppScreen(
     }
 
     val saveCredentials = {
+        val cleanUrl = normalizeServerUrl(serverUrl)
         prefs.edit().apply {
-            putString("server_url", serverUrl)
+            putString("server_url", cleanUrl)
             putString("device_id", deviceId)
             putString("device_key", deviceKey)
             putString("target_folder_id", targetFolderId)
@@ -1327,7 +1334,8 @@ fun MainAppScreen(
     // ── Unified Sync Now ───────────────────────────────────────────────────
     val performInProcessSync: () -> Unit = {
         saveCredentials()
-        onSyncNow(serverUrl, deviceId, deviceKey, targetFolderId, syncPhotos, syncVideos, syncDocuments) {
+        val cleanUrl = normalizeServerUrl(serverUrl)
+        onSyncNow(cleanUrl, deviceId, deviceKey, targetFolderId, syncPhotos, syncVideos, syncDocuments) {
             isSyncingNow = true
             syncStatusText = "Starting background sync…"
             Toast.makeText(context, "Background sync running quietly!", Toast.LENGTH_SHORT).show()
@@ -1363,12 +1371,13 @@ fun MainAppScreen(
     }
 
     val refreshData: () -> Unit = {
-        if (serverUrl.isNotBlank() && deviceId.isNotBlank() && deviceKey.isNotBlank()) {
+        val effectiveUrl = normalizeServerUrl(serverUrl)
+        if (effectiveUrl.isNotBlank() && deviceId.isNotBlank() && deviceKey.isNotBlank()) {
             scope.launch {
                 isRefreshing = true
                 fetchError = null
                 try {
-                    val baseUrl = serverUrl.trimEnd('/')
+                    val baseUrl = effectiveUrl.trimEnd('/')
 
                     withContext(Dispatchers.IO) {
                         coroutineScope {
@@ -1810,7 +1819,7 @@ fun MainAppScreen(
         if (folderName.isNotBlank() && serverUrl.isNotBlank() && deviceId.isNotBlank() && deviceKey.isNotBlank()) {
             scope.launch(Dispatchers.IO) {
                 try {
-                    val baseUrl = serverUrl.trimEnd('/')
+                    val baseUrl = normalizeServerUrl(serverUrl)
                     val body = JSONObject().apply {
                         put("name", folderName.trim())
                         if (!parentId.isNullOrBlank()) {
@@ -1871,7 +1880,7 @@ fun MainAppScreen(
                 isSavingPolicy = true
                 try {
                     saveCredentials()
-                    val baseUrl = serverUrl.trimEnd('/')
+                    val baseUrl = normalizeServerUrl(serverUrl)
                     val rulesArray = org.json.JSONArray()
                     pairedRulesMap.values.forEach { rule ->
                         rulesArray.put(JSONObject().apply {
@@ -2019,7 +2028,7 @@ fun MainAppScreen(
                             null
                         } ?: return@forEachIndexed
 
-                        val baseUrl = serverUrl.trimEnd('/')
+                        val baseUrl = normalizeServerUrl(serverUrl)
 
                         val initJson = JSONObject().apply {
                             put("filename", filename)
@@ -3345,7 +3354,7 @@ fun FilesScreen(
                 coroutineScope.launch {
                     setActionLoading(true)
                     try {
-                        val baseUrl = serverUrl.trimEnd('/')
+                        val baseUrl = normalizeServerUrl(serverUrl)
                         val body = JSONObject().apply {
                             put("name", folderName.trim())
                             if (!parentId.isNullOrBlank()) {
