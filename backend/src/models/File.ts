@@ -132,7 +132,7 @@ const FileSchema = new Schema<IFileDocument>(
 
 // Compound indexes for high-speed queries
 FileSchema.index({ userId: 1, contentHash: 1 }); // Deduplication check
-FileSchema.index({ userId: 1, isTrash: 1, folderId: 1 }); // Folder explorer
+FileSchema.index({ userId: 1, isTrash: 1, folderId: 1, createdAt: -1 }); // Folder explorer
 FileSchema.index({ userId: 1, isTrash: 1, 'metadata.takenAt': -1, createdAt: -1, _id: -1 }); // Gallery timeline pagination
 FileSchema.index({ userId: 1, isTrash: 1, mimeType: 1, 'metadata.takenAt': -1, createdAt: -1, _id: -1 }); // Gallery media pagination
 FileSchema.index({ userId: 1, isTrash: 1, createdAt: -1, _id: -1 }); // Recent files / fallback pagination
