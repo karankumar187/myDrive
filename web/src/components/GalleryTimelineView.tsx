@@ -434,14 +434,9 @@ export const GalleryTimelineView: React.FC<Props> = ({
     <div className="space-y-6">
       {/* Top Header Bar */}
       <div className="bg-[#101014] p-4 sm:p-5 rounded-2xl border border-[#202026] shadow-xl flex flex-col md:flex-row md:items-center justify-between gap-4">
-        {/* Left: Brand & Filter Dropdown */}
+        {/* Left: Filter Dropdown */}
         <div className="flex items-center space-x-3">
-          <div className="flex items-center space-x-2">
-            <ImageIcon className="w-6 h-6 text-purple-400" />
-            <span className="text-xl font-extrabold text-white tracking-tight">myDrive</span>
-          </div>
 
-          <div className="h-4 w-[1px] bg-zinc-700 mx-1" />
 
           {/* Filter Dropdown */}
           <div className="relative">

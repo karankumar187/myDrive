@@ -136,8 +136,25 @@ val sharedHttpClient: OkHttpClient by lazy {
     OkHttpClient.Builder()
         .dispatcher(dispatcher)
         .connectionPool(ConnectionPool(16, 5, java.util.concurrent.TimeUnit.MINUTES))
-        .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
-        .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+        .connectTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
+        .readTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
+        .writeTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
+        .retryOnConnectionFailure(true)
+        .build()
+}
+
+val apiHttpClient: OkHttpClient by lazy {
+    val dispatcher = Dispatcher().apply {
+        maxRequests = 32
+        maxRequestsPerHost = 16
+    }
+    OkHttpClient.Builder()
+        .dispatcher(dispatcher)
+        .connectionPool(ConnectionPool(8, 5, java.util.concurrent.TimeUnit.MINUTES))
+        .connectTimeout(25, java.util.concurrent.TimeUnit.SECONDS)
+        .readTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
+        .writeTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
+        .retryOnConnectionFailure(true)
         .build()
 }
 

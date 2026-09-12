@@ -32,7 +32,11 @@ class SyncAlarmReceiver : BroadcastReceiver() {
             return
         }
 
-        val rawServerUrl = prefs.getString("server_url", "") ?: ""
+        var rawServerUrl = prefs.getString("server_url", "") ?: ""
+        if (rawServerUrl.contains("drive-edge-cache.karan9302451907.workers.dev") || rawServerUrl.contains("onrender.com")) {
+            prefs.edit().remove("server_url").apply()
+            rawServerUrl = ""
+        }
         val serverUrl = if (rawServerUrl.isBlank()) {
             ""
         } else rawServerUrl.trimEnd('/')
