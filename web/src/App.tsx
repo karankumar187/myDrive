@@ -340,7 +340,7 @@ export const App: React.FC = () => {
 
       const [storageRes, galleryRes, devicesRes, trashRes] = await Promise.all([
         api.getStorageSummary().catch(() => null),
-        api.getGallery({ limit: 200 }).catch(() => ({ media: [], nextCursor: null, hasMore: false })),
+        api.getGallery({ limit: 'all' }).catch(() => ({ media: [], nextCursor: null, hasMore: false })),
         api.listDevices().catch(() => ({ devices: [] })),
         api.listFiles(null, undefined, true).catch(() => ({ files: [], recentFiles: [] })),
       ]);
