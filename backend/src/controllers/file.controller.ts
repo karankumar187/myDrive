@@ -223,19 +223,12 @@ export class FileController {
         filter.filename = { $regex: search, $options: 'i' };
       }
 
-      let fileQuery = File.find(filter)
-        .select('_id filename mimeType sizeBytes createdAt folderId metadata.takenAt metadata.thumbnail isFavorite isTrash sourceDeviceIds')
-        .sort({ createdAt: -1 })
-        .lean();
+      let fileQuery = File.find(filter).sort({ createdAt: -1 }).lean();
       if (req.query.limit) {
-        if (req.query.limit !== 'all' && req.query.limit !== '-1') {
-          const parsedLimit = parseInt(req.query.limit as string, 10);
-          if (!isNaN(parsedLimit) && parsedLimit > 0) {
-            fileQuery = fileQuery.limit(parsedLimit);
-          }
+        const parsedLimit = parseInt(req.query.limit as string, 10);
+        if (!isNaN(parsedLimit) && parsedLimit > 0) {
+          fileQuery = fileQuery.limit(parsedLimit);
         }
-      } else if (req.query.all !== 'true') {
-        fileQuery = fileQuery.limit(500);
       }
       const rawFiles: any[] = await fileQuery;
 
@@ -243,9 +236,7 @@ export class FileController {
         const obj = { ...f };
         obj.hasThumbnail = !!(obj.metadata?.thumbnail && obj.metadata.thumbnail.length > 0);
         obj.thumbnailUrl = `/api/v1/files/${obj._id}/thumbnail`;
-        // Strip ALL base64 thumbnails from list APIs — they bloat the payload.
-        // Keep Google CDN URLs (tiny, ~171 bytes) for direct browser loading.
-        if (obj.metadata?.thumbnail && !obj.metadata.thumbnail.startsWith('http')) {
+        if (obj.metadata?.thumbnail) {
           delete obj.metadata.thumbnail;
         }
         return obj;
@@ -287,30 +278,44 @@ export class FileController {
         isTrash: false,
       };
 
+      const videoExtRegex = '\\.(mp4|mov|m4v|mkv|webm|avi|wmv|flv|3gp|ts)$';
+      const imageExtRegex = '\\.(jpg|jpeg|png|webp|gif|heic|bmp|tiff)$';
       if (filter === 'favorites') {
         mediaFilter.isFavorite = true;
-        mediaFilter.mimeType = { $regex: '^(image|video)/' };
+        mediaFilter.$or = [
+          { mimeType: { $regex: '^image/' } },
+          { mimeType: { $regex: '^video/' } },
+          { filename: { $regex: videoExtRegex, $options: 'i' } },
+          { filename: { $regex: imageExtRegex, $options: 'i' } },
+        ];
       } else if (filter === 'videos') {
-        mediaFilter.mimeType = { $regex: '^video/' };
+        mediaFilter.$or = [
+          { mimeType: { $regex: '^video/' } },
+          { filename: { $regex: videoExtRegex, $options: 'i' } },
+        ];
       } else if (filter === 'photos') {
-        mediaFilter.mimeType = { $regex: '^image/' };
+        mediaFilter.$or = [
+          { mimeType: { $regex: '^image/' } },
+          { filename: { $regex: imageExtRegex, $options: 'i' } },
+        ];
       } else {
-        mediaFilter.mimeType = { $regex: '^(image|video)/' };
+        mediaFilter.$or = [
+          { mimeType: { $regex: '^image/' } },
+          { mimeType: { $regex: '^video/' } },
+          { filename: { $regex: videoExtRegex, $options: 'i' } },
+          { filename: { $regex: imageExtRegex, $options: 'i' } },
+        ];
       }
 
       if (search && typeof search === 'string' && search.trim()) {
         mediaFilter.filename = { $regex: search.trim(), $options: 'i' };
       }
 
-      let parsedLimit: number | null = 200; // Default to 200 for fast web pagination; clients pass limit=all for full dataset
+      let parsedLimit: number | null = null;
       if (req.query.limit) {
-        if (req.query.limit === 'all' || req.query.limit === '-1') {
-          parsedLimit = null;
-        } else {
-          const pl = parseInt(req.query.limit as string, 10);
-          if (!isNaN(pl) && pl > 0) {
-            parsedLimit = pl;
-          }
+        const pl = parseInt(req.query.limit as string, 10);
+        if (!isNaN(pl) && pl > 0) {
+          parsedLimit = pl;
         }
       }
 
@@ -377,14 +382,11 @@ export class FileController {
         return;
       }
 
-      let galleryQuery = File.find(mediaFilter)
-        .select('_id filename mimeType sizeBytes createdAt isFavorite sourceDeviceIds folderId versions.storageAccountId contentHash metadata.takenAt metadata.thumbnail metadata.width metadata.height metadata.duration')
-        .sort({
-          'metadata.takenAt': -1,
-          createdAt: -1,
-          _id: -1,
-        })
-        .lean();
+      let galleryQuery = File.find(mediaFilter).sort({
+        'metadata.takenAt': -1,
+        createdAt: -1,
+        _id: -1,
+      }).lean();
 
       if (parsedLimit) {
         // Fetch parsedLimit + 1 to detect if next page exists
@@ -459,13 +461,12 @@ export class FileController {
           : 'Google Drive Account';
         obj.status = 'safely_backed_up';
         
+        // Strip heavy base64 strings and short-lived HTTP links from list JSON.
+        // Provide lightweight flag and thumbnail URL so clients fetch via cached /thumbnail endpoint.
         const hasThumb = !!(obj.metadata?.thumbnail && obj.metadata.thumbnail.length > 0);
         obj.hasThumbnail = hasThumb;
         obj.thumbnailUrl = `/api/v1/files/${file._id}/thumbnail`;
-        // For list API: keep Google CDN URLs (tiny, ~171 bytes) so browser loads directly from CDN.
-        // Strip ALL base64 data URIs — even small ones bloat the list payload massively at scale.
-        // Clients fall back to the /thumbnail endpoint for items without a CDN URL.
-        if (obj.metadata?.thumbnail && !obj.metadata.thumbnail.startsWith('http')) {
+        if (obj.metadata?.thumbnail) {
           delete obj.metadata.thumbnail;
         }
         return obj;
@@ -482,7 +483,7 @@ export class FileController {
           status: d.status || 'offline',
         })),
       };
-      await CacheService.set(cacheKey, payload, 300);
+      await CacheService.set(cacheKey, payload, 60);
 
       res.json(payload);
     } catch (error: any) {
@@ -1495,18 +1496,14 @@ export class FileController {
         isTrash: false,
         $or: [{ sourceDeviceIds: deviceId }, { _id: { $in: stateFileIds } }],
       })
-        .select('_id filename mimeType sizeBytes createdAt folderId sourceDeviceIds')
         .populate('folderId', 'name path')
-        .sort({ createdAt: -1 })
-        .lean();
+        .sort({ createdAt: -1 });
 
       if (req.query.limit) {
         const parsedLimit = parseInt(req.query.limit as string, 10);
         if (!isNaN(parsedLimit) && parsedLimit > 0) {
           deviceFilesQuery = deviceFilesQuery.limit(parsedLimit);
         }
-      } else {
-        deviceFilesQuery = deviceFilesQuery.limit(200);
       }
 
       const files = await deviceFilesQuery;
@@ -1539,21 +1536,17 @@ export class FileController {
         userId,
         isTrash: false,
       })
-        .select('_id filename mimeType sizeBytes createdAt folderId sourceDeviceIds')
         .populate('folderId', 'name path')
-        .sort({ createdAt: -1 })
-        .lean();
+        .sort({ createdAt: -1 });
 
       if (req.query.limit) {
         const parsedLimit = parseInt(req.query.limit as string, 10);
         if (!isNaN(parsedLimit) && parsedLimit > 0) {
           candidateQuery = candidateQuery.limit(parsedLimit);
         }
-      } else {
-        candidateQuery = candidateQuery.limit(150);
       }
 
-      const candidateFiles: any[] = await candidateQuery;
+      const candidateFiles = await candidateQuery;
 
       // Fetch DeviceFileState records for this device to determine local sync and force-download status
       const localStates = await DeviceFileState.find({ userId, deviceId });
@@ -1574,10 +1567,7 @@ export class FileController {
           _id: { $in: forceFileIds },
           userId,
           isTrash: false,
-        })
-          .select('_id filename mimeType sizeBytes createdAt folderId sourceDeviceIds')
-          .populate('folderId', 'name path')
-          .lean();
+        }).populate('folderId', 'name path');
       }
 
       const combinedCandidates = [...candidateFiles];

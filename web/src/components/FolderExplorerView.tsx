@@ -484,7 +484,7 @@ export const FolderExplorerView: React.FC<Props> = ({
   };
 
   // ─── 3-Dot Kebab Dropdown for Files ─────────────────────────────────────
-  const renderFileKebabMenu = (file: FileItem, isNearBottom?: boolean) => {
+  const FileKebabMenu: React.FC<{ file: FileItem; isNearBottom?: boolean }> = ({ file, isNearBottom }) => {
     const isOpen = contextMenuFileId === file._id;
     return (
       <div className="relative inline-block text-left">
@@ -582,7 +582,7 @@ export const FolderExplorerView: React.FC<Props> = ({
   };
 
   // ─── 3-Dot Kebab Dropdown for Folders ───────────────────────────────────
-  const renderFolderKebabMenu = (folder: FolderItem) => {
+  const FolderKebabMenu: React.FC<{ folder: FolderItem }> = ({ folder }) => {
     const isOpen = contextMenuFolderId === folder._id;
     return (
       <div className="relative inline-block">
@@ -700,7 +700,7 @@ export const FolderExplorerView: React.FC<Props> = ({
             : new Date(file.createdAt).toLocaleString()}
         </td>
         <td className="py-3 px-4 text-right">
-          {renderFileKebabMenu(file, isNearBottom)}
+          <FileKebabMenu file={file} isNearBottom={isNearBottom} />
         </td>
       </tr>
     );
@@ -852,7 +852,7 @@ export const FolderExplorerView: React.FC<Props> = ({
                   <Folder className="w-4 h-4 text-purple-400 flex-shrink-0 group-hover:scale-110 transition" />
                   <span className="text-xs font-semibold text-zinc-200 truncate">{folder.name}</span>
                 </div>
-                {renderFolderKebabMenu(folder)}
+                <FolderKebabMenu folder={folder} />
               </div>
             ))}
           </div>

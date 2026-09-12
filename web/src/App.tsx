@@ -274,22 +274,15 @@ export const App: React.FC = () => {
       setCurrentFolder(cached.currentFolder);
     } else {
       // Check localStorage for offline/fast load
-      let foundLocal = false;
       try {
         const localFiles = localStorage.getItem(`drive_cache_files_${cacheKey}`);
         const localFolders = localStorage.getItem(`drive_cache_folders_${cacheKey}`);
         if (localFiles && localFolders) {
           setFiles(JSON.parse(localFiles));
           setFolders(JSON.parse(localFolders));
-          foundLocal = true;
         }
       } catch {
         // ignore
-      }
-      if (!foundLocal) {
-        // Clear immediately so we don't show the PREVIOUS folder's contents while loading
-        setFiles([]);
-        setFolders([]);
       }
     }
 
@@ -340,7 +333,7 @@ export const App: React.FC = () => {
 
       const [storageRes, galleryRes, devicesRes, trashRes] = await Promise.all([
         api.getStorageSummary().catch(() => null),
-        api.getGallery({ limit: 200 }).catch(() => ({ media: [], nextCursor: null, hasMore: false })),
+        api.getGallery({ limit: 60 }).catch(() => ({ media: [], nextCursor: null, hasMore: false })),
         api.listDevices().catch(() => ({ devices: [] })),
         api.listFiles(null, undefined, true).catch(() => ({ files: [], recentFiles: [] })),
       ]);

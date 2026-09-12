@@ -88,11 +88,10 @@ class SyncWorker(
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         SyncLogManager.init(applicationContext)
         val prefs = applicationContext.getSharedPreferences("drive_prefs", Context.MODE_PRIVATE)
-        val rawServerUrl = (inputData.getString("server_url") ?: prefs.getString("server_url", "https://drive-edge-cache.karan9302451907.workers.dev") ?: "https://drive-edge-cache.karan9302451907.workers.dev").trimEnd('/')
-        val serverUrl = if (rawServerUrl.contains("onrender.com") || rawServerUrl.isBlank()) {
-            prefs.edit().putString("server_url", "https://drive-edge-cache.karan9302451907.workers.dev").apply()
-            "https://drive-edge-cache.karan9302451907.workers.dev"
-        } else rawServerUrl
+        val rawServerUrl = inputData.getString("server_url") ?: prefs.getString("server_url", "") ?: ""
+        val serverUrl = if (rawServerUrl.isBlank()) {
+            ""
+        } else rawServerUrl.trimEnd('/')
         val deviceId = inputData.getString("device_id") ?: prefs.getString("device_id", "") ?: return@withContext Result.failure()
         val deviceKey = inputData.getString("device_key") ?: prefs.getString("device_key", "") ?: return@withContext Result.failure()
 

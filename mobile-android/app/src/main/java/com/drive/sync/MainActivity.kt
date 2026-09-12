@@ -92,8 +92,6 @@ import coil.memory.MemoryCache
 import coil.request.ImageRequest
 import coil.size.Precision
 import coil.size.Size
-import androidx.compose.runtime.saveable.rememberSaveable
-import com.drive.sync.network.DriveDataCache
 import com.drive.sync.network.DriveSocketManager
 import com.drive.sync.workers.SyncWorker
 import kotlinx.coroutines.CoroutineScope
@@ -208,12 +206,11 @@ data class InboundSyncItem(
 
 class MainActivity : ComponentActivity() {
 
-    private val httpClient = apiHttpClient
+    private val httpClient = sharedHttpClient
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         SyncLogManager.init(this)
-        DriveDataCache.init(this)
 
         val imageLoader = ImageLoader.Builder(this)
             .okHttpClient(sharedHttpClient)
@@ -279,10 +276,9 @@ class MainActivity : ComponentActivity() {
         val deviceId = prefs.getString("device_id", "") ?: ""
         val deviceKey = prefs.getString("device_key", "") ?: ""
         val targetFolderId = prefs.getString("target_folder_id", "") ?: ""
-        val rawServerUrl = prefs.getString("server_url", "https://drive-edge-cache.karan9302451907.workers.dev") ?: "https://drive-edge-cache.karan9302451907.workers.dev"
-        val serverUrl = if (rawServerUrl.contains("onrender.com") || rawServerUrl.isBlank()) {
-            prefs.edit().putString("server_url", "https://drive-edge-cache.karan9302451907.workers.dev").apply()
-            "https://drive-edge-cache.karan9302451907.workers.dev"
+        val rawServerUrl = prefs.getString("server_url", "") ?: ""
+        val serverUrl = if (rawServerUrl.isBlank()) {
+            ""
         } else rawServerUrl.trimEnd('/')
         val wifiOnly = prefs.getBoolean("wifi_only", false)
         val chargingOnly = prefs.getBoolean("charging_only", false)
@@ -428,9 +424,9 @@ fun DeviceSetupScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    var serverUrl by remember { mutableStateOf("https://drive-edge-cache.karan9302451907.workers.dev") }
-    var deviceId by remember { mutableStateOf("") }
-    var deviceKey by remember { mutableStateOf("") }
+    var serverUrl by remember { mutableStateOf(prefs.getString("server_url", "") ?: "") }
+    var deviceId by remember { mutableStateOf(prefs.getString("device_id", "") ?: "") }
+    var deviceKey by remember { mutableStateOf(prefs.getString("device_key", "") ?: "") }
 
     var isConnecting by remember { mutableStateOf(false) }
     var errorMsg by remember { mutableStateOf<String?>(null) }
@@ -1168,15 +1164,14 @@ fun MainAppScreen(
         hasMediaPermissions = AppPermissions.hasStoragePermission(context)
     }
 
-    var selectedTab by rememberSaveable { mutableIntStateOf(prefs.getInt("selected_tab", 0)) }
+    var selectedTab by remember { mutableIntStateOf(0) }
     var isFilesSelectionMode by remember { mutableStateOf(false) }
-    var isInitialLoading by remember { mutableStateOf(!DriveDataCache.hasData()) }
+    var isInitialLoading by remember { mutableStateOf(true) }
 
     val initialServerUrl = remember {
-        val raw = prefs.getString("server_url", "https://drive-edge-cache.karan9302451907.workers.dev") ?: "https://drive-edge-cache.karan9302451907.workers.dev"
-        if (raw.contains("onrender.com") || raw.isBlank()) {
-            prefs.edit().putString("server_url", "https://drive-edge-cache.karan9302451907.workers.dev").apply()
-            "https://drive-edge-cache.karan9302451907.workers.dev"
+        val raw = prefs.getString("server_url", "") ?: ""
+        if (raw.isBlank()) {
+            ""
         } else raw.trimEnd('/')
     }
     var serverUrl by remember { mutableStateOf(initialServerUrl) }
@@ -1201,19 +1196,19 @@ fun MainAppScreen(
     var lastSyncStatus by remember { mutableStateOf(prefs.getString("last_sync_status", "Never synced") ?: "Never synced") }
 
     // Cloud Data States
-    var storageSummary by remember { mutableStateOf(DriveDataCache.storageSummary) }
-    var filesList by remember { mutableStateOf(DriveDataCache.filesList) }
-    var galleryList by remember { mutableStateOf(DriveDataCache.galleryList) }
-    var foldersList by remember { mutableStateOf(DriveDataCache.foldersList) }
+    var storageSummary by remember { mutableStateOf<StoragePoolSummary?>(null) }
+    var filesList by remember { mutableStateOf<List<CloudFile>>(emptyList()) }
+    var galleryList by remember { mutableStateOf<List<CloudMedia>>(emptyList()) }
+    var foldersList by remember { mutableStateOf<List<CloudFolder>>(emptyList()) }
     var selectedFilterFolderId by remember { mutableStateOf<String?>(null) }
     var userAvatarUrl by remember { mutableStateOf(prefs.getString("user_avatar_url", "") ?: "") }
     var userName by remember { mutableStateOf(prefs.getString("user_name", "") ?: "") }
     var userEmail by remember { mutableStateOf(prefs.getString("user_email", "") ?: "") }
 
     // Activity & Paired Devices States
-    var uploadedFilesList by remember { mutableStateOf(DriveDataCache.uploadedFilesList) }
-    var inboundSyncList by remember { mutableStateOf(DriveDataCache.inboundSyncList) }
-    var pairedDevicesList by remember { mutableStateOf(DriveDataCache.pairedDevicesList) }
+    var uploadedFilesList by remember { mutableStateOf<List<DeviceUploadItem>>(emptyList()) }
+    var inboundSyncList by remember { mutableStateOf<List<InboundSyncItem>>(emptyList()) }
+    var pairedDevicesList by remember { mutableStateOf<List<PairedDevice>>(emptyList()) }
     val pairedRulesMap = remember {
         val map = mutableStateMapOf<String, PairedDeviceRule>()
         try {
@@ -1361,7 +1356,7 @@ fun MainAppScreen(
                     withContext(Dispatchers.IO) {
                         coroutineScope {
                             // 1. Fetch Storage Pool Summary in parallel
-                            launch {
+                            val dSummary = async {
                                 try {
                                     val req = Request.Builder()
                                         .url("$baseUrl/api/v1/storage/summary")
@@ -1376,26 +1371,20 @@ fun MainAppScreen(
                                         val totalAcc = if (json.has("totalAccounts")) json.optInt("totalAccounts", 0) else json.optInt("connectedAccountsCount", 0)
                                         val pctUsed = if (json.has("percentUsed")) json.optDouble("percentUsed", 0.0) else json.optDouble("usagePercentage", 0.0)
 
-                                        val summary = StoragePoolSummary(
+                                        StoragePoolSummary(
                                             totalCapacityBytes = totalCap,
                                             totalUsedBytes = usedCap,
                                             connectedAccountsCount = totalAcc,
                                             usagePercentage = pctUsed
                                         )
-                                        withContext(Dispatchers.Main) {
-                                            storageSummary = summary
-                                            DriveDataCache.updateCache(context = context, summary = summary)
-                                        }
-                                    } else {
-                                        android.util.Log.e("MainActivity", "StorageSummary failed: HTTP ${res.code}")
-                                    }
+                                    } else null
                                 } catch (e: Exception) {
-                                    android.util.Log.e("MainActivity", "StorageSummary error: ${e.message}")
+                                    null
                                 }
                             }
 
-                            // 2. Fetch Files in parallel (immediate display!)
-                            launch {
+                            // 2. Fetch Files in parallel (handle null folderId properly)
+                            val dFiles = async {
                                 try {
                                     val req = Request.Builder()
                                         .url("$baseUrl/api/v1/files?all=true")
@@ -1405,7 +1394,10 @@ fun MainAppScreen(
                                     val res = httpClient.newCall(req).execute()
                                     if (res.isSuccessful) {
                                         val json = JSONObject(res.body?.string() ?: "{}")
-                                        val array = json.optJSONArray("files")
+                                        var array = json.optJSONArray("files")
+                                        if ((array == null || array.length() == 0) && json.has("recentFiles")) {
+                                            array = json.optJSONArray("recentFiles")
+                                        }
                                         val list = mutableListOf<CloudFile>()
                                         if (array != null) {
                                             for (i in 0 until array.length()) {
@@ -1432,25 +1424,18 @@ fun MainAppScreen(
                                                 )
                                             }
                                         }
-                                        withContext(Dispatchers.Main) {
-                                            if (list.isNotEmpty() || filesList.isEmpty()) {
-                                                filesList = list
-                                            }
-                                            DriveDataCache.updateCache(context = context, files = list)
-                                        }
-                                    } else {
-                                        android.util.Log.e("MainActivity", "dFiles failed: HTTP ${res.code}")
-                                    }
+                                        list
+                                    } else null
                                 } catch (e: Exception) {
-                                    android.util.Log.e("MainActivity", "dFiles error: ${e.message}")
+                                    null
                                 }
                             }
 
-                            // 3. Fetch Gallery Media in parallel (immediate display!)
-                            launch {
+                            // 3. Fetch Gallery Media in parallel
+                            val dGallery = async {
                                 try {
                                     val req = Request.Builder()
-                                        .url("$baseUrl/api/v1/files/gallery?limit=all")
+                                        .url("$baseUrl/api/v1/files/gallery")
                                         .addHeader("x-device-id", deviceId)
                                         .addHeader("x-device-key", deviceKey)
                                         .build()
@@ -1464,12 +1449,6 @@ fun MainAppScreen(
                                                 val item = array.getJSONObject(i)
                                                 val meta = item.optJSONObject("metadata")
                                                 val sourceIds = item.optJSONArray("sourceDeviceIds")
-                                                val rawThumb = meta?.optString("thumbnail")?.ifBlank { null }
-                                                    ?: item.optString("thumbnailUrl").ifBlank { null }
-                                                val finalThumb = if (rawThumb != null && rawThumb.startsWith("/")) {
-                                                    "$baseUrl$rawThumb?deviceId=$deviceId&deviceKey=$deviceKey"
-                                                } else rawThumb
-
                                                 list.add(
                                                     CloudMedia(
                                                         id = item.optString("_id"),
@@ -1482,7 +1461,7 @@ fun MainAppScreen(
                                                         width = if (meta != null && meta.has("width")) meta.optInt("width") else null,
                                                         height = if (meta != null && meta.has("height")) meta.optInt("height") else null,
                                                         duration = if (meta != null && meta.has("duration")) meta.optDouble("duration") else null,
-                                                        thumbnail = finalThumb,
+                                                        thumbnail = meta?.optString("thumbnail")?.ifBlank { null },
                                                         cameraMake = meta?.optString("cameraMake")?.ifBlank { null },
                                                         cameraModel = meta?.optString("cameraModel")?.ifBlank { null },
                                                         latitude = if (meta != null && meta.has("latitude")) meta.optDouble("latitude") else null,
@@ -1497,22 +1476,15 @@ fun MainAppScreen(
                                                 )
                                             }
                                         }
-                                        withContext(Dispatchers.Main) {
-                                            if (list.isNotEmpty() || galleryList.isEmpty()) {
-                                                galleryList = list
-                                            }
-                                            DriveDataCache.updateCache(context = context, gallery = list)
-                                        }
-                                    } else {
-                                        android.util.Log.e("MainActivity", "dGallery failed: HTTP ${res.code}")
-                                    }
+                                        list
+                                    } else null
                                 } catch (e: Exception) {
-                                    android.util.Log.e("MainActivity", "dGallery error: ${e.message}")
+                                    null
                                 }
                             }
 
-                            // 4. Fetch Folders in parallel
-                            launch {
+                            // 4. Fetch Folders in parallel (handle null parentFolderId properly)
+                            val dFolders = async {
                                 try {
                                     val req = Request.Builder()
                                         .url("$baseUrl/api/v1/files/folders/list?all=true")
@@ -1545,25 +1517,18 @@ fun MainAppScreen(
                                                 )
                                             }
                                         }
-                                        withContext(Dispatchers.Main) {
-                                            if (list.isNotEmpty() || foldersList.isEmpty()) {
-                                                foldersList = list
-                                            }
-                                            DriveDataCache.updateCache(context = context, folders = list)
-                                        }
-                                    } else {
-                                        android.util.Log.e("MainActivity", "dFolders failed: HTTP ${res.code}")
-                                    }
+                                        list
+                                    } else null
                                 } catch (e: Exception) {
-                                    android.util.Log.e("MainActivity", "dFolders error: ${e.message}")
+                                    null
                                 }
                             }
 
                             // 5. Fetch Uploaded Files by This Device in parallel
-                            launch {
+                            val dUploads = async {
                                 try {
                                     val req = Request.Builder()
-                                        .url("$baseUrl/api/v1/files/device/$deviceId/uploads?limit=200")
+                                        .url("$baseUrl/api/v1/files/device/$deviceId/uploads")
                                         .addHeader("x-device-id", deviceId)
                                         .addHeader("x-device-key", deviceKey)
                                         .build()
@@ -1588,23 +1553,18 @@ fun MainAppScreen(
                                                 )
                                             }
                                         }
-                                        withContext(Dispatchers.Main) {
-                                            uploadedFilesList = list
-                                            DriveDataCache.updateCache(context = context, uploads = list)
-                                        }
-                                    } else {
-                                        android.util.Log.e("MainActivity", "dUploads failed: HTTP ${res.code}")
-                                    }
+                                        list
+                                    } else null
                                 } catch (e: Exception) {
-                                    android.util.Log.e("MainActivity", "dUploads error: ${e.message}")
+                                    null
                                 }
                             }
 
                             // 6. Fetch Inbound Synced Files in parallel
-                            launch {
+                            val dInbound = async {
                                 try {
                                     val req = Request.Builder()
-                                        .url("$baseUrl/api/v1/files/device/$deviceId/inbound-sync?limit=150")
+                                        .url("$baseUrl/api/v1/files/device/$deviceId/inbound-sync")
                                         .addHeader("x-device-id", deviceId)
                                         .addHeader("x-device-key", deviceKey)
                                         .build()
@@ -1634,23 +1594,37 @@ fun MainAppScreen(
                                                 )
                                             }
                                         }
-                                        withContext(Dispatchers.Main) {
-                                            inboundSyncList = list
-                                            DriveDataCache.updateCache(context = context, inbound = list)
-                                            val autoPending = list.filter {
-                                                !it.isDownloadedLocally && (it.isForceDownload || it.autoDownloadToGallery || (it.sourceDeviceId != null && pairedRulesMap[it.sourceDeviceId]?.autoDownloadToGallery == true))
-                                            }
-                                            if (autoPending.isNotEmpty()) {
-                                                autoPending.forEach { fItem ->
-                                                    downloadInboundItem(fItem)
-                                                }
-                                            }
-                                        }
-                                    } else {
-                                        android.util.Log.e("MainActivity", "dInbound failed: HTTP ${res.code}")
-                                    }
+                                        list
+                                    } else null
                                 } catch (e: Exception) {
-                                    android.util.Log.e("MainActivity", "dInbound error: ${e.message}")
+                                    null
+                                }
+                            }
+
+                            // Await all parallel requests simultaneously
+                            val sRes = dSummary.await()
+                            val fRes = dFiles.await()
+                            val gRes = dGallery.await()
+                            val foRes = dFolders.await()
+                            val upRes = dUploads.await()
+                            val inRes = dInbound.await()
+
+                            withContext(Dispatchers.Main) {
+                                if (sRes != null) storageSummary = sRes
+                                if (fRes != null) filesList = fRes
+                                if (gRes != null) galleryList = gRes
+                                if (foRes != null) foldersList = foRes
+                                if (upRes != null) uploadedFilesList = upRes
+                                if (inRes != null) {
+                                    inboundSyncList = inRes
+                                    val autoPending = inRes.filter {
+                                        !it.isDownloadedLocally && (it.isForceDownload || it.autoDownloadToGallery || (it.sourceDeviceId != null && pairedRulesMap[it.sourceDeviceId]?.autoDownloadToGallery == true))
+                                    }
+                                    if (autoPending.isNotEmpty()) {
+                                        autoPending.forEach { fItem ->
+                                            downloadInboundItem(fItem)
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -1714,7 +1688,6 @@ fun MainAppScreen(
                                     }
                                 }
                                 pairedDevicesList = pList
-                                DriveDataCache.updateCache(context = context, pairedDevices = pList)
                                 val polObj = json.optJSONObject("policy")
                                 if (polObj != null) {
                                     val rArr = polObj.optJSONArray("pairedDeviceRules")
@@ -2285,7 +2258,7 @@ fun MainAppScreen(
             ) {
                 NavigationBarItem(
                     selected = selectedTab == 0,
-                    onClick = { selectedTab = 0; prefs.edit().putInt("selected_tab", 0).apply() },
+                    onClick = { selectedTab = 0 },
                     icon = { Icon(Icons.Default.Folder, contentDescription = "Files") },
                     label = { Text("Files", fontSize = 11.sp) },
                     colors = NavigationBarItemDefaults.colors(
@@ -2298,7 +2271,7 @@ fun MainAppScreen(
                 )
                 NavigationBarItem(
                     selected = selectedTab == 1,
-                    onClick = { selectedTab = 1; prefs.edit().putInt("selected_tab", 1).apply() },
+                    onClick = { selectedTab = 1 },
                     icon = { Icon(Icons.Default.PhotoLibrary, contentDescription = "Gallery") },
                     label = { Text("Gallery", fontSize = 11.sp) },
                     colors = NavigationBarItemDefaults.colors(
@@ -2311,7 +2284,7 @@ fun MainAppScreen(
                 )
                 NavigationBarItem(
                     selected = selectedTab == 2,
-                    onClick = { selectedTab = 2; prefs.edit().putInt("selected_tab", 2).apply() },
+                    onClick = { selectedTab = 2 },
                     icon = { Icon(Icons.Default.SyncAlt, contentDescription = "Transfers") },
                     label = { Text("Transfers", fontSize = 11.sp) },
                     colors = NavigationBarItemDefaults.colors(
@@ -2324,7 +2297,7 @@ fun MainAppScreen(
                 )
                 NavigationBarItem(
                     selected = selectedTab == 3,
-                    onClick = { selectedTab = 3; prefs.edit().putInt("selected_tab", 3).apply() },
+                    onClick = { selectedTab = 3 },
                     icon = { Icon(Icons.Default.Tune, contentDescription = "Policies") },
                     label = { Text("Policies", fontSize = 11.sp) },
                     colors = NavigationBarItemDefaults.colors(
@@ -2445,12 +2418,10 @@ fun MainAppScreen(
                         onDeleteMedia = { deletedId ->
                             galleryList = galleryList.filter { it.id != deletedId }
                             filesList = filesList.filter { it.id != deletedId }
-                            DriveDataCache.updateCache(context = context, files = filesList, gallery = galleryList)
                         },
                         onBulkDeleteMedia = { deletedIds ->
                             galleryList = galleryList.filter { !deletedIds.contains(it.id) }
                             filesList = filesList.filter { !deletedIds.contains(it.id) }
-                            DriveDataCache.updateCache(context = context, files = filesList, gallery = galleryList)
                         }
                     )
                     2 -> TransfersScreen(

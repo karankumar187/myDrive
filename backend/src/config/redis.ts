@@ -8,7 +8,6 @@ const redisPassword = process.env.REDIS_PASSWORD || undefined;
 const options: RedisOptions = {
   maxRetriesPerRequest: 1,
   connectTimeout: 5000,
-  enableOfflineQueue: false,
   lazyConnect: false,
   retryStrategy(times) {
     if (times > 5) return null;
@@ -16,18 +15,13 @@ const options: RedisOptions = {
   },
 };
 
-const shouldUseTls =
-  process.env.REDIS_TLS === 'true' ||
-  redisHost.includes('upstash.io') ||
-  (redisUrl ? redisUrl.includes('upstash.io') : false);
-
 export const redisConnection = redisUrl
-  ? new Redis(redisUrl, { ...options, tls: shouldUseTls ? {} : undefined })
+  ? new Redis(redisUrl, options)
   : new Redis({
       host: redisHost,
       port: redisPort,
       password: redisPassword,
-      tls: shouldUseTls ? {} : undefined,
+      tls: process.env.REDIS_TLS === 'true' ? {} : undefined,
       ...options,
     });
 

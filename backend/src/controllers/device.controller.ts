@@ -285,6 +285,37 @@ export class DeviceController {
   }
 
   /**
+   * Resets the device key for a specific device, providing a new raw key for reconnection.
+   */
+  static async resetDeviceKey(req: Request, res: Response): Promise<void> {
+    try {
+      const device = await Device.findOne({
+        _id: req.params.id,
+        userId: req.user!._id, // Strict IDOR protection
+      });
+
+      if (!device) {
+        res.status(404).json({ error: 'Device not found or access denied' });
+        return;
+      }
+
+      const { key, hash, prefix } = CryptoService.generateDeviceKey(`dkey_${device.deviceType}`);
+      device.apiKeyHash = hash;
+      device.apiKeyPrefix = prefix;
+      await device.save();
+
+      res.json({
+        success: true,
+        message: `Device key reset for ${device.deviceName}.`,
+        rawApiKey: key,
+        deviceId: device.deviceId,
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+
+  /**
    * Sends a real-time remote command to a specific device (e.g., Force Download, Trigger Sync).
    */
   static async sendRemoteCommand(req: Request, res: Response): Promise<void> {

@@ -116,6 +116,19 @@ export const DeviceManagerView: React.FC<Props> = ({
     }
   };
 
+  const handleResetKey = async (id: string, name: string) => {
+    if (!confirm(`Are you sure you want to reset the pairing key for "${name}"? You will need to enter the new key on your device to reconnect.`)) {
+      return;
+    }
+    try {
+      const res = await api.resetDeviceKey(id);
+      alert(`Key Reset Successful for ${name}!\n\nDevice ID: ${res.deviceId}\nNew Device Key: ${res.rawApiKey}\n\nPlease enter this new key in your Android app to reconnect.`);
+      onRefresh();
+    } catch (err: any) {
+      alert(err.message);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -327,13 +340,23 @@ export const DeviceManagerView: React.FC<Props> = ({
                   </button>
                 </div>
 
-                <button
-                  onClick={() => handleRevoke(device._id, device.deviceName)}
-                  className="flex items-center space-x-1.5 text-xs text-red-400/80 hover:text-red-400 font-semibold transition"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                  <span>Revoke</span>
-                </button>
+                <div className="flex items-center space-x-4">
+                  <button
+                    onClick={() => handleResetKey(device._id, device.deviceName)}
+                    className="flex items-center space-x-1.5 text-xs text-blue-400/80 hover:text-blue-400 font-semibold transition"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    <span>Reset Key</span>
+                  </button>
+
+                  <button
+                    onClick={() => handleRevoke(device._id, device.deviceName)}
+                    className="flex items-center space-x-1.5 text-xs text-red-400/80 hover:text-red-400 font-semibold transition"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Revoke</span>
+                  </button>
+                </div>
               </div>
             </div>
           ))}

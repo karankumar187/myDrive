@@ -433,6 +433,15 @@ export const api = {
     return res.json();
   },
 
+  async resetDeviceKey(id: string): Promise<any> {
+    const res = await fetchWithLoading(`${API_BASE}/devices/${id}/reset-key`, {
+      method: 'POST',
+      headers: getHeaders(),
+    });
+    if (!res.ok) throw new Error('Failed to reset device key');
+    return res.json();
+  },
+
   async getDeviceUploads(deviceId: string): Promise<{ files: FileItem[] }> {
     const res = await fetchWithLoading(`${API_BASE}/files/device/${deviceId}/uploads`, { headers: getHeaders() });
     if (!res.ok) throw new Error('Failed to fetch device uploads');

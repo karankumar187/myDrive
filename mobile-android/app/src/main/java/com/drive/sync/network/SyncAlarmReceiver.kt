@@ -32,11 +32,10 @@ class SyncAlarmReceiver : BroadcastReceiver() {
             return
         }
 
-        val rawServerUrl = (prefs.getString("server_url", "https://drive-edge-cache.karan9302451907.workers.dev") ?: "https://drive-edge-cache.karan9302451907.workers.dev").trimEnd('/')
-        val serverUrl = if (rawServerUrl.contains("onrender.com") || rawServerUrl.isBlank()) {
-            prefs.edit().putString("server_url", "https://drive-edge-cache.karan9302451907.workers.dev").apply()
-            "https://drive-edge-cache.karan9302451907.workers.dev"
-        } else rawServerUrl
+        val rawServerUrl = prefs.getString("server_url", "") ?: ""
+        val serverUrl = if (rawServerUrl.isBlank()) {
+            ""
+        } else rawServerUrl.trimEnd('/')
         val targetFolderId = prefs.getString("target_folder_id", "") ?: ""
         val wifiOnly = prefs.getBoolean("wifi_only", false)
         val chargingOnly = prefs.getBoolean("charging_only", false)
