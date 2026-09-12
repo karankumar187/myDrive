@@ -290,6 +290,7 @@ class MainActivity : ComponentActivity() {
         val prefs = getSharedPreferences("drive_prefs", Context.MODE_PRIVATE)
         val deviceId = prefs.getString("device_id", "") ?: ""
         val deviceKey = prefs.getString("device_key", "") ?: ""
+        val targetFolderId = prefs.getString("target_folder_id", "") ?: ""
         val serverUrl = normalizeServerUrl(prefs.getString("server_url", null))
         prefs.edit().putString("server_url", serverUrl).apply()
         val wifiOnly = prefs.getBoolean("wifi_only", false)
@@ -1584,7 +1585,7 @@ fun MainAppScreen(
                             launch {
                                 try {
                                     val req = Request.Builder()
-                                        .url("$baseUrl/api/v1/files/device/$deviceId/uploads?limit=200")
+                                        .url("$baseUrl/api/v1/files/device/$deviceId/uploads?limit=all")
                                         .addHeader("x-device-id", deviceId)
                                         .addHeader("x-device-key", deviceKey)
                                         .build()
@@ -1625,7 +1626,7 @@ fun MainAppScreen(
                             launch {
                                 try {
                                     val req = Request.Builder()
-                                        .url("$baseUrl/api/v1/files/device/$deviceId/inbound-sync?limit=150")
+                                        .url("$baseUrl/api/v1/files/device/$deviceId/inbound-sync?limit=all")
                                         .addHeader("x-device-id", deviceId)
                                         .addHeader("x-device-key", deviceKey)
                                         .build()

@@ -87,6 +87,7 @@ class SyncWorker(
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         SyncLogManager.init(applicationContext)
+        val prefs = applicationContext.getSharedPreferences("drive_prefs", Context.MODE_PRIVATE)
         val defaultEdgeUrl = "https://drive-edge-cache.karan9302451907.workers.dev"
         var rawServerUrl = inputData.getString("server_url")?.takeIf { it.isNotBlank() }
             ?: prefs.getString("server_url", defaultEdgeUrl)

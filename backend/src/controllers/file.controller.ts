@@ -302,15 +302,11 @@ export class FileController {
         mediaFilter.filename = { $regex: search.trim(), $options: 'i' };
       }
 
-      let parsedLimit: number | null = 200; // Default to 200 for fast web pagination; clients pass limit=all for full dataset
-      if (req.query.limit) {
-        if (req.query.limit === 'all' || req.query.limit === '-1') {
-          parsedLimit = null;
-        } else {
-          const pl = parseInt(req.query.limit as string, 10);
-          if (!isNaN(pl) && pl > 0) {
-            parsedLimit = pl;
-          }
+      let parsedLimit: number | null = null; // No artificial caps: return full gallery unless client explicitly specifies numeric limit
+      if (req.query.limit && req.query.limit !== 'all' && req.query.limit !== '-1') {
+        const pl = parseInt(req.query.limit as string, 10);
+        if (!isNaN(pl) && pl > 0) {
+          parsedLimit = pl;
         }
       }
 
@@ -1530,13 +1526,11 @@ export class FileController {
         .sort({ createdAt: -1 })
         .lean();
 
-      if (req.query.limit) {
+      if (req.query.limit && req.query.limit !== 'all' && req.query.limit !== '-1') {
         const parsedLimit = parseInt(req.query.limit as string, 10);
         if (!isNaN(parsedLimit) && parsedLimit > 0) {
           deviceFilesQuery = deviceFilesQuery.limit(parsedLimit);
         }
-      } else {
-        deviceFilesQuery = deviceFilesQuery.limit(200);
       }
 
       const files = await deviceFilesQuery;
@@ -1574,13 +1568,11 @@ export class FileController {
         .sort({ createdAt: -1 })
         .lean();
 
-      if (req.query.limit) {
+      if (req.query.limit && req.query.limit !== 'all' && req.query.limit !== '-1') {
         const parsedLimit = parseInt(req.query.limit as string, 10);
         if (!isNaN(parsedLimit) && parsedLimit > 0) {
           candidateQuery = candidateQuery.limit(parsedLimit);
         }
-      } else {
-        candidateQuery = candidateQuery.limit(150);
       }
 
       const candidateFiles: any[] = await candidateQuery;
