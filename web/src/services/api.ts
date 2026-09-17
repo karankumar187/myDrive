@@ -504,12 +504,13 @@ export const api = {
   },
 
   // Media Library & Cloudinary Endpoints
-  async getMediaAssets(params?: { folder?: string; tag?: string; search?: string; resource_type?: string }): Promise<{ resources: MediaAssetItem[]; total: number }> {
+  async getMediaAssets(params?: { folder?: string; tag?: string; search?: string; resource_type?: string; limit?: string | number }): Promise<{ resources: MediaAssetItem[]; total: number }> {
     const query = new URLSearchParams();
     if (params?.folder) query.set('folder', params.folder);
     if (params?.tag) query.set('tag', params.tag);
     if (params?.search) query.set('search', params.search);
     if (params?.resource_type) query.set('resource_type', params.resource_type);
+    query.set('limit', params?.limit ? String(params.limit) : '1000');
 
     const qs = query.toString();
     const url = `${API_BASE}/media${qs ? `?${qs}` : ''}`;

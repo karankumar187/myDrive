@@ -22,6 +22,12 @@ import {
   CheckCircle2,
   Wand2,
   ArrowLeft,
+  X,
+  Download,
+  Eye,
+  Play,
+  Filter,
+  Loader2,
 } from 'lucide-react';
 import { api } from '../services/api.js';
 import { ApiKeyItem, MediaAssetItem, User } from '../types.js';
@@ -39,8 +45,12 @@ export const MediaApiStudioView: React.FC<MediaApiStudioViewProps> = ({ currentU
   const [keys, setKeys] = useState<ApiKeyItem[]>([]);
   const [cloudName, setCloudName] = useState<string>('drive');
   const [mediaAssets, setMediaAssets] = useState<MediaAssetItem[]>([]);
+  const [totalMediaCount, setTotalMediaCount] = useState<number>(0);
   const [isLoading, setIsLoading] = useState(false);
   const [copiedText, setCopiedText] = useState<string | null>(null);
+
+  // Lightbox Media Viewer Modal state
+  const [activeModalAsset, setActiveModalAsset] = useState<MediaAssetItem | null>(null);
 
   // New Key Modal state
   const [isNewKeyModalOpen, setIsNewKeyModalOpen] = useState(false);
@@ -69,6 +79,10 @@ export const MediaApiStudioView: React.FC<MediaApiStudioViewProps> = ({ currentU
   const [transformBlur, setTransformBlur] = useState<number>(0);
   const [transformRadius, setTransformRadius] = useState<'none' | 'rounded' | 'max'>('none');
 
+  // Debounced transformation preview
+  const [debouncedTransformUrl, setDebouncedTransformUrl] = useState<string>('');
+  const [isTransforming, setIsTransforming] = useState<boolean>(false);
+
   // Test Upload Box state
   const [uploadFolder, setUploadFolder] = useState<string>('webapp');
   const [uploadTags, setUploadTags] = useState<string>('banner, media');
@@ -79,9 +93,34 @@ export const MediaApiStudioView: React.FC<MediaApiStudioViewProps> = ({ currentU
   // Filter state for assets library
   const [assetSearch, setAssetSearch] = useState('');
   const [assetFolderFilter, setAssetFolderFilter] = useState('');
+  const [assetTypeFilter, setAssetTypeFilter] = useState<'all' | 'image' | 'video' | 'pdf'>('all');
+  const [imgErrors, setImgErrors] = useState<Record<string, boolean>>({});
+  const [visibleCount, setVisibleCount] = useState<number>(48);
 
   const rawApiBase = (import.meta.env.VITE_API_URL || '').replace(/\/+$/, '');
   const apiBase = rawApiBase ? `${rawApiBase}/api/v1` : `${window.location.origin}/api/v1`;
+
+  // File type helpers
+  const isImageAsset = (asset: MediaAssetItem) => {
+    const ext = (asset.format || '').toLowerCase();
+    return asset.resource_type === 'image' || ['jpg', 'jpeg', 'png', 'webp', 'avif', 'gif', 'svg'].includes(ext);
+  };
+
+  const isPdfAsset = (asset: MediaAssetItem) => {
+    const ext = (asset.format || '').toLowerCase();
+    return ext === 'pdf' || asset.public_id.toLowerCase().endsWith('.pdf');
+  };
+
+  const isVideoAsset = (asset: MediaAssetItem) => {
+    const ext = (asset.format || '').toLowerCase();
+    return asset.resource_type === 'video' || ['mp4', 'webm', 'mov', 'avi', 'mkv'].includes(ext);
+  };
+
+  const resolveAssetUrl = (url: string | undefined, publicId: string) => {
+    if (!url) return `${apiBase}/media/${publicId}`;
+    if (url.startsWith('https://')) return url;
+    return url.replace(/^http:\/\/[^/]+\/api\/v1/, apiBase);
+  };
 
   const copyToClipboard = (text: string, label: string) => {
     navigator.clipboard.writeText(text);
@@ -94,13 +133,21 @@ export const MediaApiStudioView: React.FC<MediaApiStudioViewProps> = ({ currentU
     try {
       const [keysRes, mediaRes] = await Promise.all([
         api.getDeveloperKeys().catch(() => ({ cloudName: 'drive', keys: [] })),
-        api.getMediaAssets().catch(() => ({ resources: [], total: 0 })),
+        api.getMediaAssets({ limit: 1000 }).catch(() => ({ resources: [], total: 0 })),
       ]);
       setKeys(keysRes.keys || []);
       if (keysRes.cloudName) setCloudName(keysRes.cloudName);
-      setMediaAssets(mediaRes.resources || []);
-      if (mediaRes.resources && mediaRes.resources.length > 0 && !selectedImage) {
-        setSelectedImage(mediaRes.resources[0].public_id);
+      const resources = mediaRes.resources || [];
+      setMediaAssets(resources);
+      setTotalMediaCount(mediaRes.total || resources.length);
+
+      if (resources.length > 0 && !selectedImage) {
+        // Select an image first for the transformation playground
+        const firstImg = resources.find((a) => {
+          const ext = (a.format || '').toLowerCase();
+          return a.resource_type === 'image' || ['jpg', 'jpeg', 'png', 'webp', 'avif', 'gif', 'svg'].includes(ext);
+        });
+        setSelectedImage(firstImg ? firstImg.public_id : resources[0].public_id);
       }
     } catch (err) {
       console.error('Failed to load developer studio data:', err);
@@ -111,6 +158,15 @@ export const MediaApiStudioView: React.FC<MediaApiStudioViewProps> = ({ currentU
 
   useEffect(() => {
     loadData();
+  }, []);
+
+  // Keyboard shortcut listener (Escape to close modal)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setActiveModalAsset(null);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
   const handleCreateKey = async (e: React.FormEvent) => {
@@ -175,7 +231,7 @@ export const MediaApiStudioView: React.FC<MediaApiStudioViewProps> = ({ currentU
 
     try {
       const res = await api.uploadMediaAsset(file, uploadFolder, uploadTags);
-      setUploadStatus('Upload successful! Cloudinary payload generated:');
+      setUploadStatus('Upload successful! Asset registered in myDrive Media:');
       setUploadResponseJson(JSON.stringify(res, null, 2));
       loadData();
     } catch (err: any) {
@@ -203,9 +259,20 @@ export const MediaApiStudioView: React.FC<MediaApiStudioViewProps> = ({ currentU
 
   const activeTransformPath = getTransformPathString();
   const effectivePublicId = selectedImage || (mediaAssets[0]?.public_id ?? 'sample');
-  const previewTransformedUrl = activeTransformPath
+  const targetTransformedUrl = activeTransformPath
     ? `${apiBase}/media/image/upload/${activeTransformPath}/${effectivePublicId}`
     : `${apiBase}/media/${effectivePublicId}`;
+
+  // Debounce preview transformed URL to eliminate slider lag
+  useEffect(() => {
+    setIsTransforming(true);
+    const timer = setTimeout(() => {
+      setDebouncedTransformUrl(targetTransformedUrl);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [targetTransformedUrl]);
+
+  const previewTransformedUrl = debouncedTransformUrl || targetTransformedUrl;
 
   // Sample API key for docs
   const sampleKey = keys[0]?.apiKey || 'cld_live_your_api_key_here';
@@ -358,13 +425,13 @@ def upload_media(file_path, folder="python_media"):
               </div>
               <div>
                 <h1 className="text-2xl font-bold tracking-tight text-white flex items-center gap-2">
-                  Cloudinary Media Studio
+                  myDrive Media Studio
                   <span className="text-xs px-2.5 py-0.5 rounded-full bg-indigo-500/20 border border-indigo-500/30 text-indigo-300 font-mono">
                     v1 API
                   </span>
                 </h1>
                 <p className="text-sm text-slate-400">
-                  Programmatic media storage, API keys, on-the-fly transformations, and CDN delivery powered by your unified pooled Google Drive accounts.
+                  Programmatic media storage, API keys, real-time transformations, and CDN delivery powered by your unified pooled Google Drive accounts.
                 </p>
               </div>
             </div>
@@ -416,7 +483,7 @@ def upload_media(file_path, folder="python_media"):
           <div className="bg-slate-850 border border-slate-800/80 rounded-xl p-3">
             <div className="text-xs text-slate-400 font-medium">Media Assets</div>
             <div className="text-xl font-bold text-white mt-0.5 font-mono">
-              {mediaAssets.length}
+              {totalMediaCount || mediaAssets.length}
             </div>
           </div>
           <div className="bg-slate-850 border border-slate-800/80 rounded-xl p-3">
@@ -478,7 +545,7 @@ def upload_media(file_path, folder="python_media"):
             }`}
           >
             <ImageIcon className="w-4 h-4" />
-            Media Assets ({mediaAssets.length})
+            Media Assets ({totalMediaCount || mediaAssets.length})
           </button>
           <button
             onClick={() => setActiveTab('upload')}
@@ -603,21 +670,25 @@ def upload_media(file_path, folder="python_media"):
                 <button
                   onClick={() =>
                     copyToClipboard(
-                      `CLOUDINARY_CLOUD_NAME=${cloudName}\nCLOUDINARY_API_KEY=${sampleKey}\nCLOUDINARY_API_SECRET=${sampleSecret}\nMYDRIVE_MEDIA_URL=${apiBase}/media`,
+                      `MYDRIVE_MEDIA_KEY=${sampleKey}\nMYDRIVE_MEDIA_SECRET=${sampleSecret}\nMYDRIVE_MEDIA_URL=${apiBase}/media\n# Drop-in Cloudinary SDK compatibility:\nCLOUDINARY_CLOUD_NAME=${cloudName}\nCLOUDINARY_API_KEY=${sampleKey}\nCLOUDINARY_API_SECRET=${sampleSecret}`,
                       'env_snippet'
                     )
                   }
-                  className="flex items-center gap-1.5 text-xs text-indigo-400 hover:text-indigo-300 transition"
+                  className="flex items-center gap-1.5 text-xs text-indigo-400 hover:text-indigo-300 transition cursor-pointer"
                 >
-                  {copiedText === 'env_snippet' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                  {copiedText === 'env_snippet' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
                   Copy .env block
                 </button>
               </div>
               <pre className="bg-slate-900 border border-slate-800 p-3.5 rounded-xl font-mono text-xs text-slate-300 overflow-x-auto">
-                {`CLOUDINARY_CLOUD_NAME=${cloudName}
+                {`MYDRIVE_MEDIA_KEY=${sampleKey}
+MYDRIVE_MEDIA_SECRET=${sampleSecret}
+MYDRIVE_MEDIA_URL=${apiBase}/media
+
+# Optional: Drop-in Cloudinary SDK Compatibility
+CLOUDINARY_CLOUD_NAME=${cloudName}
 CLOUDINARY_API_KEY=${sampleKey}
-CLOUDINARY_API_SECRET=${sampleSecret}
-MYDRIVE_MEDIA_URL=${apiBase}/media`}
+CLOUDINARY_API_SECRET=${sampleSecret}`}
               </pre>
             </div>
           </div>
@@ -648,11 +719,24 @@ MYDRIVE_MEDIA_URL=${apiBase}/media`}
                     onChange={(e) => setSelectedImage(e.target.value)}
                     className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 font-mono"
                   >
-                    {mediaAssets.map((asset) => (
-                      <option key={asset.public_id} value={asset.public_id}>
-                        {asset.public_id} ({asset.format.toUpperCase()})
-                      </option>
-                    ))}
+                    {mediaAssets.filter(isImageAsset).length > 0 && (
+                      <optgroup label="Images (Real-time Sharp Transformations)">
+                        {mediaAssets.filter(isImageAsset).map((asset) => (
+                          <option key={asset.public_id} value={asset.public_id}>
+                            {asset.public_id} ({asset.format.toUpperCase()})
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
+                    {mediaAssets.filter((a) => !isImageAsset(a)).length > 0 && (
+                      <optgroup label="Documents & Other Media">
+                        {mediaAssets.filter((a) => !isImageAsset(a)).map((asset) => (
+                          <option key={asset.public_id} value={asset.public_id}>
+                            {asset.public_id} ({asset.format.toUpperCase()})
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
                   </select>
                 )}
               </div>
@@ -828,13 +912,42 @@ MYDRIVE_MEDIA_URL=${apiBase}/media`}
 
                 {/* Transformed Image Frame */}
                 <div className="flex-1 min-h-[300px] flex items-center justify-center bg-slate-900/60 border border-slate-800/80 rounded-xl p-4 overflow-hidden relative checkerboard-bg">
+                  {isTransforming && (
+                    <div className="absolute top-3 right-3 z-10 px-2.5 py-1 bg-slate-900/90 border border-slate-700 text-indigo-400 rounded-lg text-xs flex items-center gap-1.5 shadow-lg backdrop-blur">
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Transforming...</span>
+                    </div>
+                  )}
+
                   {effectivePublicId && effectivePublicId !== 'sample' ? (
-                    <img
-                      key={previewTransformedUrl}
-                      src={previewTransformedUrl}
-                      alt="Transformed Preview"
-                      className="max-h-[360px] max-w-full object-contain shadow-2xl rounded"
-                    />
+                    isPdfAsset({ public_id: effectivePublicId } as any) ? (
+                      <div className="flex flex-col items-center justify-center p-6 text-center">
+                        <FileText className="w-16 h-16 text-rose-400 mb-3" />
+                        <h4 className="text-sm font-semibold text-white">Document Asset Selected</h4>
+                        <p className="text-xs text-slate-400 max-w-sm mt-1 mb-3">
+                          On-the-fly Sharp transformations (resize, crop, blur, format conversion) apply to image assets (JPG, PNG, WebP, AVIF, GIF).
+                        </p>
+                        <a
+                          href={`${apiBase}/media/${effectivePublicId}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-xl inline-flex items-center gap-1.5"
+                        >
+                          <ExternalLink className="w-3.5 h-3.5" /> View PDF Document
+                        </a>
+                      </div>
+                    ) : (
+                      <img
+                        key={previewTransformedUrl}
+                        src={previewTransformedUrl}
+                        alt="Transformed Preview"
+                        onLoad={() => setIsTransforming(false)}
+                        onError={() => setIsTransforming(false)}
+                        className={`max-h-[360px] max-w-full object-contain shadow-2xl rounded transition-opacity duration-200 ${
+                          isTransforming ? 'opacity-70' : 'opacity-100'
+                        }`}
+                      />
+                    )
                   ) : (
                     <div className="text-center text-slate-500 text-xs">
                       Upload an asset to preview live transformations.
@@ -845,7 +958,7 @@ MYDRIVE_MEDIA_URL=${apiBase}/media`}
                 {/* Generated Transformation URL Box */}
                 <div className="mt-4 space-y-2">
                   <div className="flex items-center justify-between text-xs text-slate-400">
-                    <span>Generated Cloudinary-compatible URL:</span>
+                    <span>Generated Delivery URL:</span>
                     <div className="flex gap-2">
                       <button
                         onClick={() => copyToClipboard(previewTransformedUrl, 'url')}
@@ -953,136 +1066,338 @@ MYDRIVE_MEDIA_URL=${apiBase}/media`}
         )}
 
         {/* TAB 4: MEDIA ASSETS LIBRARY */}
-        {activeTab === 'assets' && (
-          <div className="space-y-6">
-            <div className="bg-slate-950/80 border border-slate-800 rounded-2xl p-6 shadow-xl">
-              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
-                <div>
-                  <h2 className="text-lg font-semibold text-white">Media Assets Library</h2>
-                  <p className="text-xs text-slate-400 mt-0.5">
-                    Images and videos uploaded programmatically via API keys or saved in your cloud media folders.
-                  </p>
-                </div>
-                <div className="flex items-center gap-3">
-                  <input
-                    type="text"
-                    placeholder="Search by name, folder or tag..."
-                    value={assetSearch}
-                    onChange={(e) => setAssetSearch(e.target.value)}
-                    className="bg-slate-900 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 w-56"
-                  />
-                  <button
-                    onClick={loadData}
-                    className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition"
-                  >
-                    <RefreshCw className="w-4 h-4" />
-                  </button>
-                </div>
-              </div>
+        {activeTab === 'assets' && (() => {
+          const imageAssets = mediaAssets.filter(isImageAsset);
+          const videoAssets = mediaAssets.filter(isVideoAsset);
+          const docAssets = mediaAssets.filter(isPdfAsset);
 
-              {mediaAssets.length === 0 ? (
-                <div className="text-center py-16 border border-dashed border-slate-800 rounded-2xl">
-                  <ImageIcon className="w-12 h-12 text-slate-600 mx-auto mb-3" />
-                  <h3 className="text-base font-semibold text-white">No Media Uploaded Yet</h3>
-                  <p className="text-xs text-slate-400 max-w-sm mx-auto mt-1 mb-4">
-                    Upload assets using the API Test Dropzone or via your application API keys.
-                  </p>
-                  <button
-                    onClick={() => setActiveTab('upload')}
-                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-xl inline-flex items-center gap-2"
-                  >
-                    <UploadCloud className="w-4 h-4" />
-                    Go to API Test Dropzone
-                  </button>
-                </div>
-              ) : (
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
-                  {mediaAssets
-                    .filter((a) => {
-                      if (assetSearch) {
-                        const q = assetSearch.toLowerCase();
-                        return (
-                          a.public_id.toLowerCase().includes(q) ||
-                          a.tags?.some((t) => t.toLowerCase().includes(q))
-                        );
-                      }
-                      return true;
-                    })
-                    .map((asset) => (
-                      <div
-                        key={asset.asset_id}
-                        className="group bg-slate-900 border border-slate-800 hover:border-indigo-500/50 rounded-xl overflow-hidden flex flex-col transition-all shadow-md"
+          const availableFolders = Array.from(
+            new Set(
+              mediaAssets
+                .map((a) => {
+                  const parts = a.public_id.split('/');
+                  return parts.length > 1 ? parts.slice(0, -1).join('/') : null;
+                })
+                .filter(Boolean) as string[]
+            )
+          );
+
+          const filteredAssets = mediaAssets.filter((a) => {
+            if (assetTypeFilter === 'image' && !isImageAsset(a)) return false;
+            if (assetTypeFilter === 'video' && !isVideoAsset(a)) return false;
+            if (assetTypeFilter === 'pdf' && !isPdfAsset(a)) return false;
+            if (assetFolderFilter && !a.public_id.toLowerCase().startsWith(`${assetFolderFilter.toLowerCase()}/`)) return false;
+            if (assetSearch) {
+              const q = assetSearch.toLowerCase();
+              return a.public_id.toLowerCase().includes(q) || a.tags?.some((t) => t.toLowerCase().includes(q));
+            }
+            return true;
+          });
+
+          const displayedAssets = filteredAssets.slice(0, visibleCount);
+
+          return (
+            <div className="space-y-6">
+              <div className="bg-slate-950/80 border border-slate-800 rounded-2xl p-6 shadow-xl">
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
+                  <div>
+                    <h2 className="text-lg font-semibold text-white">Media Assets Library</h2>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      Images, videos, and documents stored programmatically via API keys or saved in your cloud folders.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+                    {availableFolders.length > 0 && (
+                      <select
+                        value={assetFolderFilter}
+                        onChange={(e) => setAssetFolderFilter(e.target.value)}
+                        className="bg-slate-900 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-slate-300 focus:outline-none focus:border-indigo-500 font-mono cursor-pointer"
                       >
-                        <div className="relative aspect-square bg-slate-950/80 flex items-center justify-center overflow-hidden">
-                          <img
-                            src={asset.thumbnail_url || asset.url}
-                            alt={asset.public_id}
-                            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                            loading="lazy"
-                          />
-                          <span className="absolute top-2 right-2 px-2 py-0.5 bg-slate-950/80 backdrop-blur rounded text-[10px] font-mono text-indigo-300 border border-slate-700/60 uppercase">
-                            {asset.format}
-                          </span>
-                        </div>
-
-                        <div className="p-3 flex-1 flex flex-col justify-between space-y-2">
-                          <div>
-                            <div
-                              className="text-xs font-mono font-medium text-white truncate"
-                              title={asset.public_id}
-                            >
-                              {asset.public_id}
-                            </div>
-                            <div className="text-[11px] text-slate-400 flex items-center justify-between mt-1">
-                              <span>{formatBytes(asset.bytes)}</span>
-                              {asset.width && asset.height && (
-                                <span className="font-mono text-slate-500">
-                                  {asset.width}x{asset.height}
-                                </span>
-                              )}
-                            </div>
-                          </div>
-
-                          <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between">
-                            <button
-                              onClick={() => {
-                                setSelectedImage(asset.public_id);
-                                setActiveTab('playground');
-                              }}
-                              className="text-[11px] text-indigo-400 hover:text-indigo-300 font-medium"
-                            >
-                              Transform
-                            </button>
-
-                            <div className="flex items-center gap-1">
-                              <button
-                                onClick={() => copyToClipboard(asset.secure_url, `url_${asset.asset_id}`)}
-                                className="p-1 hover:bg-slate-800 rounded text-slate-400 hover:text-white"
-                                title="Copy direct secure URL"
-                              >
-                                {copiedText === `url_${asset.asset_id}` ? (
-                                  <Check className="w-3.5 h-3.5 text-emerald-400" />
-                                ) : (
-                                  <Copy className="w-3.5 h-3.5" />
-                                )}
-                              </button>
-                              <button
-                                onClick={() => handleDeleteAsset(asset.public_id)}
-                                className="p-1 hover:bg-rose-500/20 rounded text-slate-400 hover:text-rose-400"
-                                title="Delete media asset"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
+                        <option value="">All Folders ({availableFolders.length})</option>
+                        {availableFolders.map((f) => (
+                          <option key={f} value={f}>
+                            📁 {f}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                    <input
+                      type="text"
+                      placeholder="Search by name or tag..."
+                      value={assetSearch}
+                      onChange={(e) => setAssetSearch(e.target.value)}
+                      className="bg-slate-900 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 w-48 sm:w-56"
+                    />
+                    <button
+                      onClick={loadData}
+                      className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition cursor-pointer"
+                      title="Refresh library"
+                    >
+                      <RefreshCw className="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
-              )}
+
+                {/* Filter Pills */}
+                <div className="flex items-center gap-2 mb-6 overflow-x-auto pb-1 scrollbar-none">
+                  <button
+                    onClick={() => setAssetTypeFilter('all')}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-medium transition cursor-pointer flex items-center gap-1.5 ${
+                      assetTypeFilter === 'all'
+                        ? 'bg-indigo-600 text-white shadow-sm'
+                        : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
+                    }`}
+                  >
+                    <span>All Media</span>
+                    <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-slate-950/60 font-mono">
+                      {mediaAssets.length}
+                    </span>
+                  </button>
+                  <button
+                    onClick={() => setAssetTypeFilter('image')}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-medium transition cursor-pointer flex items-center gap-1.5 ${
+                      assetTypeFilter === 'image'
+                        ? 'bg-indigo-600 text-white shadow-sm'
+                        : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
+                    }`}
+                  >
+                    <ImageIcon className="w-3.5 h-3.5" />
+                    <span>Images</span>
+                    <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-slate-950/60 font-mono">
+                      {imageAssets.length}
+                    </span>
+                  </button>
+                  <button
+                    onClick={() => setAssetTypeFilter('video')}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-medium transition cursor-pointer flex items-center gap-1.5 ${
+                      assetTypeFilter === 'video'
+                        ? 'bg-indigo-600 text-white shadow-sm'
+                        : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
+                    }`}
+                  >
+                    <Play className="w-3.5 h-3.5" />
+                    <span>Videos</span>
+                    <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-slate-950/60 font-mono">
+                      {videoAssets.length}
+                    </span>
+                  </button>
+                  <button
+                    onClick={() => setAssetTypeFilter('pdf')}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-medium transition cursor-pointer flex items-center gap-1.5 ${
+                      assetTypeFilter === 'pdf'
+                        ? 'bg-indigo-600 text-white shadow-sm'
+                        : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
+                    }`}
+                  >
+                    <FileText className="w-3.5 h-3.5" />
+                    <span>Documents & PDFs</span>
+                    <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-slate-950/60 font-mono">
+                      {docAssets.length}
+                    </span>
+                  </button>
+                </div>
+
+                {filteredAssets.length === 0 ? (
+                  <div className="text-center py-16 border border-dashed border-slate-800 rounded-2xl">
+                    <ImageIcon className="w-12 h-12 text-slate-600 mx-auto mb-3" />
+                    <h3 className="text-base font-semibold text-white">No Matching Media Found</h3>
+                    <p className="text-xs text-slate-400 max-w-sm mx-auto mt-1 mb-4">
+                      {assetSearch || assetFolderFilter || assetTypeFilter !== 'all'
+                        ? 'Try clearing your search filters or selecting another category.'
+                        : 'Upload assets using the API Test Dropzone or via your application API keys.'}
+                    </p>
+                    {assetSearch || assetFolderFilter || assetTypeFilter !== 'all' ? (
+                      <button
+                        onClick={() => {
+                          setAssetSearch('');
+                          setAssetFolderFilter('');
+                          setAssetTypeFilter('all');
+                        }}
+                        className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white text-xs font-semibold rounded-xl"
+                      >
+                        Reset All Filters
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => setActiveTab('upload')}
+                        className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-xl inline-flex items-center gap-2"
+                      >
+                        <UploadCloud className="w-4 h-4" />
+                        Go to API Test Dropzone
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+                      {displayedAssets.map((asset) => {
+                        const isDoc = isPdfAsset(asset);
+                        const isVid = isVideoAsset(asset);
+                        const isImg = isImageAsset(asset);
+
+                        return (
+                          <div
+                            key={asset.asset_id}
+                            className="group bg-slate-900 border border-slate-800 hover:border-indigo-500/50 rounded-xl overflow-hidden flex flex-col transition-all shadow-md hover:shadow-indigo-500/10"
+                          >
+                            <div
+                              onClick={() => setActiveModalAsset(asset)}
+                              className="relative aspect-square bg-slate-950/80 flex items-center justify-center overflow-hidden cursor-pointer"
+                            >
+                              {isDoc ? (
+                                <div className="flex flex-col items-center justify-center p-3 text-center w-full h-full select-none">
+                                  <div className="w-12 h-12 rounded-2xl bg-rose-500/10 border border-rose-500/20 flex items-center justify-center mb-2 group-hover:scale-110 transition-transform">
+                                    <FileText className="w-6 h-6 text-rose-400" />
+                                  </div>
+                                  <span className="text-[11px] font-medium text-slate-200 line-clamp-2 px-2 text-center break-all">
+                                    {asset.public_id.split('/').pop()}
+                                  </span>
+                                  <span className="text-[10px] text-rose-400 font-semibold mt-1">
+                                    PDF Document
+                                  </span>
+                                </div>
+                              ) : isVid ? (
+                                <div className="flex flex-col items-center justify-center p-3 text-center w-full h-full select-none">
+                                  <div className="w-12 h-12 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center mb-2 group-hover:scale-110 transition-transform">
+                                    <Play className="w-6 h-6 text-indigo-400 fill-indigo-400/20" />
+                                  </div>
+                                  <span className="text-[11px] font-medium text-slate-200 line-clamp-2 px-2 text-center break-all">
+                                    {asset.public_id.split('/').pop()}
+                                  </span>
+                                  <span className="text-[10px] text-indigo-400 font-semibold mt-1 uppercase">
+                                    {asset.format} Video
+                                  </span>
+                                </div>
+                              ) : isImg && !imgErrors[asset.asset_id] ? (
+                                <img
+                                  src={resolveAssetUrl(asset.thumbnail_url || asset.url, asset.public_id)}
+                                  alt={asset.public_id}
+                                  className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                                  loading="lazy"
+                                  onError={() => setImgErrors((prev) => ({ ...prev, [asset.asset_id]: true }))}
+                                />
+                              ) : (
+                                <div className="flex flex-col items-center justify-center p-3 text-center w-full h-full">
+                                  <div className="w-12 h-12 rounded-2xl bg-slate-800 border border-slate-700 flex items-center justify-center mb-2">
+                                    <ImageIcon className="w-6 h-6 text-slate-400" />
+                                  </div>
+                                  <span className="text-[11px] font-medium text-slate-300 truncate max-w-[120px]">
+                                    {asset.public_id.split('/').pop()}
+                                  </span>
+                                  <span className="text-[10px] text-slate-500 mt-1 uppercase">
+                                    {asset.format}
+                                  </span>
+                                </div>
+                              )}
+
+                              <span
+                                className={`absolute top-2 right-2 px-2 py-0.5 backdrop-blur rounded text-[10px] font-mono border uppercase ${
+                                  isDoc
+                                    ? 'bg-rose-950/80 text-rose-300 border-rose-700/60'
+                                    : isVid
+                                    ? 'bg-indigo-950/80 text-indigo-300 border-indigo-700/60'
+                                    : 'bg-slate-950/80 text-indigo-300 border-slate-700/60'
+                                }`}
+                              >
+                                {asset.format}
+                              </span>
+
+                              {/* Hover overlay */}
+                              <div className="absolute inset-0 bg-slate-950/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                                <span className="px-2.5 py-1 bg-indigo-600/90 text-white rounded-lg text-[11px] font-medium flex items-center gap-1 shadow-lg">
+                                  <Eye className="w-3 h-3" />
+                                  Open
+                                </span>
+                              </div>
+                            </div>
+
+                            <div className="p-3 flex-1 flex flex-col justify-between space-y-2">
+                              <div>
+                                <div
+                                  onClick={() => setActiveModalAsset(asset)}
+                                  className="text-xs font-mono font-medium text-white truncate cursor-pointer hover:text-indigo-400 transition"
+                                  title={asset.public_id}
+                                >
+                                  {asset.public_id}
+                                </div>
+                                <div className="text-[11px] text-slate-400 flex items-center justify-between mt-1">
+                                  <span>{formatBytes(asset.bytes)}</span>
+                                  {asset.width && asset.height && (
+                                    <span className="font-mono text-slate-500">
+                                      {asset.width}x{asset.height}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+
+                              <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between">
+                                {isImg ? (
+                                  <button
+                                    onClick={() => {
+                                      setSelectedImage(asset.public_id);
+                                      setActiveTab('playground');
+                                    }}
+                                    className="text-[11px] text-indigo-400 hover:text-indigo-300 font-medium cursor-pointer"
+                                  >
+                                    Transform
+                                  </button>
+                                ) : (
+                                  <button
+                                    onClick={() => setActiveModalAsset(asset)}
+                                    className="text-[11px] text-slate-400 hover:text-slate-200 font-medium cursor-pointer"
+                                  >
+                                    Preview
+                                  </button>
+                                )}
+
+                                <div className="flex items-center gap-1">
+                                  <button
+                                    onClick={() =>
+                                      copyToClipboard(
+                                        resolveAssetUrl(asset.secure_url || asset.url, asset.public_id),
+                                        `url_${asset.asset_id}`
+                                      )
+                                    }
+                                    className="p-1 hover:bg-slate-800 rounded text-slate-400 hover:text-white transition cursor-pointer"
+                                    title="Copy direct secure URL"
+                                  >
+                                    {copiedText === `url_${asset.asset_id}` ? (
+                                      <Check className="w-3.5 h-3.5 text-emerald-400" />
+                                    ) : (
+                                      <Copy className="w-3.5 h-3.5" />
+                                    )}
+                                  </button>
+                                  <button
+                                    onClick={() => handleDeleteAsset(asset.public_id)}
+                                    className="p-1 hover:bg-rose-500/20 rounded text-slate-400 hover:text-rose-400 transition cursor-pointer"
+                                    title="Delete media asset"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {filteredAssets.length > visibleCount && (
+                      <div className="mt-8 text-center">
+                        <button
+                          onClick={() => setVisibleCount((prev) => prev + 48)}
+                          className="px-5 py-2.5 bg-slate-900 hover:bg-slate-800 text-slate-200 text-xs font-semibold rounded-xl border border-slate-700 transition cursor-pointer shadow-sm"
+                        >
+                          Load More Media ({filteredAssets.length - visibleCount} remaining)
+                        </button>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         {/* TAB 5: API TEST DROPZONE */}
         {activeTab === 'upload' && (
@@ -1092,7 +1407,7 @@ MYDRIVE_MEDIA_URL=${apiBase}/media`}
                 <div>
                   <h2 className="text-lg font-semibold text-white">API Test Upload Dropzone</h2>
                   <p className="text-xs text-slate-400 mt-0.5">
-                    Test the programmatic upload pipeline directly from your browser to verify pooling, metadata extraction, and Cloudinary-format JSON responses.
+                    Test the programmatic upload pipeline directly from your browser to verify pooling, metadata extraction, and response payloads.
                   </p>
                 </div>
 
@@ -1150,7 +1465,7 @@ MYDRIVE_MEDIA_URL=${apiBase}/media`}
                 {uploadResponseJson && (
                   <div className="space-y-2">
                     <div className="flex items-center justify-between text-xs text-slate-400">
-                      <span>Cloudinary API Response:</span>
+                      <span>myDrive API Response:</span>
                       <button
                         onClick={() => copyToClipboard(uploadResponseJson, 'json')}
                         className="text-indigo-400 hover:text-indigo-300 flex items-center gap-1 font-medium"
@@ -1249,13 +1564,13 @@ MYDRIVE_MEDIA_URL=${apiBase}/media`}
               <button
                 onClick={() =>
                   copyToClipboard(
-                    `CLOUDINARY_CLOUD_NAME=${cloudName}\nCLOUDINARY_API_KEY=${createdSecretData.apiKey}\nCLOUDINARY_API_SECRET=${createdSecretData.apiSecret}`,
+                    `MYDRIVE_MEDIA_KEY=${createdSecretData.apiKey}\nMYDRIVE_MEDIA_SECRET=${createdSecretData.apiSecret}\nMYDRIVE_MEDIA_URL=${apiBase}/media\n# Drop-in Cloudinary SDK compatibility:\nCLOUDINARY_CLOUD_NAME=${cloudName}\nCLOUDINARY_API_KEY=${createdSecretData.apiKey}\nCLOUDINARY_API_SECRET=${createdSecretData.apiSecret}`,
                     'full_secret'
                   )
                 }
-                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-indigo-300 text-xs font-semibold rounded-xl inline-flex items-center gap-1.5 transition"
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-indigo-300 text-xs font-semibold rounded-xl inline-flex items-center gap-1.5 transition cursor-pointer"
               >
-                {copiedText === 'full_secret' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                {copiedText === 'full_secret' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
                 Copy Credentials (.env)
               </button>
 
@@ -1264,7 +1579,7 @@ MYDRIVE_MEDIA_URL=${apiBase}/media`}
                   setCreatedSecretData(null);
                   setIsNewKeyModalOpen(false);
                 }}
-                className="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-xl shadow transition"
+                className="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-xl shadow transition cursor-pointer"
               >
                 Done & Close
               </button>
@@ -1279,7 +1594,7 @@ MYDRIVE_MEDIA_URL=${apiBase}/media`}
           <div className="bg-slate-950 border border-slate-800 rounded-2xl max-w-sm w-full p-6 shadow-2xl space-y-4">
             <h3 className="text-base font-bold text-white">Customize Cloud Name</h3>
             <p className="text-xs text-slate-400">
-              Your cloud name is your public namespace for Cloudinary-style delivery URLs.
+              Your cloud name is your public namespace identifier for media asset delivery URLs.
             </p>
 
             <form onSubmit={handleUpdateCloudName} className="space-y-4">
@@ -1298,18 +1613,203 @@ MYDRIVE_MEDIA_URL=${apiBase}/media`}
                 <button
                   type="button"
                   onClick={() => setIsCloudNameModalOpen(false)}
-                  className="px-4 py-2 bg-slate-800 text-slate-300 text-xs font-semibold rounded-xl"
+                  className="px-4 py-2 bg-slate-800 text-slate-300 text-xs font-semibold rounded-xl cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-xl"
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-xl cursor-pointer"
                 >
                   Save Changes
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 4: Media Preview Lightbox Modal */}
+      {activeModalAsset && (
+        <div
+          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 sm:p-6"
+          onClick={() => setActiveModalAsset(null)}
+        >
+          <div
+            className="bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl max-w-4xl w-full max-h-[90vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-150"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between bg-slate-950/80">
+              <div className="flex items-center gap-3 overflow-hidden">
+                <div
+                  className={`p-2 rounded-xl border ${
+                    isPdfAsset(activeModalAsset)
+                      ? 'bg-rose-500/10 border-rose-500/20 text-rose-400'
+                      : isVideoAsset(activeModalAsset)
+                      ? 'bg-indigo-500/10 border-indigo-500/20 text-indigo-400'
+                      : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
+                  }`}
+                >
+                  {isPdfAsset(activeModalAsset) ? (
+                    <FileText className="w-5 h-5" />
+                  ) : isVideoAsset(activeModalAsset) ? (
+                    <Play className="w-5 h-5" />
+                  ) : (
+                    <ImageIcon className="w-5 h-5" />
+                  )}
+                </div>
+                <div className="overflow-hidden">
+                  <h3 className="text-sm font-semibold text-white truncate" title={activeModalAsset.public_id}>
+                    {activeModalAsset.public_id}
+                  </h3>
+                  <div className="text-xs text-slate-400 flex items-center gap-2 mt-0.5">
+                    <span className="font-mono uppercase">{activeModalAsset.format}</span>
+                    <span>•</span>
+                    <span>{formatBytes(activeModalAsset.bytes)}</span>
+                    {activeModalAsset.width && activeModalAsset.height && (
+                      <>
+                        <span>•</span>
+                        <span>
+                          {activeModalAsset.width} × {activeModalAsset.height} px
+                        </span>
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <a
+                  href={resolveAssetUrl(activeModalAsset.url, activeModalAsset.public_id)}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition cursor-pointer"
+                  title="Open in new window"
+                >
+                  <ExternalLink className="w-4 h-4" />
+                </a>
+                <button
+                  onClick={() => setActiveModalAsset(null)}
+                  className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition cursor-pointer"
+                  title="Close viewer (Esc)"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            {/* Modal Main Content */}
+            <div className="flex-1 overflow-y-auto p-6 flex flex-col items-center justify-center bg-slate-950/40 min-h-[360px]">
+              {isPdfAsset(activeModalAsset) ? (
+                <div className="w-full h-full flex flex-col items-center justify-center p-8 bg-slate-900/80 border border-slate-800 rounded-2xl text-center">
+                  <div className="w-20 h-20 rounded-3xl bg-rose-500/10 border border-rose-500/20 flex items-center justify-center mb-4">
+                    <FileText className="w-10 h-10 text-rose-400" />
+                  </div>
+                  <h4 className="text-base font-semibold text-white mb-1">PDF Document</h4>
+                  <p className="text-xs text-slate-400 max-w-md mb-6 break-all font-mono">
+                    {activeModalAsset.public_id}
+                  </p>
+                  <div className="flex flex-wrap items-center justify-center gap-3">
+                    <a
+                      href={resolveAssetUrl(activeModalAsset.url, activeModalAsset.public_id)}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-xl inline-flex items-center gap-2 shadow-lg shadow-indigo-500/20 transition cursor-pointer"
+                    >
+                      <ExternalLink className="w-4 h-4" />
+                      Open PDF in New Window
+                    </a>
+                    <a
+                      href={resolveAssetUrl(activeModalAsset.url, activeModalAsset.public_id)}
+                      download
+                      className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-xl inline-flex items-center gap-2 border border-slate-700 transition cursor-pointer"
+                    >
+                      <Download className="w-4 h-4" />
+                      Download PDF
+                    </a>
+                  </div>
+                </div>
+              ) : isVideoAsset(activeModalAsset) ? (
+                <div className="w-full flex items-center justify-center">
+                  <video
+                    src={resolveAssetUrl(activeModalAsset.url, activeModalAsset.public_id)}
+                    controls
+                    autoPlay
+                    className="max-h-[60vh] max-w-full rounded-xl shadow-2xl border border-slate-800"
+                  />
+                </div>
+              ) : isImageAsset(activeModalAsset) ? (
+                <div className="w-full flex items-center justify-center">
+                  <img
+                    src={resolveAssetUrl(activeModalAsset.url, activeModalAsset.public_id)}
+                    alt={activeModalAsset.public_id}
+                    className="max-h-[60vh] max-w-full object-contain rounded-xl shadow-2xl border border-slate-800"
+                  />
+                </div>
+              ) : (
+                <div className="text-center p-8">
+                  <p className="text-slate-400 text-sm">Preview not supported for this file format.</p>
+                  <a
+                    href={resolveAssetUrl(activeModalAsset.url, activeModalAsset.public_id)}
+                    download
+                    className="mt-4 px-4 py-2 bg-indigo-600 text-white rounded-xl text-xs font-semibold inline-flex items-center gap-2"
+                  >
+                    <Download className="w-4 h-4" /> Download File
+                  </a>
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer with URL & Quick Actions */}
+            <div className="px-6 py-4 border-t border-slate-800 bg-slate-950/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex-1 min-w-0">
+                <div className="text-[11px] text-slate-400 mb-1 flex items-center gap-2">
+                  <span>Direct Delivery URL:</span>
+                  <button
+                    onClick={() =>
+                      copyToClipboard(
+                        resolveAssetUrl(activeModalAsset.secure_url || activeModalAsset.url, activeModalAsset.public_id),
+                        'modal_url'
+                      )
+                    }
+                    className="text-indigo-400 hover:text-indigo-300 font-medium flex items-center gap-1 text-[11px] cursor-pointer"
+                  >
+                    {copiedText === 'modal_url' ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                    {copiedText === 'modal_url' ? 'Copied' : 'Copy'}
+                  </button>
+                </div>
+                <div className="font-mono text-xs text-emerald-400 truncate bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1 select-all">
+                  {resolveAssetUrl(activeModalAsset.secure_url || activeModalAsset.url, activeModalAsset.public_id)}
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 self-end sm:self-center">
+                {isImageAsset(activeModalAsset) && (
+                  <button
+                    onClick={() => {
+                      setSelectedImage(activeModalAsset.public_id);
+                      setActiveTab('playground');
+                      setActiveModalAsset(null);
+                    }}
+                    className="px-3 py-1.5 bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-300 border border-indigo-500/40 rounded-xl text-xs font-medium flex items-center gap-1.5 transition cursor-pointer"
+                  >
+                    <Sliders className="w-3.5 h-3.5" />
+                    Transform in Studio
+                  </button>
+                )}
+                <button
+                  onClick={() => {
+                    handleDeleteAsset(activeModalAsset.public_id);
+                    setActiveModalAsset(null);
+                  }}
+                  className="px-3 py-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 rounded-xl text-xs font-medium flex items-center gap-1.5 transition cursor-pointer"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  Delete
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

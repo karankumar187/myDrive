@@ -359,8 +359,14 @@ export class MediaController {
 
       // Non-image (Video / Audio / Raw): stream directly
       const localOriginal = path.join(ORIGINALS_DIR, `${file._id}.bin`);
+      const effectiveMime = file.mimeType || 'application/octet-stream';
+      const disposition = effectiveMime === 'application/pdf' ? 'inline' : 'attachment';
+      const safeFilename = file.filename || path.basename(file.publicId || 'media');
+      const encodedFilename = encodeURIComponent(safeFilename);
+
       if (fs.existsSync(localOriginal)) {
-        res.setHeader('Content-Type', file.mimeType || 'application/octet-stream');
+        res.setHeader('Content-Type', effectiveMime);
+        res.setHeader('Content-Disposition', `${disposition}; filename="${safeFilename}"; filename*=UTF-8''${encodedFilename}`);
         res.setHeader('Accept-Ranges', 'bytes');
         res.setHeader('Cache-Control', 'public, max-age=86400');
         fs.createReadStream(localOriginal).pipe(res);
@@ -373,7 +379,8 @@ export class MediaController {
         const account = await StorageAccount.findById(latestVersion.storageAccountId);
         if (account) {
           const driveStream = await GoogleDriveService.getFileStream(account, latestVersion.providerFileId, req.headers.range);
-          res.setHeader('Content-Type', file.mimeType || 'video/mp4');
+          res.setHeader('Content-Type', effectiveMime);
+          res.setHeader('Content-Disposition', `${disposition}; filename="${safeFilename}"; filename*=UTF-8''${encodedFilename}`);
           res.setHeader('Accept-Ranges', 'bytes');
           if (driveStream.status === 206) {
             res.status(206);
@@ -401,7 +408,13 @@ export class MediaController {
       const tag = req.query.tag as string;
       const resourceType = req.query.resource_type as string;
       const search = req.query.search as string;
-      const limit = Math.min(100, Math.max(1, parseInt((req.query.limit as string) || '50', 10)));
+      const rawLimit = req.query.limit as string;
+      let limit = 500;
+      if (rawLimit === 'all') {
+        limit = 10000;
+      } else if (rawLimit) {
+        limit = Math.min(10000, Math.max(1, parseInt(rawLimit, 10)));
+      }
 
       const filter: any = {
         userId,
@@ -429,38 +442,63 @@ export class MediaController {
         ];
       }
 
-      const files = await File.find(filter)
-        .sort({ createdAt: -1 })
-        .limit(limit)
-        .lean();
+      const [files, total] = await Promise.all([
+        File.find(filter)
+          .sort({ createdAt: -1 })
+          .limit(limit)
+          .lean(),
+        File.countDocuments(filter),
+      ]);
 
-      const host = req.get('host') || 'localhost:5001';
-      const protocol = req.protocol === 'https' || req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
-      const baseUrl = `${protocol}://${host}`;
+      const forwardedHost = (req.headers['x-forwarded-host'] as string) || req.get('host') || 'localhost:5001';
+      const forwardedProto = req.headers['x-forwarded-proto'] as string;
+      const isHttps = forwardedProto === 'https' || req.protocol === 'https';
+      const protocol = isHttps ? 'https' : 'http';
+      const baseUrl = `${protocol}://${forwardedHost}`;
 
       const resources = files.map((f: any) => {
         const publicId = f.publicId || f.filename;
-        const ext = f.mimeType?.split('/')[1] || 'webp';
+        const ext = f.mimeType?.split('/')[1] || path.extname(f.filename || '').replace(/^\./, '') || 'bin';
+        const isImage = f.mimeType?.startsWith('image/') || f.resourceType === 'image';
+        const isVideo = f.mimeType?.startsWith('video/') || f.resourceType === 'video';
+
+        let rType = f.resourceType;
+        if (!rType) {
+          if (isImage) rType = 'image';
+          else if (isVideo) rType = 'video';
+          else rType = 'raw';
+        }
+
+        const directUrl = `${baseUrl}/api/v1/media/${publicId}`;
+        const secureUrl = directUrl.startsWith('https://')
+          ? directUrl
+          : directUrl.replace('http://', 'https://');
+
+        // Only generate image transformation thumbnail for real images
+        const thumbnailUrl = isImage
+          ? `${baseUrl}/api/v1/media/image/upload/w_300,h_300,c_thumb/${publicId}`
+          : (f.metadata?.thumbnail || null);
+
         return {
           asset_id: f._id.toString(),
           public_id: publicId,
           version: f.currentVersion || 1,
           format: ext,
-          resource_type: f.resourceType || (f.mimeType?.startsWith('image/') ? 'image' : 'raw'),
+          resource_type: rType,
           created_at: f.createdAt,
           bytes: f.sizeBytes,
           width: f.metadata?.width,
           height: f.metadata?.height,
-          url: `${baseUrl}/api/v1/media/${publicId}`,
-          secure_url: `${baseUrl.replace('http://', 'https://')}/api/v1/media/${publicId}`,
-          thumbnail_url: `${baseUrl}/api/v1/media/image/upload/w_250,h_250,c_thumb/${publicId}`,
+          url: directUrl,
+          secure_url: secureUrl,
+          thumbnail_url: thumbnailUrl,
           tags: f.tags || [],
         };
       });
 
       res.json({
         resources,
-        total: resources.length,
+        total,
       });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
