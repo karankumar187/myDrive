@@ -12,6 +12,7 @@ import {
   LogOut,
   Search,
   Bell,
+  Code2,
 } from 'lucide-react';
 import { api, subscribeToProgress, GlobalProgressState } from './services/api.js';
 import { getSocket, disconnectSocket } from './services/socket.js';
@@ -21,6 +22,7 @@ import { FolderExplorerView } from './components/FolderExplorerView.js';
 import { GalleryTimelineView } from './components/GalleryTimelineView.js';
 import { DeviceManagerView } from './components/DeviceManagerView.js';
 import { TrashBinView } from './components/TrashBinView.js';
+import { MediaApiStudioView } from './components/MediaApiStudioView.js';
 import { IPhoneShortcutModal } from './components/IPhoneShortcutModal.js';
 import { UploadDrawer } from './components/UploadDrawer.js';
 import { uploadService } from './services/UploadService.js';
@@ -30,13 +32,14 @@ import { LockScreen } from './components/LockScreen.js';
 import { SecuritySettings } from './components/SecuritySettings.js';
 import { LockSecurityService } from './services/lock-security.js';
 
-type Tab = 'dashboard' | 'folders' | 'gallery' | 'devices' | 'trash';
+type Tab = 'dashboard' | 'folders' | 'gallery' | 'devices' | 'media-api' | 'trash';
 
 const TABS: Array<{ id: Tab; label: string; icon: React.ComponentType<{ className?: string }> }> = [
   { id: 'dashboard', label: 'Dashboard', icon: HardDrive },
   { id: 'folders', label: 'Files', icon: Folder },
   { id: 'gallery', label: 'Gallery', icon: ImageIcon },
   { id: 'devices', label: 'Devices', icon: Smartphone },
+  { id: 'media-api', label: 'Media API', icon: Code2 },
   { id: 'trash', label: 'Trash', icon: Trash2 },
 ];
 
@@ -685,6 +688,10 @@ export const App: React.FC = () => {
             selectedLogDevice={logModalDevice}
             onCloseLogModal={() => setLogModalDevice(null)}
           />
+        )}
+
+        {activeTab === 'media-api' && (
+          <MediaApiStudioView currentUser={currentUser} />
         )}
 
         {activeTab === 'trash' && (

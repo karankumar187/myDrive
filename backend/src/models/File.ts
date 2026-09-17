@@ -124,6 +124,26 @@ const FileSchema = new Schema<IFileDocument>(
       type: [String],
       default: [],
     },
+    publicId: {
+      type: String,
+      trim: true,
+      index: true,
+    },
+    tags: {
+      type: [String],
+      default: [],
+      index: true,
+    },
+    isMediaApi: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+    resourceType: {
+      type: String,
+      enum: ['image', 'video', 'raw'],
+      default: 'image',
+    },
   },
   {
     timestamps: true,
@@ -132,6 +152,8 @@ const FileSchema = new Schema<IFileDocument>(
 
 // Compound indexes for high-speed queries
 FileSchema.index({ userId: 1, contentHash: 1 }); // Deduplication check
+FileSchema.index({ userId: 1, publicId: 1 }, { sparse: true }); // Fast public_id media lookup
+FileSchema.index({ userId: 1, isMediaApi: 1, createdAt: -1 }); // Fast media API list
 FileSchema.index({ userId: 1, isTrash: 1, folderId: 1, createdAt: -1 }); // Folder explorer
 FileSchema.index({ userId: 1, isTrash: 1, 'metadata.takenAt': -1, createdAt: -1, _id: -1 }); // Gallery timeline pagination
 FileSchema.index({ userId: 1, isTrash: 1, mimeType: 1, 'metadata.takenAt': -1, createdAt: -1, _id: -1 }); // Gallery media pagination

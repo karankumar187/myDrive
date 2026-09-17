@@ -1,4 +1,4 @@
-import { StorageSummary, FileItem, FolderItem, DeviceItem, User, BreadcrumbItem } from '../types.js';
+import { StorageSummary, FileItem, FolderItem, DeviceItem, User, BreadcrumbItem, ApiKeyItem, MediaAssetItem } from '../types.js';
 
 const rawApiUrl = (import.meta.env.VITE_API_URL || '').replace(/\/+$/, '');
 const API_BASE = rawApiUrl ? `${rawApiUrl}/api/v1` : '/api/v1';
@@ -460,4 +460,103 @@ export const api = {
     }
     return res.json();
   },
+
+  // Developer & API Keys
+  async getDeveloperKeys(): Promise<{ cloudName: string; keys: ApiKeyItem[] }> {
+    const res = await fetchWithLoading(`${API_BASE}/developer/keys`, { headers: getHeaders() });
+    if (!res.ok) throw new Error('Failed to fetch developer API keys');
+    return res.json();
+  },
+
+  async createDeveloperKey(name: string, permissions?: string[]): Promise<{ key: ApiKeyItem & { apiSecret: string }; cloudName: string; message: string }> {
+    const res = await fetchWithLoading(`${API_BASE}/developer/keys`, {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify({ name, permissions }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Failed to create API key' }));
+      throw new Error(err.error || 'Failed to create API key');
+    }
+    return res.json();
+  },
+
+  async revokeDeveloperKey(id: string): Promise<{ success: boolean; message: string }> {
+    const res = await fetchWithLoading(`${API_BASE}/developer/keys/${id}`, {
+      method: 'DELETE',
+      headers: getHeaders(),
+    });
+    if (!res.ok) throw new Error('Failed to revoke API key');
+    return res.json();
+  },
+
+  async updateCloudName(cloudName: string): Promise<{ success: boolean; cloudName: string }> {
+    const res = await fetchWithLoading(`${API_BASE}/developer/cloud-name`, {
+      method: 'PATCH',
+      headers: getHeaders(),
+      body: JSON.stringify({ cloudName }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Failed to update cloud name' }));
+      throw new Error(err.error || 'Failed to update cloud name');
+    }
+    return res.json();
+  },
+
+  // Media Library & Cloudinary Endpoints
+  async getMediaAssets(params?: { folder?: string; tag?: string; search?: string; resource_type?: string }): Promise<{ resources: MediaAssetItem[]; total: number }> {
+    const query = new URLSearchParams();
+    if (params?.folder) query.set('folder', params.folder);
+    if (params?.tag) query.set('tag', params.tag);
+    if (params?.search) query.set('search', params.search);
+    if (params?.resource_type) query.set('resource_type', params.resource_type);
+
+    const qs = query.toString();
+    const url = `${API_BASE}/media${qs ? `?${qs}` : ''}`;
+    const res = await fetchWithLoading(url, { headers: getHeaders() });
+    if (!res.ok) throw new Error('Failed to fetch media assets');
+    return res.json();
+  },
+
+  async uploadMediaAsset(file: File, folder?: string, tags?: string): Promise<MediaAssetItem> {
+    const formData = new FormData();
+    formData.append('file', file);
+    if (folder) formData.append('folder', folder);
+    if (tags) formData.append('tags', tags);
+
+    const token = localStorage.getItem('drive_token');
+    const headers: Record<string, string> = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    const res = await fetchWithLoading(`${API_BASE}/media/upload`, {
+      method: 'POST',
+      headers,
+      body: formData,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Media upload failed' }));
+      throw new Error(err.error || 'Media upload failed');
+    }
+    return res.json();
+  },
+
+  async deleteMediaAsset(publicId: string): Promise<{ result: string; public_id: string; deleted: boolean }> {
+    const res = await fetchWithLoading(`${API_BASE}/media/${publicId}`, {
+      method: 'DELETE',
+      headers: getHeaders(),
+    });
+    if (!res.ok) throw new Error('Failed to delete media asset');
+    return res.json();
+  },
+
+  async updateMediaTags(publicId: string, tags: string[], action: 'set' | 'add' | 'remove' = 'set'): Promise<{ result: string; public_id: string; tags: string[] }> {
+    const res = await fetchWithLoading(`${API_BASE}/media/${publicId}/tags`, {
+      method: 'PATCH',
+      headers: getHeaders(),
+      body: JSON.stringify({ tags, action }),
+    });
+    if (!res.ok) throw new Error('Failed to update media tags');
+    return res.json();
+  },
 };
+

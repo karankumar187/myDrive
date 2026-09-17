@@ -120,3 +120,33 @@ export interface DeviceItem {
     pairedDeviceRules?: PairedDeviceRule[];
   };
 }
+
+export interface ApiKeyItem {
+  _id: string;
+  name: string;
+  apiKey: string;
+  apiSecretPrefix: string;
+  permissions: string[];
+  isActive: boolean;
+  lastUsedAt?: string;
+  requestCount: number;
+  createdAt: string;
+}
+
+export interface MediaAssetItem {
+  asset_id: string;
+  public_id: string;
+  version: number;
+  format: string;
+  resource_type: 'image' | 'video' | 'raw';
+  created_at: string;
+  bytes: number;
+  width?: number;
+  height?: number;
+  url: string;
+  secure_url: string;
+  thumbnail_url?: string;
+  folder?: string;
+  tags: string[];
+}
+

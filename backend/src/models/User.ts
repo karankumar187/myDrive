@@ -39,6 +39,13 @@ const UserSchema = new Schema<IUserDocument>(
       type: String,
       default: null,
     },
+    cloudName: {
+      type: String,
+      trim: true,
+      lowercase: true,
+      sparse: true,
+      index: true,
+    },
   },
   {
     timestamps: true,

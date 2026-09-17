@@ -10,6 +10,7 @@ export interface IUser {
   role: UserRole;
   masterKeySalt?: string; // Salt used for client-side PBKDF2 passphrase key derivation
   encryptedVaultKey?: string; // Encrypted master key wrapped for multi-device sync
+  cloudName?: string; // Cloudinary-style public cloud namespace slug
   createdAt: Date;
   updatedAt: Date;
 }
@@ -78,6 +79,10 @@ export interface IFile {
   trashedAt?: Date | null;
   trashedByDeviceId?: string | null;
   sourceDeviceIds: string[]; // Devices that hold or uploaded this file
+  publicId?: string; // Cloudinary-style public ID (e.g. "blog/hero-banner")
+  tags?: string[]; // Media tags for search and categorization
+  isMediaApi?: boolean; // Flag denoting media uploaded via Developer API
+  resourceType?: 'image' | 'video' | 'raw'; // Resource classification
   createdAt: Date;
   updatedAt: Date;
 }
@@ -194,3 +199,51 @@ export interface ISyncEvent {
 }
 
 export interface ISyncEventDocument extends ISyncEvent, Document {}
+
+export interface IApiKey {
+  userId: Types.ObjectId;
+  name: string;
+  apiKey: string; // e.g. "cld_live_..."
+  apiSecretHash: string; // SHA-256 hash
+  apiSecretPrefix: string; // e.g. "sec_live_•••••••89ab"
+  permissions: string[]; // e.g. ['upload', 'read', 'delete', 'transform']
+  allowedOrigins?: string[];
+  isActive: boolean;
+  lastUsedAt?: Date;
+  requestCount: number;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface IApiKeyDocument extends IApiKey, Document {}
+
+export interface ITransformationOptions {
+  width?: number;
+  height?: number;
+  crop?: 'fill' | 'fit' | 'crop' | 'scale' | 'thumb';
+  gravity?: string;
+  quality?: number;
+  format?: 'auto' | 'webp' | 'png' | 'jpeg' | 'avif';
+  grayscale?: boolean;
+  blur?: number;
+  radius?: number | 'max';
+  rotate?: number;
+}
+
+export interface ICloudinaryUploadResponse {
+  asset_id: string;
+  public_id: string;
+  version: number;
+  format: string;
+  resource_type: 'image' | 'video' | 'raw';
+  created_at: string;
+  bytes: number;
+  width?: number;
+  height?: number;
+  url: string;
+  secure_url: string;
+  thumbnail_url?: string;
+  folder?: string;
+  tags?: string[];
+}
+

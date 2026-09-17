@@ -275,4 +275,49 @@ export class GoogleDriveService {
       fileId: providerFileId,
     });
   }
+
+  /**
+   * Directly uploads a file Buffer or readable stream into Google Drive.
+   * Useful for programmatic media uploads via API keys.
+   */
+  static async uploadBufferOrStream(
+    account: IStorageAccountDocument,
+    data: Buffer | NodeJS.ReadableStream,
+    metadata: {
+      name: string;
+      mimeType: string;
+      description?: string;
+    }
+  ): Promise<{ id: string; name: string }> {
+    const oauth2Client = this.getOAuth2Client(account);
+    const drive = google.drive({ version: 'v3', auth: oauth2Client });
+
+    let body: any = data;
+    if (Buffer.isBuffer(data)) {
+      const { Readable } = await import('stream');
+      body = Readable.from(data);
+    }
+
+    const res = await drive.files.create({
+      requestBody: {
+        name: metadata.name,
+        mimeType: metadata.mimeType,
+        description: metadata.description || 'myDrive programmatic media asset',
+      },
+      media: {
+        mimeType: metadata.mimeType,
+        body,
+      },
+      fields: 'id, name, size',
+    });
+
+    if (!res.data.id) {
+      throw new Error('Google Drive failed to return a file ID for direct upload');
+    }
+
+    return {
+      id: res.data.id,
+      name: res.data.name || metadata.name,
+    };
+  }
 }
