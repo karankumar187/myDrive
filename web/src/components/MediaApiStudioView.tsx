@@ -21,6 +21,7 @@ import {
   UploadCloud,
   CheckCircle2,
   Wand2,
+  ArrowLeft,
 } from 'lucide-react';
 import { api } from '../services/api.js';
 import { ApiKeyItem, MediaAssetItem, User } from '../types.js';
@@ -28,11 +29,12 @@ import { formatBytes } from '../utils/format.js';
 
 interface MediaApiStudioViewProps {
   currentUser: User | null;
+  onBackToDashboard?: () => void;
 }
 
 type StudioTab = 'keys' | 'docs' | 'playground' | 'assets' | 'upload';
 
-export const MediaApiStudioView: React.FC<MediaApiStudioViewProps> = ({ currentUser }) => {
+export const MediaApiStudioView: React.FC<MediaApiStudioViewProps> = ({ currentUser, onBackToDashboard }) => {
   const [activeTab, setActiveTab] = useState<StudioTab>('keys');
   const [keys, setKeys] = useState<ApiKeyItem[]>([]);
   const [cloudName, setCloudName] = useState<string>('drive');
@@ -382,6 +384,16 @@ def upload_media(file_path, folder="python_media"):
                 Edit
               </button>
             </div>
+
+            {onBackToDashboard && (
+              <button
+                onClick={onBackToDashboard}
+                className="flex items-center gap-1.5 px-3 py-2 bg-slate-800/90 hover:bg-slate-750 text-slate-300 hover:text-white text-xs font-medium rounded-xl border border-slate-700/60 transition cursor-pointer"
+              >
+                <ArrowLeft className="w-3.5 h-3.5" />
+                <span>Dashboard</span>
+              </button>
+            )}
 
             <button
               onClick={() => setIsNewKeyModalOpen(true)}

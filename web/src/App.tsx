@@ -13,6 +13,7 @@ import {
   Search,
   Bell,
   Code2,
+  Key,
 } from 'lucide-react';
 import { api, subscribeToProgress, GlobalProgressState } from './services/api.js';
 import { getSocket, disconnectSocket } from './services/socket.js';
@@ -39,7 +40,6 @@ const TABS: Array<{ id: Tab; label: string; icon: React.ComponentType<{ classNam
   { id: 'folders', label: 'Files', icon: Folder },
   { id: 'gallery', label: 'Gallery', icon: ImageIcon },
   { id: 'devices', label: 'Devices', icon: Smartphone },
-  { id: 'media-api', label: 'Media API', icon: Code2 },
   { id: 'trash', label: 'Trash', icon: Trash2 },
 ];
 
@@ -599,6 +599,14 @@ export const App: React.FC = () => {
                     )}
                   </button>
                   <button
+                    onClick={() => { setActiveTab('media-api'); setShowProfileMenu(false); }}
+                    className="w-full flex items-center space-x-2 px-3 py-2 text-xs text-zinc-300 hover:bg-purple-600/10 hover:text-purple-300 rounded-xl transition"
+                  >
+                    <Key className="w-3.5 h-3.5 text-purple-400" />
+                    <span>Developer & API Keys</span>
+                    <span className="ml-auto text-[9px] font-semibold text-indigo-400 bg-indigo-500/15 px-1.5 py-0.5 rounded-full border border-indigo-500/20">NEW</span>
+                  </button>
+                  <button
                     onClick={api.logout}
                     className="w-full flex items-center space-x-2 px-3 py-2 text-xs text-red-400 hover:bg-red-500/10 rounded-xl transition"
                   >
@@ -691,7 +699,10 @@ export const App: React.FC = () => {
         )}
 
         {activeTab === 'media-api' && (
-          <MediaApiStudioView currentUser={currentUser} />
+          <MediaApiStudioView
+            currentUser={currentUser}
+            onBackToDashboard={() => setActiveTab('dashboard')}
+          />
         )}
 
         {activeTab === 'trash' && (
