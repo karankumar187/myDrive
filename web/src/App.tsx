@@ -352,10 +352,11 @@ export const App: React.FC = () => {
         setSummary(storageRes);
         try { localStorage.setItem('drive_cache_summary', JSON.stringify(storageRes)); } catch {}
       }
-      setMedia(galleryRes.media || []);
+      const pureMedia = (galleryRes.media || []).filter((m: any) => !m.isMediaApi && !m.publicId);
+      setMedia(pureMedia);
       setGalleryCursor(galleryRes.nextCursor || null);
       setGalleryHasMore(Boolean(galleryRes.hasMore));
-      try { localStorage.setItem('drive_cache_gallery', JSON.stringify(galleryRes.media)); } catch {}
+      try { localStorage.setItem('drive_cache_gallery', JSON.stringify(pureMedia)); } catch {}
       setDevices(devicesRes.devices);
       setTrashedFiles(trashRes.files);
 

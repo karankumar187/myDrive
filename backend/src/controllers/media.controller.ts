@@ -4,10 +4,12 @@ import path from 'path';
 import crypto from 'crypto';
 import { Types } from 'mongoose';
 import { File } from '../models/File.js';
+import { Folder } from '../models/Folder.js';
 import { StorageAccount } from '../models/StorageAccount.js';
 import { StorageEngineService } from '../services/storage-engine.service.js';
 import { GoogleDriveService } from '../services/gdrive.service.js';
 import { MediaTransformService } from '../services/media-transform.service.js';
+import { CacheService } from '../services/cache.service.js';
 import { getEffectiveMimeType } from './file.controller.js';
 
 const ORIGINALS_DIR = path.resolve(process.cwd(), 'uploads', 'media_originals');
@@ -16,6 +18,62 @@ if (!fs.existsSync(ORIGINALS_DIR)) {
 }
 
 export class MediaController {
+  /**
+   * Resolves or creates a nested folder hierarchy for the given folder path string (e.g. "vertos_archive_documents/2026").
+   * Returns the ObjectId of the deepest folder, or null if path is empty.
+   */
+  static async getOrCreateFolderByPath(userId: Types.ObjectId, folderPath: string): Promise<Types.ObjectId | null> {
+    if (!folderPath || !folderPath.trim()) return null;
+
+    const segments = folderPath
+      .split('/')
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    if (segments.length === 0) return null;
+
+    let currentParentId: Types.ObjectId | null = null;
+    let currentPath = '/';
+
+    for (const segment of segments) {
+      currentPath = `${currentPath}${segment}/`;
+      let folder = await Folder.findOne({
+        userId,
+        parentFolderId: currentParentId,
+        name: segment,
+      });
+
+      if (folder) {
+        if (folder.isTrash) {
+          folder.isTrash = false;
+          folder.trashedAt = null;
+          await folder.save();
+        }
+      } else {
+        try {
+          folder = await Folder.create({
+            userId,
+            parentFolderId: currentParentId,
+            name: segment,
+            path: currentPath,
+          });
+        } catch (err) {
+          folder = await Folder.findOne({
+            userId,
+            parentFolderId: currentParentId,
+            name: segment,
+          });
+        }
+      }
+
+      if (folder) {
+        currentParentId = folder._id as Types.ObjectId;
+      }
+    }
+
+    return currentParentId;
+  }
+
   /**
    * Cloudinary-compatible programmatic media upload endpoint.
    * Handles multipart file, base64 data URI, or remote URL.
@@ -114,6 +172,9 @@ export class MediaController {
 
       const fullPublicId = cleanFolder ? `${cleanFolder}/${sanitizedId}` : sanitizedId;
 
+      // Resolve or create folder hierarchy in myDrive
+      const folderId = cleanFolder ? await MediaController.getOrCreateFolderByPath(userId, cleanFolder) : null;
+
       // 5. Parse Tags
       let tags: string[] = [];
       if (req.body.tags) {
@@ -127,12 +188,7 @@ export class MediaController {
       // 6. Check for existing file with same publicId for this user (upsert/update)
       let fileDoc = await File.findOne({ userId, publicId: fullPublicId, isTrash: false });
 
-      // 7. Store original buffer in local high-speed cache
-      const tempId = fileDoc?._id ? fileDoc._id.toString() : new Types.ObjectId().toString();
-      const localOriginalPath = path.join(ORIGINALS_DIR, `${tempId}.bin`);
-      fs.writeFileSync(localOriginalPath, fileBuffer);
-
-      // 8. Pool to Google Drive if healthy accounts are linked
+      // 7. Pool to Google Drive if healthy accounts are linked
       let storageAccountId: Types.ObjectId | null = null;
       let providerFileId = `media_${Date.now()}_${sanitizedId}`;
 
@@ -156,11 +212,20 @@ export class MediaController {
         console.log('Pooled Drive upload skipped, storing in local media storage:', (poolErr as any)?.message);
       }
 
-      // 9. Save or update database record
+      const tempId = fileDoc?._id ? fileDoc._id.toString() : new Types.ObjectId().toString();
+
+      // Only save raw original file to local disk if pooled cloud storage is UNAVAILABLE
+      if (!storageAccountId) {
+        const localOriginalPath = path.join(ORIGINALS_DIR, `${tempId}.bin`);
+        fs.writeFileSync(localOriginalPath, fileBuffer);
+      }
+
+      // 8. Save or update database record
       if (!fileDoc) {
         fileDoc = new File({
           _id: new Types.ObjectId(tempId),
           userId,
+          folderId,
           filename: originalFilename,
           mimeType,
           sizeBytes,
@@ -195,6 +260,9 @@ export class MediaController {
         fileDoc.mimeType = mimeType;
         fileDoc.sizeBytes = sizeBytes;
         fileDoc.contentHash = contentHash;
+        if (folderId) {
+          fileDoc.folderId = folderId;
+        }
         fileDoc.tags = Array.from(new Set([...(fileDoc.tags || []), ...tags]));
         fileDoc.metadata = {
           ...fileDoc.metadata,
@@ -216,11 +284,15 @@ export class MediaController {
       }
 
       await fileDoc.save();
+      await CacheService.invalidateUser(userId.toString());
 
-      // Rename local original file if id changed
-      const realOriginalPath = path.join(ORIGINALS_DIR, `${fileDoc._id}.bin`);
-      if (localOriginalPath !== realOriginalPath && fs.existsSync(localOriginalPath)) {
-        fs.renameSync(localOriginalPath, realOriginalPath);
+      // Rename local original fallback file if id changed (only if offline/fallback was used)
+      if (!storageAccountId) {
+        const localOriginalPath = path.join(ORIGINALS_DIR, `${tempId}.bin`);
+        const realOriginalPath = path.join(ORIGINALS_DIR, `${fileDoc._id}.bin`);
+        if (localOriginalPath !== realOriginalPath && fs.existsSync(localOriginalPath)) {
+          fs.renameSync(localOriginalPath, realOriginalPath);
+        }
       }
 
       // 10. Generate Cloudinary-compatible URLs
@@ -327,8 +399,6 @@ export class MediaController {
                 driveStream.data.on('error', reject);
               });
               sourceBuffer = Buffer.concat(chunks);
-              // Save to local cache for subsequent transformations
-              fs.writeFileSync(localOriginal, sourceBuffer);
             }
           }
         }

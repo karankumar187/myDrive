@@ -111,7 +111,7 @@ export const GalleryTimelineView: React.FC<Props> = ({
   const [isMoving, setIsMoving] = useState(false);
 
   // Local mutable media list to reflect instant favorite / rename / trash & infinite scroll
-  const [localMediaList, setLocalMediaList] = useState<FileItem[]>(media);
+  const [localMediaList, setLocalMediaList] = useState<FileItem[]>(() => (media || []).filter((m: any) => !m.isMediaApi && !m.publicId));
   const [nextCursor, setNextCursor] = useState<string | null>(initialCursor ?? null);
   const [hasMore, setHasMore] = useState<boolean>(initialHasMore ?? true);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -144,7 +144,7 @@ export const GalleryTimelineView: React.FC<Props> = ({
       if (res.media && res.media.length > 0) {
         setLocalMediaList((prev) => {
           const existingIds = new Set(prev.map((m) => m._id));
-          const newItems = res.media.filter((m) => !existingIds.has(m._id));
+          const newItems = (res.media || []).filter((m: any) => !m.isMediaApi && !m.publicId && !existingIds.has(m._id));
           return [...prev, ...newItems];
         });
         setNextCursor(res.nextCursor || null);
@@ -196,7 +196,7 @@ export const GalleryTimelineView: React.FC<Props> = ({
           search: searchQuery.trim() || undefined,
         });
         if (!cancelled) {
-          setLocalMediaList(res.media || []);
+          setLocalMediaList((res.media || []).filter((m: any) => !m.isMediaApi && !m.publicId));
           setNextCursor(res.nextCursor || null);
           setHasMore(Boolean(res.hasMore));
         }
@@ -210,7 +210,7 @@ export const GalleryTimelineView: React.FC<Props> = ({
     if (filterType !== 'all' || searchQuery.trim()) {
       fetchFiltered();
     } else {
-      setLocalMediaList(media);
+      setLocalMediaList((media || []).filter((m: any) => !m.isMediaApi && !m.publicId));
       setNextCursor(initialCursor ?? null);
       setHasMore(initialHasMore ?? true);
     }

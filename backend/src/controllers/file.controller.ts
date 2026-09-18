@@ -255,7 +255,7 @@ export class FileController {
 
       let recentFiles: any[] = [];
       if ((!folderId || folderId === 'root') && !search && !isTrash) {
-        const rawRecent: any[] = await File.find({ userId, isTrash: false })
+        const rawRecent: any[] = await File.find({ userId, isTrash: false, isMediaApi: { $ne: true } })
           .sort({ createdAt: -1 })
           .limit(20)
           .lean();
@@ -285,6 +285,7 @@ export class FileController {
       const mediaFilter: any = {
         userId,
         isTrash: false,
+        isMediaApi: { $ne: true },
       };
 
       if (filter === 'favorites') {
