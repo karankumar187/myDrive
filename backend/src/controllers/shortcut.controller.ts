@@ -1,8 +1,11 @@
 import { Request, Response } from 'express';
 import crypto from 'crypto';
 import { DeviceFileState } from '../models/DeviceFileState.js';
+import { Device } from '../models/Device.js';
+import { CryptoService } from '../services/crypto.service.js';
 import { StorageEngineService } from '../services/storage-engine.service.js';
 import { GoogleDriveService } from '../services/gdrive.service.js';
+import { ShortcutGeneratorService } from '../services/shortcut-generator.service.js';
 
 export class ShortcutController {
   /**
@@ -177,4 +180,81 @@ export class ShortcutController {
       res.status(500).json({ error: error.message });
     }
   }
+
+  /**
+   * Generates and serves a pre-configured Apple Shortcuts .shortcut plist file.
+   * The file has Device ID, Device Key, and Server URL baked in — zero manual setup.
+   * The user opens this link on their iPhone → iOS auto-imports it into the Shortcuts app.
+   *
+   * Query params:
+   *   ?type=auto-sync  (default) → "myDrive Auto Sync" shortcut
+   *   ?type=upload               → "myDrive Upload" shortcut (manual picker)
+   *   ?deviceName=My iPhone      → name to register device under (optional, default "My iPhone")
+   *
+   * Auth: requireUserAuth (JWT Bearer token via Authorization header or ?token= query param)
+   */
+  static async downloadShortcut(req: Request, res: Response): Promise<void> {
+    try {
+      if (!req.user) {
+        res.status(401).json({ error: 'Authentication required.' });
+        return;
+      }
+
+      const type = (req.query.type as string) || 'auto-sync';
+      const deviceName = (req.query.deviceName as string) || 'My iPhone';
+
+      const serverUrl = (process.env.CLOUDFLARE_WORKER_URL || process.env.FRONTEND_URL || 'https://drive-edge-cache.karan9302451907.workers.dev').replace(/\/+$/, '');
+
+      // Register a new iPhone device and generate a fresh key
+      const deviceId = `dev_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+      const { key: rawApiKey, hash: apiKeyHash, prefix: apiKeyPrefix } = CryptoService.generateDeviceKey('dkey_iphone');
+
+      await Device.create({
+        userId: req.user._id,
+        deviceId,
+        apiKeyHash,
+        apiKeyPrefix,
+        deviceName,
+        deviceType: 'iphone',
+        status: 'online',
+        lastSeenAt: new Date(),
+        policy: {
+          uploadFolders: ['Camera', 'Screenshots'],
+          wifiOnly: true,
+          chargingOnly: false,
+          autoDeleteLocalAfterBackup: false,
+          downloadMode: 'cloud_only',
+          autoDownloadFolders: [],
+          deletionMode: 'keep_in_cloud',
+          syncPhotos: true,
+          syncVideos: true,
+          syncDocuments: true,
+          syncOthers: false,
+          pairedDeviceRules: [],
+        },
+      });
+
+      // Generate the shortcut plist with credentials embedded
+      let plistXml: string;
+      let filename: string;
+
+      if (type === 'upload') {
+        plistXml = ShortcutGeneratorService.generateUploadShortcut(serverUrl, deviceId, rawApiKey);
+        filename = 'myDrive Upload.shortcut';
+      } else {
+        plistXml = ShortcutGeneratorService.generateAutoSyncShortcut(serverUrl, deviceId, rawApiKey);
+        filename = 'myDrive Auto Sync.shortcut';
+      }
+
+      // Serve as a downloadable .shortcut file — iOS Shortcuts app intercepts this automatically
+      res.setHeader('Content-Type', 'application/octet-stream');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.setHeader('Cache-Control', 'no-store');
+      res.send(Buffer.from(plistXml, 'utf8'));
+    } catch (error: any) {
+      console.error('Shortcut download error:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
 }
+

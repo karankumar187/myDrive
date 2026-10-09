@@ -442,6 +442,18 @@ export const api = {
     return res.json();
   },
 
+  /**
+   * Returns a URL that, when opened on iPhone, auto-downloads and imports a
+   * pre-configured .shortcut file into the iOS Shortcuts app.
+   * The URL embeds the JWT token so no separate login is needed.
+   */
+  getShortcutDownloadUrl(type: 'auto-sync' | 'upload', deviceName: string): string {
+    const token = localStorage.getItem('drive_token');
+    const params = new URLSearchParams({ type, deviceName });
+    if (token) params.set('token', token);
+    return `${API_BASE}/shortcuts/download-shortcut?${params.toString()}`;
+  },
+
   async getDeviceUploads(deviceId: string): Promise<{ files: FileItem[] }> {
     const res = await fetchWithLoading(`${API_BASE}/files/device/${deviceId}/uploads`, { headers: getHeaders() });
     if (!res.ok) throw new Error('Failed to fetch device uploads');
