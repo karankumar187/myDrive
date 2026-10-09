@@ -1,11 +1,62 @@
 import dotenv from 'dotenv';
 dotenv.config();
 
-import mongoose from 'mongoose';
+import mongoose, { Types } from 'mongoose';
 import { File } from '../models/File.js';
 import { Folder } from '../models/Folder.js';
-import { MediaController } from '../controllers/media.controller.js';
 import { CacheService } from '../services/cache.service.js';
+
+async function getOrCreateFolderByPath(userId: Types.ObjectId, folderPath: string): Promise<Types.ObjectId | null> {
+  if (!folderPath || !folderPath.trim()) return null;
+
+  const segments = folderPath
+    .split('/')
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  if (segments.length === 0) return null;
+
+  let currentParentId: Types.ObjectId | null = null;
+  let currentPath = '/';
+
+  for (const segment of segments) {
+    currentPath = `${currentPath}${segment}/`;
+    let folder = await Folder.findOne({
+      userId,
+      parentFolderId: currentParentId,
+      name: segment,
+    });
+
+    if (folder) {
+      if (folder.isTrash) {
+        folder.isTrash = false;
+        folder.trashedAt = null;
+        await folder.save();
+      }
+    } else {
+      try {
+        folder = await Folder.create({
+          userId,
+          parentFolderId: currentParentId,
+          name: segment,
+          path: currentPath,
+        });
+      } catch (err) {
+        folder = await Folder.findOne({
+          userId,
+          parentFolderId: currentParentId,
+          name: segment,
+        });
+      }
+    }
+
+    if (folder) {
+      currentParentId = folder._id as Types.ObjectId;
+    }
+  }
+
+  return currentParentId;
+}
 
 async function runMigration() {
   const uri = process.env.MONGO_URI || process.env.MONGODB_URI;
@@ -37,7 +88,7 @@ async function runMigration() {
       if (lastSlashIdx <= 0) continue;
 
       const folderPath = file.publicId.substring(0, lastSlashIdx);
-      const folderId = await MediaController.getOrCreateFolderByPath(file.userId, folderPath);
+      const folderId = await getOrCreateFolderByPath(file.userId, folderPath);
 
       if (folderId) {
         file.folderId = folderId;

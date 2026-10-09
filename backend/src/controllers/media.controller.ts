@@ -10,7 +10,7 @@ import { StorageEngineService } from '../services/storage-engine.service.js';
 import { GoogleDriveService } from '../services/gdrive.service.js';
 import { MediaTransformService } from '../services/media-transform.service.js';
 import { CacheService } from '../services/cache.service.js';
-import { getEffectiveMimeType } from './file.controller.js';
+import { getEffectiveMimeType } from '../utils/mime.js';
 
 const ORIGINALS_DIR = path.resolve(process.cwd(), 'uploads', 'media_originals');
 if (!fs.existsSync(ORIGINALS_DIR)) {
