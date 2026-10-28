@@ -292,119 +292,7 @@ export class ShortcutGeneratorService {
       </dict>
     </dict>
 
-    <!-- ACTION 5: Count new photos -->
-    <dict>
-      <key>WFWorkflowActionIdentifier</key>
-      <string>is.workflow.actions.count</string>
-      <key>WFWorkflowActionParameters</key>
-      <dict>
-        <key>UUID</key>
-        <string>${countUUID}</string>
-        <key>CustomOutputName</key>
-        <string>TotalNew</string>
-        <key>Input</key>
-        ${this.varRef(findPhotosUUID, 'NewPhotos')}
-      </dict>
-    </dict>
-
-    <!-- ACTION 6: IF TotalNew == 0 -->
-    <dict>
-      <key>WFWorkflowActionIdentifier</key>
-      <string>is.workflow.actions.conditional</string>
-      <key>WFWorkflowActionParameters</key>
-      <dict>
-        <key>GroupingIdentifier</key>
-        <string>${ifGroupId}</string>
-        <key>WFControlFlowMode</key>
-        <integer>0</integer>
-        <key>WFCondition</key>
-        <integer>4</integer>
-        <key>WFNumberValue</key>
-        <string>0</string>
-        <key>WFInput</key>
-        <dict>
-          <key>Value</key>
-          <dict>
-            <key>OutputName</key>
-            <string>TotalNew</string>
-            <key>OutputUUID</key>
-            <string>${countUUID}</string>
-            <key>Type</key>
-            <string>ActionOutput</string>
-          </dict>
-          <key>WFSerializationType</key>
-          <string>WFTextTokenAttachment</string>
-        </dict>
-      </dict>
-    </dict>
-
-    <!-- Notification: already up to date -->
-    <dict>
-      <key>WFWorkflowActionIdentifier</key>
-      <string>is.workflow.actions.notification</string>
-      <key>WFWorkflowActionParameters</key>
-      <dict>
-        <key>WFNotificationActionTitle</key>
-        <string>myDrive Sync</string>
-        <key>WFNotificationActionBody</key>
-        <string>✅ Already up to date. No new photos.</string>
-        <key>WFNotificationActionSound</key>
-        <false/>
-      </dict>
-    </dict>
-
-    <!-- Stop Shortcut -->
-    <dict>
-      <key>WFWorkflowActionIdentifier</key>
-      <string>is.workflow.actions.exit</string>
-      <key>WFWorkflowActionParameters</key>
-      <dict/>
-    </dict>
-
-    <!-- End IF -->
-    <dict>
-      <key>WFWorkflowActionIdentifier</key>
-      <string>is.workflow.actions.conditional</string>
-      <key>WFWorkflowActionParameters</key>
-      <dict>
-        <key>GroupingIdentifier</key>
-        <string>${ifGroupId}</string>
-        <key>WFControlFlowMode</key>
-        <integer>2</integer>
-      </dict>
-    </dict>
-
-    <!-- ACTION 7: Start notification -->
-    <dict>
-      <key>WFWorkflowActionIdentifier</key>
-      <string>is.workflow.actions.notification</string>
-      <key>WFWorkflowActionParameters</key>
-      <dict>
-        <key>WFNotificationActionTitle</key>
-        <string>myDrive Sync</string>
-        <key>WFNotificationActionBody</key>
-        <string>📸 Starting sync of new photos to your cloud…</string>
-        <key>WFNotificationActionSound</key>
-        <false/>
-      </dict>
-    </dict>
-
-    <!-- ACTION 8: SyncedCount = 0 -->
-    <dict>
-      <key>WFWorkflowActionIdentifier</key>
-      <string>is.workflow.actions.number</string>
-      <key>WFWorkflowActionParameters</key>
-      <dict>
-        <key>UUID</key>
-        <string>${syncedCountUUID}</string>
-        <key>CustomOutputName</key>
-        <string>SyncedCount</string>
-        <key>WFNumberActionNumber</key>
-        <real>0</real>
-      </dict>
-    </dict>
-
-    <!-- ACTION 9: Repeat with Each → NewPhotos -->
+    <!-- ACTION 5: Repeat with Each → NewPhotos -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.repeat.each</string>
@@ -462,26 +350,6 @@ export class ShortcutGeneratorService {
       </dict>
     </dict>
 
-    <!-- LOOP: Increment SyncedCount -->
-    <dict>
-      <key>WFWorkflowActionIdentifier</key>
-      <string>is.workflow.actions.math</string>
-      <key>WFWorkflowActionParameters</key>
-      <dict>
-        <key>UUID</key>
-        <string>${syncedCountUUID}</string>
-        <key>CustomOutputName</key>
-        <string>SyncedCount</string>
-        <key>WFMathOperation</key>
-        <string>+</string>
-        <key>WFScientificMathOperation</key>
-        <string>…</string>
-        <key>WFMathOperand</key>
-        ${this.varRef(syncedCountUUID, 'SyncedCount')}
-        <key>WFInput</key>
-        ${this.varRef(syncedCountUUID, 'SyncedCount')}
-      </dict>
-    </dict>
 
     <!-- LOOP: Per-file notification -->
     <dict>
