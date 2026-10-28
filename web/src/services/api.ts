@@ -355,13 +355,14 @@ export const api = {
     return res.json();
   },
 
-  async listFolders(parentFolderId?: string | null): Promise<{
+  async listFolders(parentFolderId?: string | null, all?: boolean): Promise<{
     folders: FolderItem[];
     currentFolder?: FolderItem | null;
     breadcrumbs?: BreadcrumbItem[];
   }> {
     const params = new URLSearchParams();
     if (parentFolderId) params.append('parentFolderId', parentFolderId);
+    if (all) params.append('all', 'true');
 
     const res = await fetchWithLoading(`${API_BASE}/files/folders/list?${params.toString()}`, { headers: getHeaders() });
     if (!res.ok) throw new Error('Failed to list folders');

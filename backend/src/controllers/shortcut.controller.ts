@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { Types } from 'mongoose';
 import crypto from 'crypto';
 import { DeviceFileState } from '../models/DeviceFileState.js';
 import { Device } from '../models/Device.js';
@@ -93,12 +94,17 @@ export class ShortcutController {
       // Compute raw SHA-256 for instant deduplication
       const contentHash = crypto.createHash('sha256').update(fileBuffer).digest('hex');
 
+      const targetFolderId = req.device?.policy?.targetFolderId
+        ? new Types.ObjectId(req.device.policy.targetFolderId)
+        : null;
+
       // Check if duplicate already exists
       const existingDuplicate = await StorageEngineService.findExistingDuplicate(req.user._id, contentHash);
       if (existingDuplicate) {
         // Link existing file without re-uploading bytes to Google Drive!
         await StorageEngineService.finalizeUpload({
           userId: req.user._id,
+          folderId: targetFolderId,
           filename: originalName,
           mimeType,
           sizeBytes,
@@ -144,6 +150,7 @@ export class ShortcutController {
       // Record in unified cloud library
       const { file: savedFile } = await StorageEngineService.finalizeUpload({
         userId: req.user._id,
+        folderId: targetFolderId,
         filename: originalName,
         mimeType,
         sizeBytes,

@@ -115,6 +115,7 @@ export interface IPairedDeviceRule {
 }
 
 export interface IDevicePolicy {
+  targetFolderId?: Types.ObjectId | string | null;
   uploadFolders: string[]; // e.g. ["Camera", "WhatsApp", "Screenshots"]
   wifiOnly: boolean;
   chargingOnly: boolean;

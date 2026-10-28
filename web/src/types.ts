@@ -105,6 +105,7 @@ export interface DeviceItem {
   lastSyncStartedAt?: string;
   lastSyncCompletedAt?: string;
   policy: {
+    targetFolderId?: string | null;
     uploadFolders: string[];
     wifiOnly: boolean;
     chargingOnly: boolean;

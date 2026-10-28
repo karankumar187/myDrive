@@ -3,6 +3,11 @@ import { IDeviceDocument } from '../types/index.js';
 
 const DevicePolicySchema = new Schema(
   {
+    targetFolderId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Folder',
+      default: null,
+    },
     uploadFolders: {
       type: [String],
       default: ['Camera', 'Screenshots', 'WhatsApp'],

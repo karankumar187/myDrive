@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { DeviceItem, FileItem } from '../types.js';
+import React, { useState, useEffect } from 'react';
+import { DeviceItem, FileItem, FolderItem } from '../types.js';
 import {
   Smartphone,
   Apple,
@@ -17,6 +17,7 @@ import {
   Download,
   Activity,
   Clock,
+  ChevronDown,
 } from 'lucide-react';
 import { api } from '../services/api.js';
 import { formatBytes } from '../utils/format.js';
@@ -41,13 +42,39 @@ export const DeviceManagerView: React.FC<Props> = ({
   const [inspectFiles, setInspectFiles] = useState<FileItem[]>([]);
   const [inspectLoading, setInspectLoading] = useState<boolean>(false);
   const [viewingLogsDevice, setViewingLogsDevice] = useState<DeviceItem | null>(selectedLogDevice || null);
+  const [folders, setFolders] = useState<FolderItem[]>([]);
+  const [foldersLoading, setFoldersLoading] = useState<boolean>(false);
 
   // Sync external log modal trigger
-  React.useEffect(() => {
+  useEffect(() => {
     if (selectedLogDevice) {
       setViewingLogsDevice(selectedLogDevice);
     }
   }, [selectedLogDevice]);
+
+  // Load all user folders for destination folder selection
+  useEffect(() => {
+    let isMounted = true;
+    const loadFolders = async () => {
+      try {
+        setFoldersLoading(true);
+        const res = await api.listFolders(undefined, true);
+        if (isMounted) {
+          setFolders(res.folders || []);
+        }
+      } catch (err) {
+        console.error('Failed to load folders for device manager:', err);
+      } finally {
+        if (isMounted) {
+          setFoldersLoading(false);
+        }
+      }
+    };
+    loadFolders();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const getDeviceIcon = (type: string) => {
     switch (type) {
@@ -70,6 +97,22 @@ export const DeviceManagerView: React.FC<Props> = ({
       onRefresh();
     } catch (err: any) {
       alert(err.message);
+    } finally {
+      setLoadingId(null);
+    }
+  };
+
+  const handleTargetFolderChange = async (device: DeviceItem, folderId: string) => {
+    try {
+      setLoadingId(device._id);
+      const targetFolderId = folderId ? folderId : null;
+      await api.updateDevicePolicy(device._id, {
+        ...device.policy,
+        targetFolderId,
+      });
+      onRefresh();
+    } catch (err: any) {
+      alert(`Failed to update destination folder: ${err.message}`);
     } finally {
       setLoadingId(null);
     }
@@ -317,6 +360,39 @@ export const DeviceManagerView: React.FC<Props> = ({
                       <span>Auto Gallery</span>
                     </button>
                   </div>
+                </div>
+
+                <div className="pt-2.5 border-t border-[#202029] space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="flex items-center text-zinc-300 font-medium">
+                      <FolderOpen className="w-3.5 h-3.5 mr-2 text-purple-400" />
+                      Upload Destination Folder
+                    </span>
+                    {loadingId === device._id && (
+                      <RefreshCw className="w-3 h-3 animate-spin text-purple-400" />
+                    )}
+                  </div>
+                  <div className="relative">
+                    <select
+                      value={device.policy?.targetFolderId || ''}
+                      disabled={loadingId === device._id || foldersLoading}
+                      onChange={(e) => handleTargetFolderChange(device, e.target.value)}
+                      className="w-full bg-[#111116] border border-[#272736] hover:border-purple-500/50 focus:border-purple-500 text-zinc-200 text-xs rounded-xl px-3 py-2 pr-8 appearance-none transition outline-none cursor-pointer disabled:opacity-50"
+                    >
+                      <option value="">📁 Root / Default (My Drive)</option>
+                      {folders.map((f) => (
+                        <option key={f._id} value={f._id}>
+                          📁 {f.name} {f.path && f.path !== '/' ? `(${f.path})` : ''}
+                        </option>
+                      ))}
+                    </select>
+                    <div className="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none text-zinc-500">
+                      <ChevronDown className="w-3.5 h-3.5" />
+                    </div>
+                  </div>
+                  <p className="text-[10px] text-zinc-500">
+                    Photos & documents uploaded by this device will automatically be saved into this folder.
+                  </p>
                 </div>
               </div>
 

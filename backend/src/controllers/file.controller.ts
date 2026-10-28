@@ -126,7 +126,9 @@ export class FileController {
 
       const { file, isDuplicate } = await StorageEngineService.finalizeUpload({
         userId,
-        folderId: folderId ? new Types.ObjectId(folderId) : null,
+        folderId: folderId
+          ? new Types.ObjectId(folderId)
+          : (req.device?.policy?.targetFolderId ? new Types.ObjectId(req.device.policy.targetFolderId) : null),
         filename,
         mimeType,
         sizeBytes,
