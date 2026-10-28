@@ -79,6 +79,44 @@ export class ShortcutGeneratorService {
   }
 
   /**
+   * Action input attachment — directly attaches an action output as an object input (not a string token).
+   * Used for WFInput in actions like repeat.each, count, etc.
+   */
+  private static actionInput(outputUUID: string, outputName: string): string {
+    return `<dict>
+              <key>Value</key>
+              <dict>
+                <key>OutputName</key>
+                <string>${this.esc(outputName)}</string>
+                <key>OutputUUID</key>
+                <string>${outputUUID}</string>
+                <key>Type</key>
+                <string>ActionOutput</string>
+              </dict>
+              <key>WFSerializationType</key>
+              <string>WFTextTokenAttachment</string>
+            </dict>`;
+  }
+
+  /**
+   * Variable input attachment — directly attaches a variable (like "Repeat Item") as an object input.
+   * Used for WFInput in actions like base64encode, properties.images, etc.
+   */
+  private static varInput(variableName: string): string {
+    return `<dict>
+              <key>Value</key>
+              <dict>
+                <key>Type</key>
+                <string>Variable</string>
+                <key>VariableName</key>
+                <string>${this.esc(variableName)}</string>
+              </dict>
+              <key>WFSerializationType</key>
+              <string>WFTextTokenAttachment</string>
+            </dict>`;
+  }
+
+  /**
    * Magic variable reference — references a built-in variable like "Repeat Item".
    */
   private static magicVar(variableName: string): string {
@@ -229,7 +267,7 @@ export class ShortcutGeneratorService {
         <key>WFControlFlowMode</key>
         <integer>0</integer>
         <key>WFInput</key>
-        ${this.varRef(findPhotosUUID, 'NewPhotos')}
+        ${this.actionInput(findPhotosUUID, 'NewPhotos')}
       </dict>
     </dict>
 
@@ -246,7 +284,7 @@ export class ShortcutGeneratorService {
         <key>WFContentItemPropertyName</key>
         <string>Name</string>
         <key>WFInput</key>
-        ${this.magicVar('Repeat Item')}
+        ${this.varInput('Repeat Item')}
       </dict>
     </dict>
 
@@ -260,8 +298,12 @@ export class ShortcutGeneratorService {
         <string>${b64UUID}</string>
         <key>CustomOutputName</key>
         <string>Base64Photo</string>
+        <key>WFEncodeMode</key>
+        <string>Encode</string>
+        <key>WFBase64LineBreakMode</key>
+        <string>None</string>
         <key>WFInput</key>
-        ${this.magicVar('Repeat Item')}
+        ${this.varInput('Repeat Item')}
       </dict>
     </dict>
 
@@ -414,7 +456,7 @@ export class ShortcutGeneratorService {
         <key>WFControlFlowMode</key>
         <integer>0</integer>
         <key>WFInput</key>
-        ${this.varRef(selectPhotosUUID, 'SelectedPhotos')}
+        ${this.actionInput(selectPhotosUUID, 'SelectedPhotos')}
       </dict>
     </dict>
 
@@ -431,7 +473,7 @@ export class ShortcutGeneratorService {
         <key>WFContentItemPropertyName</key>
         <string>Name</string>
         <key>WFInput</key>
-        ${this.magicVar('Repeat Item')}
+        ${this.varInput('Repeat Item')}
       </dict>
     </dict>
 
@@ -445,8 +487,12 @@ export class ShortcutGeneratorService {
         <string>${b64UUID}</string>
         <key>CustomOutputName</key>
         <string>Base64Photo</string>
+        <key>WFEncodeMode</key>
+        <string>Encode</string>
+        <key>WFBase64LineBreakMode</key>
+        <string>None</string>
         <key>WFInput</key>
-        ${this.magicVar('Repeat Item')}
+        ${this.varInput('Repeat Item')}
       </dict>
     </dict>
 
@@ -458,6 +504,8 @@ export class ShortcutGeneratorService {
       <dict>
         <key>UUID</key>
         <string>${uploadUUID}</string>
+        <key>CustomOutputName</key>
+        <string>UploadResult</string>
         <key>WFURL</key>
         <string>${this.esc(serverUrl)}/api/v1/shortcuts/upload?deviceId=${this.esc(deviceId)}&amp;deviceKey=${this.esc(deviceKey)}</string>
         <key>WFHTTPMethod</key>
@@ -477,6 +525,21 @@ export class ShortcutGeneratorService {
           this.headerItem('deviceId', deviceId),
           this.headerItem('deviceKey', deviceKey),
         ])}
+      </dict>
+    </dict>
+
+    <!-- LOOP: Show Alert with Server Response -->
+    <dict>
+      <key>WFWorkflowActionIdentifier</key>
+      <string>is.workflow.actions.alert</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict>
+        <key>WFAlertActionTitle</key>
+        <string>myDrive Upload Result</string>
+        <key>WFAlertActionMessage</key>
+        ${this.varRef(uploadUUID, 'UploadResult')}
+        <key>WFAlertActionCancelButtonShown</key>
+        <false/>
       </dict>
     </dict>
 

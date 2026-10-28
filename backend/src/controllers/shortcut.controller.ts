@@ -43,8 +43,18 @@ export class ShortcutController {
   static async uploadFromShortcut(req: Request, res: Response): Promise<void> {
     try {
       if (!req.user || !req.device) {
+        console.warn('[Shortcut Upload] Unauthorized: missing user or device context');
         res.status(401).json({ error: 'Device authentication required' });
         return;
+      }
+
+      console.log(`[Shortcut Upload] Request from device: ${req.device.deviceId} (${req.device.deviceName}) - User: ${req.user.email || req.user._id}`);
+      if (req.file) {
+        console.log(`[Shortcut Upload] Multipart file received: name=${req.file.originalname}, size=${req.file.size}, type=${req.file.mimetype}`);
+      } else if (req.body?.media) {
+        console.log(`[Shortcut Upload] Base64 JSON received: name=${req.body.filename}, base64 len=${typeof req.body.media === 'string' ? req.body.media.length : 'not string'}`);
+      } else {
+        console.warn(`[Shortcut Upload] No media or file in request. req.body keys: ${Object.keys(req.body || {})}`);
       }
 
       let fileBuffer: Buffer | null = null;
@@ -61,6 +71,7 @@ export class ShortcutController {
         const base64Data = req.body.media.replace(/^data:[^;]+;base64,/, '');
         fileBuffer = Buffer.from(base64Data, 'base64');
         sizeBytes = fileBuffer.length;
+        console.log(`[Shortcut Upload] Decoded base64 buffer: ${sizeBytes} bytes`);
         if (req.body.mimeType) {
           mimeType = req.body.mimeType;
         } else if (originalName.toLowerCase().endsWith('.png')) {
@@ -142,6 +153,7 @@ export class ShortcutController {
         deviceAssetId,
       });
 
+      console.log(`[Shortcut Upload SUCCESS] Saved file ${savedFile.filename} (${savedFile._id}) to account ${targetAccount.accountEmail || targetAccount._id}`);
       res.json({
         status: 'success',
         isDuplicate: false,
