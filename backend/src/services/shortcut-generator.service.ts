@@ -183,46 +183,20 @@ export class ShortcutGeneratorService {
   <key>WFWorkflowActions</key>
   <array>
 
-    <!-- ACTION 1: Check Server Connection & Update Status -->
+    <!-- ACTION 1: Get 25 Latest Photos Directly from Gallery -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
-      <string>is.workflow.actions.downloadurl</string>
-      <key>WFWorkflowActionParameters</key>
-      <dict>
-        <key>UUID</key>
-        <string>${syncCheckUUID}</string>
-        <key>CustomOutputName</key>
-        <string>SyncStatus</string>
-        <key>WFURL</key>
-        <string>${this.esc(serverUrl)}/api/v1/shortcuts/sync-check</string>
-        <key>WFHTTPMethod</key>
-        <string>GET</string>
-        <key>WFHTTPHeaders</key>
-        ${this.headersDict([
-          this.headerItem('X-Device-Id', deviceId),
-          this.headerItem('X-Device-Key', deviceKey),
-        ])}
-      </dict>
-    </dict>
-
-    <!-- ACTION 2: Find Latest Photos (Newest First, max 25) -->
-    <dict>
-      <key>WFWorkflowActionIdentifier</key>
-      <string>is.workflow.actions.filter.photos</string>
+      <string>is.workflow.actions.getlatestphotos</string>
       <key>WFWorkflowActionParameters</key>
       <dict>
         <key>UUID</key>
         <string>${findPhotosUUID}</string>
         <key>CustomOutputName</key>
         <string>NewPhotos</string>
-        <key>WFContentItemSortProperty</key>
-        <string>Date Taken</string>
-        <key>WFContentItemSortOrder</key>
-        <string>Latest First</string>
-        <key>WFContentItemLimitEnabled</key>
-        <true/>
-        <key>WFContentItemLimit</key>
-        <integer>25</integer>
+        <key>WFGetLatestPhotosLimit</key>
+        <real>25</real>
+        <key>WFGetLatestPhotosActionType</key>
+        <string>Both</string>
       </dict>
     </dict>
 
