@@ -47,19 +47,40 @@ export class ShortcutController {
         return;
       }
 
-      const file = req.file;
-      if (!file) {
+      let fileBuffer: Buffer | null = null;
+      let mimeType = 'image/jpeg';
+      let sizeBytes = 0;
+      let originalName = (req.body?.filename as string) || `Photo_${Date.now()}.jpg`;
+
+      if (req.file) {
+        fileBuffer = req.file.buffer;
+        mimeType = req.file.mimetype || 'image/jpeg';
+        sizeBytes = req.file.size;
+        originalName = req.body?.filename || req.file.originalname || originalName;
+      } else if (req.body?.media && typeof req.body.media === 'string') {
+        const base64Data = req.body.media.replace(/^data:[^;]+;base64,/, '');
+        fileBuffer = Buffer.from(base64Data, 'base64');
+        sizeBytes = fileBuffer.length;
+        if (req.body.mimeType) {
+          mimeType = req.body.mimeType;
+        } else if (originalName.toLowerCase().endsWith('.png')) {
+          mimeType = 'image/png';
+        } else if (originalName.toLowerCase().endsWith('.mov')) {
+          mimeType = 'video/quicktime';
+        } else if (originalName.toLowerCase().endsWith('.mp4')) {
+          mimeType = 'video/mp4';
+        }
+      }
+
+      if (!fileBuffer || fileBuffer.length === 0) {
         res.status(400).json({ error: 'No media file provided in request' });
         return;
       }
 
-      const deviceAssetId = (req.body.deviceAssetId as string) || `iphone_${Date.now()}`;
-      const originalName = req.body.filename || file.originalname || `Photo_${Date.now()}.jpg`;
-      const mimeType = file.mimetype || 'image/jpeg';
-      const sizeBytes = file.size;
+      const deviceAssetId = (req.body?.deviceAssetId as string) || `iphone_${Date.now()}`;
 
       // Compute raw SHA-256 for instant deduplication
-      const contentHash = crypto.createHash('sha256').update(file.buffer).digest('hex');
+      const contentHash = crypto.createHash('sha256').update(fileBuffer).digest('hex');
 
       // Check if duplicate already exists
       const existingDuplicate = await StorageEngineService.findExistingDuplicate(req.user._id, contentHash);
@@ -102,7 +123,7 @@ export class ShortcutController {
         },
         media: {
           mimeType,
-          body: Readable.from(file.buffer),
+          body: Readable.from(fileBuffer),
         },
       });
 
