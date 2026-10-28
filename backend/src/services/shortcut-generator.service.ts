@@ -226,19 +226,17 @@ export class ShortcutGeneratorService {
       </dict>
     </dict>
 
-    <!-- ACTION 3: Parse date string → Date -->
+    <!-- ACTION 3: Get Dates from Input (parses date string automatically with no prompt) -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
-      <string>is.workflow.actions.date</string>
+      <string>is.workflow.actions.detect.date</string>
       <key>WFWorkflowActionParameters</key>
       <dict>
         <key>UUID</key>
         <string>${lastSyncDateUUID}</string>
         <key>CustomOutputName</key>
         <string>LastSyncDate</string>
-        <key>WFDateActionMode</key>
-        <string>Specified Date</string>
-        <key>WFDateActionDate</key>
+        <key>WFInput</key>
         ${this.varRef(lastSyncStringUUID, 'LastSyncedDateString')}
       </dict>
     </dict>
