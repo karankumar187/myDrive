@@ -231,28 +231,29 @@ export class ShortcutGeneratorService {
         <string>${findPhotosUUID}</string>
         <key>CustomOutputName</key>
         <string>NewPhotos</string>
-        <key>WFContentItemFilter</key>
-        <dict>
-          <key>Value</key>
-          <dict>
-            <key>WFActionParameterFilterPrefix</key>
-            <integer>1</integer>
-            <key>WFContentPredicateBoundedDate</key>
-            <false/>
-            <key>WFActionParameterFilterTemplates</key>
-            <array/>
-          </dict>
-          <key>WFSerializationType</key>
-          <string>WFContentPredicateTableTemplate</string>
-        </dict>
-        <key>WFContentItemSortProperty</key>
-        <string>Date Taken</string>
-        <key>WFContentItemSortOrder</key>
-        <string>Latest First</string>
         <key>WFContentItemLimitEnabled</key>
         <true/>
         <key>WFContentItemLimit</key>
         <integer>25</integer>
+        <key>WFContentItemSortProperty</key>
+        <string>Date Taken</string>
+        <key>WFContentItemSortOrder</key>
+        <string>Latest First</string>
+      </dict>
+    </dict>
+
+    <!-- Start Notification -->
+    <dict>
+      <key>WFWorkflowActionIdentifier</key>
+      <string>is.workflow.actions.notification</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict>
+        <key>WFNotificationActionTitle</key>
+        <string>myDrive Auto Sync</string>
+        <key>WFNotificationActionBody</key>
+        <string>🔄 Checking latest photos to sync…</string>
+        <key>WFNotificationActionSound</key>
+        <false/>
       </dict>
     </dict>
 
@@ -315,6 +316,8 @@ export class ShortcutGeneratorService {
       <dict>
         <key>UUID</key>
         <string>${uploadUUID}</string>
+        <key>CustomOutputName</key>
+        <string>UploadResult</string>
         <key>WFURL</key>
         <string>${this.esc(serverUrl)}/api/v1/shortcuts/upload?deviceId=${this.esc(deviceId)}&amp;deviceKey=${this.esc(deviceKey)}</string>
         <key>WFHTTPMethod</key>

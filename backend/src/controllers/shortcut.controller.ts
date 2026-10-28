@@ -109,6 +109,7 @@ export class ShortcutController {
           deviceAssetId,
         });
 
+        console.log(`[Shortcut Upload DUPLICATE] ${originalName} (${contentHash.substring(0, 8)}) already in cloud. Skipped.`);
         res.json({
           status: 'success',
           isDuplicate: true,
