@@ -60,10 +60,14 @@ export async function requireUserAuth(req: Request, res: Response, next: NextFun
  */
 export async function requireDeviceAuth(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const deviceId = (req.headers['x-device-id'] as string) || (req.query.deviceId as string);
+    const deviceId =
+      (req.headers['x-device-id'] as string) ||
+      (req.query.deviceId as string) ||
+      (req.body?.deviceId as string);
     const deviceKey =
       (req.headers['x-device-key'] as string) ||
       (req.query.deviceKey as string) ||
+      (req.body?.deviceKey as string) ||
       (req.query.token as string) ||
       (req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.split(' ')[1] : null);
 

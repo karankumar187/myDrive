@@ -274,7 +274,7 @@ export class ShortcutGeneratorService {
         <key>UUID</key>
         <string>${uploadUUID}</string>
         <key>WFURL</key>
-        <string>${this.esc(serverUrl)}/api/v1/shortcuts/upload</string>
+        <string>${this.esc(serverUrl)}/api/v1/shortcuts/upload?deviceId=${this.esc(deviceId)}&amp;deviceKey=${this.esc(deviceKey)}</string>
         <key>WFHTTPMethod</key>
         <string>POST</string>
         <key>WFHTTPHeaders</key>
@@ -289,6 +289,8 @@ export class ShortcutGeneratorService {
           this.formFieldText('media', b64UUID, 'Base64Photo'),
           this.formFieldText('filename', nameUUID, 'FileName'),
           this.formFieldText('deviceAssetId', nameUUID, 'FileName'),
+          this.headerItem('deviceId', deviceId),
+          this.headerItem('deviceKey', deviceKey),
         ])}
       </dict>
     </dict>
@@ -486,7 +488,7 @@ export class ShortcutGeneratorService {
         <key>UUID</key>
         <string>${uploadUUID}</string>
         <key>WFURL</key>
-        <string>${this.esc(serverUrl)}/api/v1/shortcuts/upload</string>
+        <string>${this.esc(serverUrl)}/api/v1/shortcuts/upload?deviceId=${this.esc(deviceId)}&amp;deviceKey=${this.esc(deviceKey)}</string>
         <key>WFHTTPMethod</key>
         <string>POST</string>
         <key>WFHTTPHeaders</key>
@@ -501,6 +503,8 @@ export class ShortcutGeneratorService {
           this.formFieldText('media', b64UUID, 'Base64Photo'),
           this.formFieldText('filename', fileNameUUID, 'FileName'),
           this.formFieldText('deviceAssetId', fileNameUUID, 'FileName'),
+          this.headerItem('deviceId', deviceId),
+          this.headerItem('deviceKey', deviceKey),
         ])}
       </dict>
     </dict>
