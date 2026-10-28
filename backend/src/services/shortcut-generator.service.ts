@@ -207,8 +207,8 @@ export class ShortcutGeneratorService {
   // ═══════════════════════════════════════════════════════════════════
 
   static generateAutoSyncShortcut(serverUrl: string, deviceId: string, deviceKey: string): string {
-    const syncCheckUUID = this.uuid();
     const findPhotosUUID = this.uuid();
+    const countUUID = this.uuid();
     const nameUUID = this.uuid();
     const b64UUID = this.uuid();
     const uploadUUID = this.uuid();
@@ -242,22 +242,22 @@ export class ShortcutGeneratorService {
       </dict>
     </dict>
 
-    <!-- Start Notification -->
+    <!-- ACTION 2: Count Photos to Sync -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
-      <string>is.workflow.actions.notification</string>
+      <string>is.workflow.actions.count</string>
       <key>WFWorkflowActionParameters</key>
       <dict>
-        <key>WFNotificationActionTitle</key>
-        <string>myDrive Auto Sync</string>
-        <key>WFNotificationActionBody</key>
-        <string>🔄 Checking latest photos to sync…</string>
-        <key>WFNotificationActionSound</key>
-        <false/>
+        <key>UUID</key>
+        <string>${countUUID}</string>
+        <key>CustomOutputName</key>
+        <string>TotalCount</string>
+        <key>Input</key>
+        ${this.actionInput(findPhotosUUID, 'NewPhotos')}
       </dict>
     </dict>
 
-    <!-- ACTION 2: Repeat with Each Photo -->
+    <!-- ACTION 3: Repeat with Each Photo -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.repeat.each</string>
@@ -340,18 +340,45 @@ export class ShortcutGeneratorService {
       </dict>
     </dict>
 
-    <!-- LOOP 4: Notification per uploaded file -->
+    <!-- LOOP 4: Notification per uploaded file with progress -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.notification</string>
       <key>WFWorkflowActionParameters</key>
       <dict>
         <key>WFNotificationActionTitle</key>
-        <string>myDrive</string>
-        <key>WFNotificationActionBody</key>
-        <string>☁️ Photo backed up to cloud</string>
+        <string>myDrive Auto Sync</string>
         <key>WFNotificationActionSound</key>
         <false/>
+        <key>WFNotificationActionBody</key>
+        <dict>
+          <key>Value</key>
+          <dict>
+            <key>attachmentsByRange</key>
+            <dict>
+              <key>{14, 1}</key>
+              <dict>
+                <key>Type</key>
+                <string>Variable</string>
+                <key>VariableName</key>
+                <string>Repeat Index</string>
+              </dict>
+              <key>{19, 1}</key>
+              <dict>
+                <key>OutputName</key>
+                <string>TotalCount</string>
+                <key>OutputUUID</key>
+                <string>${countUUID}</string>
+                <key>Type</key>
+                <string>ActionOutput</string>
+              </dict>
+            </dict>
+            <key>string</key>
+            <string>Syncing photo \uFFFC of \uFFFC…</string>
+          </dict>
+          <key>WFSerializationType</key>
+          <string>WFTextTokenString</string>
+        </dict>
       </dict>
     </dict>
 
@@ -375,7 +402,7 @@ export class ShortcutGeneratorService {
       <key>WFWorkflowActionParameters</key>
       <dict>
         <key>WFNotificationActionTitle</key>
-        <string>myDrive Sync Complete</string>
+        <string>myDrive Auto Sync</string>
         <key>WFNotificationActionBody</key>
         <string>🎉 Photos backed up to your personal cloud!</string>
         <key>WFNotificationActionSound</key>
@@ -447,6 +474,20 @@ export class ShortcutGeneratorService {
       </dict>
     </dict>
 
+    <!-- Count Selected Photos -->
+    <dict>
+      <key>WFWorkflowActionIdentifier</key>
+      <string>is.workflow.actions.count</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict>
+        <key>UUID</key>
+        <string>${countUUID}</string>
+        <key>CustomOutputName</key>
+        <string>TotalCount</string>
+        <key>Input</key>
+        ${this.actionInput(selectPhotosUUID, 'SelectedPhotos')}
+      </dict>
+    </dict>
 
     <!-- Repeat with Each -->
     <dict>
@@ -531,22 +572,7 @@ export class ShortcutGeneratorService {
       </dict>
     </dict>
 
-    <!-- LOOP: Show Alert with Server Response -->
-    <dict>
-      <key>WFWorkflowActionIdentifier</key>
-      <string>is.workflow.actions.alert</string>
-      <key>WFWorkflowActionParameters</key>
-      <dict>
-        <key>WFAlertActionTitle</key>
-        <string>myDrive Upload Result</string>
-        <key>WFAlertActionMessage</key>
-        ${this.varRef(uploadUUID, 'UploadResult')}
-        <key>WFAlertActionCancelButtonShown</key>
-        <false/>
-      </dict>
-    </dict>
-
-    <!-- LOOP: Per-file notification -->
+    <!-- LOOP: Per-file progress notification -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.notification</string>
@@ -554,10 +580,37 @@ export class ShortcutGeneratorService {
       <dict>
         <key>WFNotificationActionTitle</key>
         <string>myDrive</string>
-        <key>WFNotificationActionBody</key>
-        <string>✅ Photo uploaded to cloud</string>
         <key>WFNotificationActionSound</key>
         <false/>
+        <key>WFNotificationActionBody</key>
+        <dict>
+          <key>Value</key>
+          <dict>
+            <key>attachmentsByRange</key>
+            <dict>
+              <key>{16, 1}</key>
+              <dict>
+                <key>Type</key>
+                <string>Variable</string>
+                <key>VariableName</key>
+                <string>Repeat Index</string>
+              </dict>
+              <key>{21, 1}</key>
+              <dict>
+                <key>OutputName</key>
+                <string>TotalCount</string>
+                <key>OutputUUID</key>
+                <string>${countUUID}</string>
+                <key>Type</key>
+                <string>ActionOutput</string>
+              </dict>
+            </dict>
+            <key>string</key>
+            <string>Uploading photo \uFFFC of \uFFFC…</string>
+          </dict>
+          <key>WFSerializationType</key>
+          <string>WFTextTokenString</string>
+        </dict>
       </dict>
     </dict>
 
@@ -600,9 +653,9 @@ export class ShortcutGeneratorService {
   <key>WFWorkflowIcon</key>
   <dict>
     <key>WFWorkflowIconStartColor</key>
-    <integer>1088986111</integer>
+    <integer>2071128575</integer>
     <key>WFWorkflowIconGlyphNumber</key>
-    <integer>59511</integer>
+    <integer>59803</integer>
   </dict>
   <key>WFWorkflowImportQuestions</key>
   <array/>
