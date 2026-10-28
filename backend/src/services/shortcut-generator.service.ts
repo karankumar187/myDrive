@@ -193,6 +193,20 @@ export class ShortcutGeneratorService {
         <string>${findPhotosUUID}</string>
         <key>CustomOutputName</key>
         <string>NewPhotos</string>
+        <key>WFContentItemFilter</key>
+        <dict>
+          <key>Value</key>
+          <dict>
+            <key>WFActionParameterFilterPrefix</key>
+            <integer>1</integer>
+            <key>WFContentPredicateBoundedDate</key>
+            <false/>
+            <key>WFActionParameterFilterTemplates</key>
+            <array/>
+          </dict>
+          <key>WFSerializationType</key>
+          <string>WFContentPredicateTableTemplate</string>
+        </dict>
         <key>WFContentItemSortProperty</key>
         <string>Date Taken</string>
         <key>WFContentItemSortOrder</key>
@@ -360,6 +374,8 @@ export class ShortcutGeneratorService {
     const selectPhotosUUID = this.uuid();
     const countUUID = this.uuid();
     const fileNameUUID = this.uuid();
+    const b64UUID = this.uuid();
+    const uploadUUID = this.uuid();
     const loopGroupId = this.uuid();
 
     return `<?xml version="1.0" encoding="UTF-8"?>
@@ -446,12 +462,29 @@ export class ShortcutGeneratorService {
       </dict>
     </dict>
 
-    <!-- LOOP: Upload -->
+    <!-- LOOP: Base64 Encode Photo -->
+    <dict>
+      <key>WFWorkflowActionIdentifier</key>
+      <string>is.workflow.actions.base64encode</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict>
+        <key>UUID</key>
+        <string>${b64UUID}</string>
+        <key>CustomOutputName</key>
+        <string>Base64Photo</string>
+        <key>WFInput</key>
+        ${this.magicVar('Repeat Item')}
+      </dict>
+    </dict>
+
+    <!-- LOOP: Upload via JSON -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.downloadurl</string>
       <key>WFWorkflowActionParameters</key>
       <dict>
+        <key>UUID</key>
+        <string>${uploadUUID}</string>
         <key>WFURL</key>
         <string>${this.esc(serverUrl)}/api/v1/shortcuts/upload</string>
         <key>WFHTTPMethod</key>
@@ -462,10 +495,10 @@ export class ShortcutGeneratorService {
           this.headerItem('X-Device-Key', deviceKey),
         ])}
         <key>WFHTTPBodyType</key>
-        <string>Form</string>
-        <key>WFFormValues</key>
+        <string>JSON</string>
+        <key>WFJSONValues</key>
         ${this.headersDict([
-          this.formFieldFile('media'),
+          this.formFieldText('media', b64UUID, 'Base64Photo'),
           this.formFieldText('filename', fileNameUUID, 'FileName'),
           this.formFieldText('deviceAssetId', fileNameUUID, 'FileName'),
         ])}
