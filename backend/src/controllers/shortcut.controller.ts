@@ -7,6 +7,8 @@ import { CryptoService } from '../services/crypto.service.js';
 import { StorageEngineService } from '../services/storage-engine.service.js';
 import { GoogleDriveService } from '../services/gdrive.service.js';
 import { ShortcutGeneratorService } from '../services/shortcut-generator.service.js';
+import { getSocketIoInstance } from '../server.js';
+import { CacheService } from '../services/cache.service.js';
 
 export class ShortcutController {
   /**
@@ -26,6 +28,17 @@ export class ShortcutController {
       }).sort({ createdAt: -1 });
 
       const lastSyncedDate = latestState ? latestState.createdAt.toISOString() : '2000-01-01T00:00:00.000Z';
+
+      // Notify web dashboard of device check
+      const io = getSocketIoInstance();
+      if (io) {
+        io.to(`user:${req.user._id}`).emit('device:sync_status', {
+          deviceId: req.device.deviceId,
+          status: 'online',
+          currentSyncActivity: 'Syncing gallery...',
+          lastSeenAt: new Date().toISOString(),
+        });
+      }
 
       res.json({
         deviceName: req.device.deviceName,
@@ -115,6 +128,24 @@ export class ShortcutController {
           deviceAssetId,
         });
 
+        // Invalidate user cache & broadcast real-time Socket.IO notification
+        await CacheService.invalidateUser(req.user._id.toString());
+        const io = getSocketIoInstance();
+        if (io) {
+          io.to(`user:${req.user._id}`).emit('file:uploaded', {
+            fileId: existingDuplicate._id,
+            filename: originalName,
+            sizeBytes,
+            isDuplicate: true,
+          });
+          io.to(`user:${req.user._id}`).emit('device:sync_status', {
+            deviceId: req.device.deviceId,
+            status: 'online',
+            currentSyncActivity: `Synced ${originalName}`,
+            lastSeenAt: new Date().toISOString(),
+          });
+        }
+
         console.log(`[Shortcut Upload DUPLICATE] ${originalName} (${contentHash.substring(0, 8)}) already in cloud. Skipped.`);
         res.json({
           status: 'success',
@@ -160,6 +191,24 @@ export class ShortcutController {
         deviceId: req.device.deviceId,
         deviceAssetId,
       });
+
+      // Invalidate user cache & broadcast real-time Socket.IO notification
+      await CacheService.invalidateUser(req.user._id.toString());
+      const io = getSocketIoInstance();
+      if (io) {
+        io.to(`user:${req.user._id}`).emit('file:uploaded', {
+          fileId: savedFile._id,
+          filename: savedFile.filename,
+          sizeBytes: savedFile.sizeBytes,
+          isDuplicate: false,
+        });
+        io.to(`user:${req.user._id}`).emit('device:sync_status', {
+          deviceId: req.device.deviceId,
+          status: 'online',
+          currentSyncActivity: `Backed up ${savedFile.filename}`,
+          lastSeenAt: new Date().toISOString(),
+        });
+      }
 
       console.log(`[Shortcut Upload SUCCESS] Saved file ${savedFile.filename} (${savedFile._id}) to account ${targetAccount.accountEmail || targetAccount._id}`);
       res.json({
