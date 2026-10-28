@@ -402,35 +402,6 @@ export class ShortcutGeneratorService {
       </dict>
     </dict>
 
-    <!-- Count selected -->
-    <dict>
-      <key>WFWorkflowActionIdentifier</key>
-      <string>is.workflow.actions.count</string>
-      <key>WFWorkflowActionParameters</key>
-      <dict>
-        <key>UUID</key>
-        <string>${countUUID}</string>
-        <key>CustomOutputName</key>
-        <string>TotalCount</string>
-        <key>Input</key>
-        ${this.varRef(selectPhotosUUID, 'SelectedPhotos')}
-      </dict>
-    </dict>
-
-    <!-- Start notification -->
-    <dict>
-      <key>WFWorkflowActionIdentifier</key>
-      <string>is.workflow.actions.notification</string>
-      <key>WFWorkflowActionParameters</key>
-      <dict>
-        <key>WFNotificationActionTitle</key>
-        <string>myDrive Upload</string>
-        <key>WFNotificationActionBody</key>
-        <string>📤 Starting upload to your cloud…</string>
-        <key>WFNotificationActionSound</key>
-        <false/>
-      </dict>
-    </dict>
 
     <!-- Repeat with Each -->
     <dict>
