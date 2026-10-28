@@ -183,24 +183,28 @@ export class ShortcutGeneratorService {
   <key>WFWorkflowActions</key>
   <array>
 
-    <!-- ACTION 1: Get 25 Latest Photos Directly from Gallery -->
+    <!-- ACTION 1: Find 25 Latest Photos Directly from Gallery -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
-      <string>is.workflow.actions.getlatestphotos</string>
+      <string>is.workflow.actions.filter.photos</string>
       <key>WFWorkflowActionParameters</key>
       <dict>
         <key>UUID</key>
         <string>${findPhotosUUID}</string>
         <key>CustomOutputName</key>
         <string>NewPhotos</string>
-        <key>WFGetLatestPhotosLimit</key>
-        <real>25</real>
-        <key>WFGetLatestPhotosActionType</key>
-        <string>Both</string>
+        <key>WFContentItemSortProperty</key>
+        <string>Date Taken</string>
+        <key>WFContentItemSortOrder</key>
+        <string>Latest First</string>
+        <key>WFContentItemLimitEnabled</key>
+        <true/>
+        <key>WFContentItemLimit</key>
+        <integer>25</integer>
       </dict>
     </dict>
 
-    <!-- ACTION 3: Repeat with Each Photo -->
+    <!-- ACTION 2: Repeat with Each Photo -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.repeat.each</string>
@@ -218,14 +222,14 @@ export class ShortcutGeneratorService {
     <!-- LOOP 1: Get Photo Filename -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
-      <string>is.workflow.actions.getitemdetail</string>
+      <string>is.workflow.actions.properties.images</string>
       <key>WFWorkflowActionParameters</key>
       <dict>
         <key>UUID</key>
         <string>${nameUUID}</string>
         <key>CustomOutputName</key>
         <string>FileName</string>
-        <key>WFItemSpecifier</key>
+        <key>WFContentItemPropertyName</key>
         <string>Name</string>
         <key>WFInput</key>
         ${this.magicVar('Repeat Item')}
