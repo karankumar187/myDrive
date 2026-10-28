@@ -1,67 +1,29 @@
 import crypto from 'crypto';
 
 /**
- * Generates a fully pre-configured Apple Shortcuts plist XML file.
- * When the user taps the downloaded .shortcut file on their iPhone, it imports directly
- * into the Shortcuts app with Device ID, Device Key, and Server URL already embedded.
- * Zero manual setup required.
+ * Generates fully pre-configured Apple Shortcuts .shortcut plist files.
+ *
+ * IMPORTANT serialization rules (reverse-engineered from Apple WorkflowKit):
+ *
+ * 1. Static text: Use `WFTextTokenString` with BOTH `string` AND `attachmentsByRange` (empty dict).
+ *    Missing `attachmentsByRange` causes `WFPropertyListParameterValue` crash.
+ *
+ * 2. Variable references: Embed inside a `WFTextTokenString` using the Object Replacement Character
+ *    (\uFFFC) as a placeholder in the `string` field, with the variable descriptor in
+ *    `attachmentsByRange` keyed by `{offset, 1}`.
+ *
+ * 3. Dictionary field values (headers, form fields): Keys and values must be `WFTextTokenString`
+ *    with proper `attachmentsByRange`.
+ *
+ * 4. Action output references need `OutputUUID` matching the producing action's UUID.
  */
 export class ShortcutGeneratorService {
   private static uuid(): string {
     return crypto.randomUUID().toUpperCase();
   }
 
-  /**
-   * Wraps a plain string as a WFTextTokenString serialized value (used in most text fields).
-   */
-  private static textToken(value: string): string {
-    return `<dict>
-            <key>Value</key>
-            <dict>
-              <key>string</key>
-              <string>${ShortcutGeneratorService.escape(value)}</string>
-            </dict>
-            <key>WFSerializationType</key>
-            <string>WFTextTokenString</string>
-          </dict>`;
-  }
-
-  /**
-   * Wraps an action output reference (references previous action's output by name).
-   */
-  private static actionOutputRef(outputName: string): string {
-    return `<dict>
-            <key>Value</key>
-            <dict>
-              <key>OutputName</key>
-              <string>${ShortcutGeneratorService.escape(outputName)}</string>
-              <key>Type</key>
-              <string>ActionOutput</string>
-            </dict>
-            <key>WFSerializationType</key>
-            <string>WFTextTokenAttachment</string>
-          </dict>`;
-  }
-
-  /**
-   * References a built-in Shortcuts variable (e.g. "Repeat Item", "Repeat Index").
-   */
-  private static builtinVarRef(variableName: string): string {
-    return `<dict>
-            <key>Value</key>
-            <dict>
-              <key>Type</key>
-              <string>Variable</string>
-              <key>VariableName</key>
-              <string>${ShortcutGeneratorService.escape(variableName)}</string>
-            </dict>
-            <key>WFSerializationType</key>
-            <string>WFTextTokenAttachment</string>
-          </dict>`;
-  }
-
-  /** Escapes XML special characters in string values */
-  private static escape(str: string): string {
+  /** Escapes XML special characters */
+  private static esc(str: string): string {
     return str
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
@@ -71,34 +33,150 @@ export class ShortcutGeneratorService {
   }
 
   /**
-   * Builds a single HTTP header dictionary item for WFHTTPHeaders.
+   * Static text token — no variable references.
+   * Produces a WFTextTokenString with empty attachmentsByRange.
    */
-  private static headerItem(key: string, value: string): string {
+  private static text(value: string): string {
     return `<dict>
-                <key>WFItemType</key>
-                <integer>0</integer>
-                <key>WFKey</key>
-                ${ShortcutGeneratorService.textToken(key)}
-                <key>WFValue</key>
-                ${ShortcutGeneratorService.textToken(value)}
-              </dict>`;
+              <key>Value</key>
+              <dict>
+                <key>attachmentsByRange</key>
+                <dict/>
+                <key>string</key>
+                <string>${this.esc(value)}</string>
+              </dict>
+              <key>WFSerializationType</key>
+              <string>WFTextTokenString</string>
+            </dict>`;
   }
 
   /**
-   * Generates the complete XML plist for the myDrive Auto-Sync shortcut.
-   * Flow:
-   *  1. GET /shortcuts/sync-check → get lastSyncedDate
-   *  2. Extract lastSyncedDate from JSON response
-   *  3. Find Photos taken after lastSyncedDate (limit 50)
-   *  4. Count photos. If 0 → notify "Up to date" and stop.
-   *  5. Notify "Starting sync of N photos"
-   *  6. Repeat with each photo:
-   *     a. Get image filename
-   *     b. POST /shortcuts/upload (multipart with credentials in headers)
-   *     c. Notify per file
-   *  7. Final "Sync complete" notification
+   * Variable reference token — references an action output by UUID.
+   * Uses the Object Replacement Character (\uFFFC) as the placeholder.
    */
+  private static varRef(outputUUID: string, outputName: string, type: string = 'ActionOutput'): string {
+    return `<dict>
+              <key>Value</key>
+              <dict>
+                <key>attachmentsByRange</key>
+                <dict>
+                  <key>{0, 1}</key>
+                  <dict>
+                    <key>OutputName</key>
+                    <string>${this.esc(outputName)}</string>
+                    <key>OutputUUID</key>
+                    <string>${outputUUID}</string>
+                    <key>Type</key>
+                    <string>${type}</string>
+                  </dict>
+                </dict>
+                <key>string</key>
+                <string>\uFFFC</string>
+              </dict>
+              <key>WFSerializationType</key>
+              <string>WFTextTokenString</string>
+            </dict>`;
+  }
+
+  /**
+   * Magic variable reference — references a built-in variable like "Repeat Item".
+   */
+  private static magicVar(variableName: string): string {
+    return `<dict>
+              <key>Value</key>
+              <dict>
+                <key>attachmentsByRange</key>
+                <dict>
+                  <key>{0, 1}</key>
+                  <dict>
+                    <key>Type</key>
+                    <string>Variable</string>
+                    <key>VariableName</key>
+                    <string>${this.esc(variableName)}</string>
+                  </dict>
+                </dict>
+                <key>string</key>
+                <string>\uFFFC</string>
+              </dict>
+              <key>WFSerializationType</key>
+              <string>WFTextTokenString</string>
+            </dict>`;
+  }
+
+  /**
+   * Builds a single HTTP header key-value pair for WFHTTPHeaders.
+   */
+  private static headerItem(key: string, value: string): string {
+    return `<dict>
+              <key>WFItemType</key>
+              <integer>0</integer>
+              <key>WFKey</key>
+              ${this.text(key)}
+              <key>WFValue</key>
+              ${this.text(value)}
+            </dict>`;
+  }
+
+  /**
+   * Builds a text form field (WFItemType 0) for WFFormValues.
+   */
+  private static formFieldText(key: string, valueOutputUUID: string, valueOutputName: string): string {
+    return `<dict>
+              <key>WFItemType</key>
+              <integer>0</integer>
+              <key>WFKey</key>
+              ${this.text(key)}
+              <key>WFValue</key>
+              ${this.varRef(valueOutputUUID, valueOutputName)}
+            </dict>`;
+  }
+
+  /**
+   * Builds a file form field (WFItemType 0) for WFFormValues — references "Repeat Item".
+   * Note: In WorkflowKit, dictionary field values use WFItemType 0 (string/token attachment)
+   * which resolves dynamically at runtime to multipart file streaming.
+   */
+  private static formFieldFile(key: string): string {
+    return `<dict>
+              <key>WFItemType</key>
+              <integer>0</integer>
+              <key>WFKey</key>
+              ${this.text(key)}
+              <key>WFValue</key>
+              ${this.magicVar('Repeat Item')}
+            </dict>`;
+  }
+
+  /**
+   * Wraps header items in a WFDictionaryFieldValue serialization container.
+   */
+  private static headersDict(items: string[]): string {
+    return `<dict>
+              <key>Value</key>
+              <dict>
+                <key>WFDictionaryFieldValueItems</key>
+                <array>
+                  ${items.join('\n                  ')}
+                </array>
+              </dict>
+              <key>WFSerializationType</key>
+              <string>WFDictionaryFieldValue</string>
+            </dict>`;
+  }
+
+  // ═══════════════════════════════════════════════════════════════════
+  //  AUTO-SYNC SHORTCUT
+  // ═══════════════════════════════════════════════════════════════════
+
   static generateAutoSyncShortcut(serverUrl: string, deviceId: string, deviceKey: string): string {
+    // Pre-generate UUIDs for actions that are referenced by others
+    const syncCheckUUID = this.uuid();
+    const lastSyncStringUUID = this.uuid();
+    const lastSyncDateUUID = this.uuid();
+    const findPhotosUUID = this.uuid();
+    const countUUID = this.uuid();
+    const syncedCountUUID = this.uuid();
+    const fileNameUUID = this.uuid();
     const loopGroupId = this.uuid();
     const ifGroupId = this.uuid();
 
@@ -109,155 +187,134 @@ export class ShortcutGeneratorService {
   <key>WFWorkflowActions</key>
   <array>
 
-    <!-- ═══════════════════════════════════════════════════ -->
-    <!-- ACTION 1: GET sync-check → returns lastSyncedDate  -->
-    <!-- ═══════════════════════════════════════════════════ -->
+    <!-- ACTION 1: GET /shortcuts/sync-check -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.downloadurl</string>
       <key>WFWorkflowActionParameters</key>
       <dict>
         <key>UUID</key>
-        <string>${this.uuid()}</string>
+        <string>${syncCheckUUID}</string>
         <key>CustomOutputName</key>
         <string>SyncStatus</string>
         <key>WFURL</key>
-        ${this.textToken(`${serverUrl}/api/v1/shortcuts/sync-check`)}
+        <string>${this.esc(serverUrl)}/api/v1/shortcuts/sync-check</string>
         <key>WFHTTPMethod</key>
         <string>GET</string>
         <key>WFHTTPHeaders</key>
-        <dict>
-          <key>Value</key>
-          <dict>
-            <key>WFDictionaryFieldValueItems</key>
-            <array>
-              ${this.headerItem('X-Device-Id', deviceId)}
-              ${this.headerItem('X-Device-Key', deviceKey)}
-            </array>
-          </dict>
-          <key>WFSerializationType</key>
-          <string>WFDictionaryFieldValue</string>
-        </dict>
-        <key>WFHTTPBodyType</key>
-        <string>JSON</string>
+        ${this.headersDict([
+          this.headerItem('X-Device-Id', deviceId),
+          this.headerItem('X-Device-Key', deviceKey),
+        ])}
       </dict>
     </dict>
 
-    <!-- ════════════════════════════════════════════════════ -->
-    <!-- ACTION 2: Extract lastSyncedDate from JSON response  -->
-    <!-- ════════════════════════════════════════════════════ -->
+    <!-- ACTION 2: Get Dictionary Value → lastSyncedDate -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.getvalueforkey</string>
       <key>WFWorkflowActionParameters</key>
       <dict>
         <key>UUID</key>
-        <string>${this.uuid()}</string>
+        <string>${lastSyncStringUUID}</string>
         <key>CustomOutputName</key>
         <string>LastSyncedDateString</string>
         <key>WFDictionaryKey</key>
         <string>lastSyncedDate</string>
         <key>WFInput</key>
-        ${this.actionOutputRef('SyncStatus')}
+        ${this.varRef(syncCheckUUID, 'SyncStatus')}
       </dict>
     </dict>
 
-    <!-- ═════════════════════════════════════════════════ -->
-    <!-- ACTION 3: Parse ISO date string into a Date value -->
-    <!-- ═════════════════════════════════════════════════ -->
+    <!-- ACTION 3: Parse date string → Date -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.date</string>
       <key>WFWorkflowActionParameters</key>
       <dict>
         <key>UUID</key>
-        <string>${this.uuid()}</string>
+        <string>${lastSyncDateUUID}</string>
         <key>CustomOutputName</key>
         <string>LastSyncDate</string>
         <key>WFDateActionMode</key>
         <string>Specified Date</string>
         <key>WFDateActionDate</key>
-        ${this.actionOutputRef('LastSyncedDateString')}
+        ${this.varRef(lastSyncStringUUID, 'LastSyncedDateString')}
       </dict>
     </dict>
 
-    <!-- ════════════════════════════════════════════════════════ -->
-    <!-- ACTION 4: Find Photos taken AFTER lastSyncDate (max 50) -->
-    <!-- ════════════════════════════════════════════════════════ -->
+    <!-- ACTION 4: Find Photos after lastSyncDate (max 50) -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.filter.photos</string>
       <key>WFWorkflowActionParameters</key>
       <dict>
         <key>UUID</key>
-        <string>${this.uuid()}</string>
+        <string>${findPhotosUUID}</string>
         <key>CustomOutputName</key>
         <string>NewPhotos</string>
         <key>WFContentItemFilter</key>
         <dict>
           <key>Value</key>
           <dict>
-            <key>WFContentPredicateBoundedDate</key>
-            <false/>
             <key>WFActionParameterFilterPrefix</key>
             <integer>1</integer>
-            <key>WFContentPredicateTableTemplates</key>
+            <key>WFContentPredicateBoundedDate</key>
+            <false/>
+            <key>WFActionParameterFilterTemplates</key>
             <array>
               <dict>
-                <key>WFContentPredicateOperator</key>
-                <integer>99</integer>
-                <key>WFContentPredicateValue</key>
-                ${this.actionOutputRef('LastSyncDate')}
-                <key>WFContentPredicateType</key>
-                <string>WFPhotoMediaTypeContentItem</string>
-                <key>WFContentPredicateProperty</key>
-                <string>Photo Date</string>
+                <key>Operator</key>
+                <integer>4</integer>
+                <key>VariableOverrides</key>
+                <dict>
+                  <key>dateValue</key>
+                  ${this.varRef(lastSyncDateUUID, 'LastSyncDate')}
+                </dict>
+                <key>Unit</key>
+                <integer>4</integer>
+                <key>Removable</key>
+                <true/>
+                <key>Property</key>
+                <string>Creation Date</string>
               </dict>
             </array>
-            <key>WFContentPredicateAggregateMatchMode</key>
-            <integer>1</integer>
           </dict>
           <key>WFSerializationType</key>
           <string>WFContentPredicateTableTemplate</string>
         </dict>
+        <key>WFContentItemSortProperty</key>
+        <string>Creation Date</string>
+        <key>WFContentItemSortOrder</key>
+        <string>Oldest First</string>
         <key>WFContentItemLimitEnabled</key>
         <true/>
         <key>WFContentItemLimit</key>
         <integer>50</integer>
-        <key>WFContentItemSortProperty</key>
-        <string>Photo Date</string>
-        <key>WFContentItemSortOrder</key>
-        <string>asc</string>
       </dict>
     </dict>
 
-    <!-- ═══════════════════════════ -->
-    <!-- ACTION 5: Count new photos  -->
-    <!-- ═══════════════════════════ -->
+    <!-- ACTION 5: Count new photos -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.count</string>
       <key>WFWorkflowActionParameters</key>
       <dict>
         <key>UUID</key>
-        <string>${this.uuid()}</string>
+        <string>${countUUID}</string>
         <key>CustomOutputName</key>
         <string>TotalNew</string>
         <key>Input</key>
-        ${this.actionOutputRef('NewPhotos')}
+        ${this.varRef(findPhotosUUID, 'NewPhotos')}
       </dict>
     </dict>
 
-    <!-- ═══════════════════════════════════════════════════ -->
-    <!-- ACTION 6: IF TotalNew == 0 → already up to date    -->
-    <!-- ═══════════════════════════════════════════════════ -->
+    <!-- ACTION 6: IF TotalNew == 0 -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.conditional</string>
       <key>WFWorkflowActionParameters</key>
       <dict>
-        <key>UUID</key>
-        <string>${this.uuid()}</string>
         <key>GroupingIdentifier</key>
         <string>${ifGroupId}</string>
         <key>WFControlFlowMode</key>
@@ -267,20 +324,28 @@ export class ShortcutGeneratorService {
         <key>WFNumberValue</key>
         <string>0</string>
         <key>WFInput</key>
-        ${this.actionOutputRef('TotalNew')}
+        <dict>
+          <key>Value</key>
+          <dict>
+            <key>OutputName</key>
+            <string>TotalNew</string>
+            <key>OutputUUID</key>
+            <string>${countUUID}</string>
+            <key>Type</key>
+            <string>ActionOutput</string>
+          </dict>
+          <key>WFSerializationType</key>
+          <string>WFTextTokenAttachment</string>
+        </dict>
       </dict>
     </dict>
 
-    <!-- Show "up to date" notification inside IF block -->
+    <!-- Notification: already up to date -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.notification</string>
       <key>WFWorkflowActionParameters</key>
       <dict>
-        <key>UUID</key>
-        <string>${this.uuid()}</string>
-        <key>GroupingIdentifier</key>
-        <string>${ifGroupId}</string>
         <key>WFNotificationActionTitle</key>
         <string>myDrive Sync</string>
         <key>WFNotificationActionBody</key>
@@ -290,17 +355,12 @@ export class ShortcutGeneratorService {
       </dict>
     </dict>
 
-    <!-- Stop shortcut inside IF block -->
+    <!-- Stop Shortcut -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.exit</string>
       <key>WFWorkflowActionParameters</key>
-      <dict>
-        <key>UUID</key>
-        <string>${this.uuid()}</string>
-        <key>GroupingIdentifier</key>
-        <string>${ifGroupId}</string>
-      </dict>
+      <dict/>
     </dict>
 
     <!-- End IF -->
@@ -309,8 +369,6 @@ export class ShortcutGeneratorService {
       <string>is.workflow.actions.conditional</string>
       <key>WFWorkflowActionParameters</key>
       <dict>
-        <key>UUID</key>
-        <string>${this.uuid()}</string>
         <key>GroupingIdentifier</key>
         <string>${ifGroupId}</string>
         <key>WFControlFlowMode</key>
@@ -318,16 +376,12 @@ export class ShortcutGeneratorService {
       </dict>
     </dict>
 
-    <!-- ═══════════════════════════════════════ -->
-    <!-- ACTION 7: Start notification            -->
-    <!-- ═══════════════════════════════════════ -->
+    <!-- ACTION 7: Start notification -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.notification</string>
       <key>WFWorkflowActionParameters</key>
       <dict>
-        <key>UUID</key>
-        <string>${this.uuid()}</string>
         <key>WFNotificationActionTitle</key>
         <string>myDrive Sync</string>
         <key>WFNotificationActionBody</key>
@@ -337,16 +391,14 @@ export class ShortcutGeneratorService {
       </dict>
     </dict>
 
-    <!-- ═══════════════════════════════════════════════ -->
-    <!-- ACTION 8: Set SyncedCount = 0                  -->
-    <!-- ═══════════════════════════════════════════════ -->
+    <!-- ACTION 8: SyncedCount = 0 -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.number</string>
       <key>WFWorkflowActionParameters</key>
       <dict>
         <key>UUID</key>
-        <string>${this.uuid()}</string>
+        <string>${syncedCountUUID}</string>
         <key>CustomOutputName</key>
         <string>SyncedCount</string>
         <key>WFNumberActionNumber</key>
@@ -354,206 +406,119 @@ export class ShortcutGeneratorService {
       </dict>
     </dict>
 
-    <!-- ═══════════════════════════════════════ -->
-    <!-- ACTION 9: Repeat with each new photo    -->
-    <!-- ═══════════════════════════════════════ -->
+    <!-- ACTION 9: Repeat with Each → NewPhotos -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.repeat.each</string>
       <key>WFWorkflowActionParameters</key>
       <dict>
-        <key>UUID</key>
-        <string>${this.uuid()}</string>
         <key>GroupingIdentifier</key>
         <string>${loopGroupId}</string>
         <key>WFControlFlowMode</key>
         <integer>0</integer>
-        <key>Input</key>
-        ${this.actionOutputRef('NewPhotos')}
+        <key>WFInput</key>
+        ${this.varRef(findPhotosUUID, 'NewPhotos')}
       </dict>
     </dict>
 
-    <!-- ──────────────────────────────── -->
-    <!-- LOOP: Get image filename         -->
-    <!-- ──────────────────────────────── -->
+    <!-- LOOP: Get filename -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
-      <string>is.workflow.actions.getitemdetail</string>
+      <string>is.workflow.actions.properties.images</string>
       <key>WFWorkflowActionParameters</key>
       <dict>
         <key>UUID</key>
-        <string>${this.uuid()}</string>
-        <key>GroupingIdentifier</key>
-        <string>${loopGroupId}</string>
+        <string>${fileNameUUID}</string>
         <key>CustomOutputName</key>
         <string>FileName</string>
-        <key>WFItemSpecifier</key>
+        <key>WFContentItemPropertyName</key>
         <string>Name</string>
         <key>WFInput</key>
-        ${this.builtinVarRef('Repeat Item')}
+        ${this.magicVar('Repeat Item')}
       </dict>
     </dict>
 
-    <!-- ──────────────────────────────────────────── -->
-    <!-- LOOP: POST upload to myDrive with device auth -->
-    <!-- ──────────────────────────────────────────── -->
+    <!-- LOOP: POST upload -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.downloadurl</string>
       <key>WFWorkflowActionParameters</key>
       <dict>
-        <key>UUID</key>
-        <string>${this.uuid()}</string>
-        <key>GroupingIdentifier</key>
-        <string>${loopGroupId}</string>
-        <key>CustomOutputName</key>
-        <string>UploadResult</string>
         <key>WFURL</key>
-        ${this.textToken(`${serverUrl}/api/v1/shortcuts/upload`)}
+        <string>${this.esc(serverUrl)}/api/v1/shortcuts/upload</string>
         <key>WFHTTPMethod</key>
         <string>POST</string>
         <key>WFHTTPHeaders</key>
-        <dict>
-          <key>Value</key>
-          <dict>
-            <key>WFDictionaryFieldValueItems</key>
-            <array>
-              ${this.headerItem('X-Device-Id', deviceId)}
-              ${this.headerItem('X-Device-Key', deviceKey)}
-            </array>
-          </dict>
-          <key>WFSerializationType</key>
-          <string>WFDictionaryFieldValue</string>
-        </dict>
+        ${this.headersDict([
+          this.headerItem('X-Device-Id', deviceId),
+          this.headerItem('X-Device-Key', deviceKey),
+        ])}
         <key>WFHTTPBodyType</key>
         <string>Form</string>
         <key>WFFormValues</key>
-        <dict>
-          <key>Value</key>
-          <dict>
-            <key>WFDictionaryFieldValueItems</key>
-            <array>
-              <dict>
-                <key>WFItemType</key>
-                <integer>1</integer>
-                <key>WFKey</key>
-                ${this.textToken('media')}
-                <key>WFValue</key>
-                ${this.builtinVarRef('Repeat Item')}
-              </dict>
-              <dict>
-                <key>WFItemType</key>
-                <integer>0</integer>
-                <key>WFKey</key>
-                ${this.textToken('filename')}
-                <key>WFValue</key>
-                ${this.actionOutputRef('FileName')}
-              </dict>
-              <dict>
-                <key>WFItemType</key>
-                <integer>0</integer>
-                <key>WFKey</key>
-                ${this.textToken('deviceAssetId')}
-                <key>WFValue</key>
-                ${this.actionOutputRef('FileName')}
-              </dict>
-            </array>
-          </dict>
-          <key>WFSerializationType</key>
-          <string>WFDictionaryFieldValue</string>
-        </dict>
+        ${this.headersDict([
+          this.formFieldFile('media'),
+          this.formFieldText('filename', fileNameUUID, 'FileName'),
+          this.formFieldText('deviceAssetId', fileNameUUID, 'FileName'),
+        ])}
       </dict>
     </dict>
 
-    <!-- ─────────────────────────────────────── -->
-    <!-- LOOP: Increment SyncedCount             -->
-    <!-- ─────────────────────────────────────── -->
+    <!-- LOOP: Increment SyncedCount -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.math</string>
       <key>WFWorkflowActionParameters</key>
       <dict>
         <key>UUID</key>
-        <string>${this.uuid()}</string>
-        <key>GroupingIdentifier</key>
-        <string>${loopGroupId}</string>
+        <string>${syncedCountUUID}</string>
         <key>CustomOutputName</key>
         <string>SyncedCount</string>
-        <key>WFMathOperand</key>
-        <string>+</string>
-        <key>WFInput</key>
-        ${this.actionOutputRef('SyncedCount')}
         <key>WFMathOperation</key>
         <string>+</string>
-        <key>WFMathOperandValue</key>
-        <dict>
-          <key>Value</key>
-          <dict>
-            <key>string</key>
-            <string>1</string>
-          </dict>
-          <key>WFSerializationType</key>
-          <string>WFTextTokenString</string>
-        </dict>
+        <key>WFScientificMathOperation</key>
+        <string>…</string>
+        <key>WFMathOperand</key>
+        ${this.varRef(syncedCountUUID, 'SyncedCount')}
+        <key>WFInput</key>
+        ${this.varRef(syncedCountUUID, 'SyncedCount')}
       </dict>
     </dict>
 
-    <!-- ─────────────────────────────────────── -->
-    <!-- LOOP: Notify per file uploaded          -->
-    <!-- ─────────────────────────────────────── -->
+    <!-- LOOP: Per-file notification -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.notification</string>
       <key>WFWorkflowActionParameters</key>
       <dict>
-        <key>UUID</key>
-        <string>${this.uuid()}</string>
-        <key>GroupingIdentifier</key>
-        <string>${loopGroupId}</string>
         <key>WFNotificationActionTitle</key>
         <string>myDrive</string>
         <key>WFNotificationActionBody</key>
-        <dict>
-          <key>Value</key>
-          <dict>
-            <key>string</key>
-            <string>☁️ Backed up photo to cloud</string>
-            <key>attachmentsByRange</key>
-            <dict/>
-          </dict>
-          <key>WFSerializationType</key>
-          <string>WFTextTokenString</string>
-        </dict>
+        <string>☁️ Photo backed up to cloud</string>
         <key>WFNotificationActionSound</key>
         <false/>
       </dict>
     </dict>
 
-    <!-- End Repeat loop -->
+    <!-- End Repeat -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.repeat.each</string>
       <key>WFWorkflowActionParameters</key>
       <dict>
-        <key>UUID</key>
-        <string>${this.uuid()}</string>
         <key>GroupingIdentifier</key>
         <string>${loopGroupId}</string>
         <key>WFControlFlowMode</key>
-        <integer>1</integer>
+        <integer>2</integer>
       </dict>
     </dict>
 
-    <!-- ═══════════════════════════════════════════════ -->
-    <!-- ACTION 10: Final "Sync Complete" notification   -->
-    <!-- ═══════════════════════════════════════════════ -->
+    <!-- ACTION 10: Final notification -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.notification</string>
       <key>WFWorkflowActionParameters</key>
       <dict>
-        <key>UUID</key>
-        <string>${this.uuid()}</string>
         <key>WFNotificationActionTitle</key>
         <string>myDrive Sync Complete</string>
         <key>WFNotificationActionBody</key>
@@ -566,15 +531,11 @@ export class ShortcutGeneratorService {
   </array>
 
   <key>WFWorkflowClientVersion</key>
-  <string>1300.0.0.0</string>
+  <string>2302.0.4</string>
   <key>WFWorkflowMinimumClientVersion</key>
   <integer>900</integer>
   <key>WFWorkflowMinimumClientVersionString</key>
   <string>900</string>
-  <key>WFWorkflowName</key>
-  <string>myDrive Auto Sync</string>
-  <key>WFWorkflowHasShortcutInputVariables</key>
-  <false/>
   <key>WFWorkflowIcon</key>
   <dict>
     <key>WFWorkflowIconStartColor</key>
@@ -587,18 +548,24 @@ export class ShortcutGeneratorService {
   <key>WFWorkflowInputContentItemClasses</key>
   <array/>
   <key>WFWorkflowTypes</key>
-  <array/>
+  <array>
+    <string>NCWidget</string>
+    <string>WatchKit</string>
+  </array>
   <key>WFWorkflowOutputContentItemClasses</key>
   <array/>
 </dict>
 </plist>`;
   }
 
-  /**
-   * Generates the Manual Upload shortcut.
-   * Shows a photo picker, uploads selected photos one by one with progress notifications.
-   */
+  // ═══════════════════════════════════════════════════════════════════
+  //  MANUAL UPLOAD SHORTCUT
+  // ═══════════════════════════════════════════════════════════════════
+
   static generateUploadShortcut(serverUrl: string, deviceId: string, deviceKey: string): string {
+    const selectPhotosUUID = this.uuid();
+    const countUUID = this.uuid();
+    const fileNameUUID = this.uuid();
     const loopGroupId = this.uuid();
 
     return `<?xml version="1.0" encoding="UTF-8"?>
@@ -611,17 +578,15 @@ export class ShortcutGeneratorService {
     <!-- Select Photos -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
-      <string>is.workflow.actions.selectphotos</string>
+      <string>is.workflow.actions.selectphoto</string>
       <key>WFWorkflowActionParameters</key>
       <dict>
         <key>UUID</key>
-        <string>${this.uuid()}</string>
+        <string>${selectPhotosUUID}</string>
         <key>CustomOutputName</key>
         <string>SelectedPhotos</string>
         <key>WFSelectMultiplePhotos</key>
         <true/>
-        <key>WFSelectPhotosActionType</key>
-        <string>Both</string>
       </dict>
     </dict>
 
@@ -632,11 +597,11 @@ export class ShortcutGeneratorService {
       <key>WFWorkflowActionParameters</key>
       <dict>
         <key>UUID</key>
-        <string>${this.uuid()}</string>
+        <string>${countUUID}</string>
         <key>CustomOutputName</key>
         <string>TotalCount</string>
         <key>Input</key>
-        ${this.actionOutputRef('SelectedPhotos')}
+        ${this.varRef(selectPhotosUUID, 'SelectedPhotos')}
       </dict>
     </dict>
 
@@ -646,8 +611,6 @@ export class ShortcutGeneratorService {
       <string>is.workflow.actions.notification</string>
       <key>WFWorkflowActionParameters</key>
       <dict>
-        <key>UUID</key>
-        <string>${this.uuid()}</string>
         <key>WFNotificationActionTitle</key>
         <string>myDrive Upload</string>
         <key>WFNotificationActionBody</key>
@@ -657,39 +620,35 @@ export class ShortcutGeneratorService {
       </dict>
     </dict>
 
-    <!-- Repeat with each selected photo -->
+    <!-- Repeat with Each -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.repeat.each</string>
       <key>WFWorkflowActionParameters</key>
       <dict>
-        <key>UUID</key>
-        <string>${this.uuid()}</string>
         <key>GroupingIdentifier</key>
         <string>${loopGroupId}</string>
         <key>WFControlFlowMode</key>
         <integer>0</integer>
-        <key>Input</key>
-        ${this.actionOutputRef('SelectedPhotos')}
+        <key>WFInput</key>
+        ${this.varRef(selectPhotosUUID, 'SelectedPhotos')}
       </dict>
     </dict>
 
-    <!-- LOOP: Get image name -->
+    <!-- LOOP: Get filename -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
-      <string>is.workflow.actions.getitemdetail</string>
+      <string>is.workflow.actions.properties.images</string>
       <key>WFWorkflowActionParameters</key>
       <dict>
         <key>UUID</key>
-        <string>${this.uuid()}</string>
-        <key>GroupingIdentifier</key>
-        <string>${loopGroupId}</string>
+        <string>${fileNameUUID}</string>
         <key>CustomOutputName</key>
         <string>FileName</string>
-        <key>WFItemSpecifier</key>
+        <key>WFContentItemPropertyName</key>
         <string>Name</string>
         <key>WFInput</key>
-        ${this.builtinVarRef('Repeat Item')}
+        ${this.magicVar('Repeat Item')}
       </dict>
     </dict>
 
@@ -699,81 +658,36 @@ export class ShortcutGeneratorService {
       <string>is.workflow.actions.downloadurl</string>
       <key>WFWorkflowActionParameters</key>
       <dict>
-        <key>UUID</key>
-        <string>${this.uuid()}</string>
-        <key>GroupingIdentifier</key>
-        <string>${loopGroupId}</string>
         <key>WFURL</key>
-        ${this.textToken(`${serverUrl}/api/v1/shortcuts/upload`)}
+        <string>${this.esc(serverUrl)}/api/v1/shortcuts/upload</string>
         <key>WFHTTPMethod</key>
         <string>POST</string>
         <key>WFHTTPHeaders</key>
-        <dict>
-          <key>Value</key>
-          <dict>
-            <key>WFDictionaryFieldValueItems</key>
-            <array>
-              ${this.headerItem('X-Device-Id', deviceId)}
-              ${this.headerItem('X-Device-Key', deviceKey)}
-            </array>
-          </dict>
-          <key>WFSerializationType</key>
-          <string>WFDictionaryFieldValue</string>
-        </dict>
+        ${this.headersDict([
+          this.headerItem('X-Device-Id', deviceId),
+          this.headerItem('X-Device-Key', deviceKey),
+        ])}
         <key>WFHTTPBodyType</key>
         <string>Form</string>
         <key>WFFormValues</key>
-        <dict>
-          <key>Value</key>
-          <dict>
-            <key>WFDictionaryFieldValueItems</key>
-            <array>
-              <dict>
-                <key>WFItemType</key>
-                <integer>1</integer>
-                <key>WFKey</key>
-                ${this.textToken('media')}
-                <key>WFValue</key>
-                ${this.builtinVarRef('Repeat Item')}
-              </dict>
-              <dict>
-                <key>WFItemType</key>
-                <integer>0</integer>
-                <key>WFKey</key>
-                ${this.textToken('filename')}
-                <key>WFValue</key>
-                ${this.actionOutputRef('FileName')}
-              </dict>
-              <dict>
-                <key>WFItemType</key>
-                <integer>0</integer>
-                <key>WFKey</key>
-                ${this.textToken('deviceAssetId')}
-                <key>WFValue</key>
-                ${this.actionOutputRef('FileName')}
-              </dict>
-            </array>
-          </dict>
-          <key>WFSerializationType</key>
-          <string>WFDictionaryFieldValue</string>
-        </dict>
+        ${this.headersDict([
+          this.formFieldFile('media'),
+          this.formFieldText('filename', fileNameUUID, 'FileName'),
+          this.formFieldText('deviceAssetId', fileNameUUID, 'FileName'),
+        ])}
       </dict>
     </dict>
 
-    <!-- LOOP: Notify per file -->
+    <!-- LOOP: Per-file notification -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.notification</string>
       <key>WFWorkflowActionParameters</key>
       <dict>
-        <key>UUID</key>
-        <string>${this.uuid()}</string>
-        <key>GroupingIdentifier</key>
-        <string>${loopGroupId}</string>
         <key>WFNotificationActionTitle</key>
         <string>myDrive</string>
         <key>WFNotificationActionBody</key>
-        <string>✅ Photo uploaded to your cloud</string>
+        <string>✅ Photo uploaded to cloud</string>
         <key>WFNotificationActionSound</key>
         <false/>
       </dict>
@@ -785,12 +699,10 @@ export class ShortcutGeneratorService {
       <string>is.workflow.actions.repeat.each</string>
       <key>WFWorkflowActionParameters</key>
       <dict>
-        <key>UUID</key>
-        <string>${this.uuid()}</string>
         <key>GroupingIdentifier</key>
         <string>${loopGroupId}</string>
         <key>WFControlFlowMode</key>
-        <integer>1</integer>
+        <integer>2</integer>
       </dict>
     </dict>
 
@@ -800,12 +712,10 @@ export class ShortcutGeneratorService {
       <string>is.workflow.actions.notification</string>
       <key>WFWorkflowActionParameters</key>
       <dict>
-        <key>UUID</key>
-        <string>${this.uuid()}</string>
         <key>WFNotificationActionTitle</key>
         <string>myDrive Upload Complete</string>
         <key>WFNotificationActionBody</key>
-        <string>🎉 All selected photos backed up to your personal cloud!</string>
+        <string>🎉 All photos backed up to your personal cloud!</string>
         <key>WFNotificationActionSound</key>
         <true/>
       </dict>
@@ -814,15 +724,11 @@ export class ShortcutGeneratorService {
   </array>
 
   <key>WFWorkflowClientVersion</key>
-  <string>1300.0.0.0</string>
+  <string>2302.0.4</string>
   <key>WFWorkflowMinimumClientVersion</key>
   <integer>900</integer>
   <key>WFWorkflowMinimumClientVersionString</key>
   <string>900</string>
-  <key>WFWorkflowName</key>
-  <string>myDrive Upload</string>
-  <key>WFWorkflowHasShortcutInputVariables</key>
-  <true/>
   <key>WFWorkflowIcon</key>
   <dict>
     <key>WFWorkflowIconStartColor</key>
@@ -835,7 +741,7 @@ export class ShortcutGeneratorService {
   <key>WFWorkflowInputContentItemClasses</key>
   <array>
     <string>WFPhotoMediaContentItem</string>
-    <string>WFAVAssetContentItem</string>
+    <string>WFImageContentItem</string>
     <string>WFGenericFileContentItem</string>
   </array>
   <key>WFWorkflowTypes</key>
