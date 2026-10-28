@@ -18,6 +18,7 @@ import {
   Activity,
   Clock,
   ChevronDown,
+  Zap,
 } from 'lucide-react';
 import { api } from '../services/api.js';
 import { formatBytes } from '../utils/format.js';
@@ -414,6 +415,16 @@ export const DeviceManagerView: React.FC<Props> = ({
                     <FolderOpen className="w-3.5 h-3.5" />
                     <span>Uploaded Docs</span>
                   </button>
+
+                  {device.deviceType === 'iphone' && (
+                    <button
+                      onClick={onOpenIPhoneModal}
+                      className="flex items-center space-x-1.5 text-xs text-amber-400 hover:text-amber-300 font-semibold transition"
+                    >
+                      <Zap className="w-3.5 h-3.5" />
+                      <span>Automations &amp; Shortcuts</span>
+                    </button>
+                  )}
                 </div>
 
                 <div className="flex items-center space-x-4">
