@@ -73,6 +73,12 @@ export const FolderExplorerView: React.FC<Props> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
   const dragCounter = useRef(0);
+
+  // Optimistic local files state for instantaneous UI responses
+  const [localFiles, setLocalFiles] = useState<FileItem[]>(files);
+  useEffect(() => {
+    setLocalFiles(files);
+  }, [files]);
   const [globalProgress, setGlobalProgress] = useState<GlobalProgressState>({
     progress: 0,
     isVisible: false,
@@ -202,7 +208,7 @@ export const FolderExplorerView: React.FC<Props> = ({
   };
 
   const selectAllFiles = () => {
-    setSelectedFileIds(new Set(files.map((f) => f._id)));
+    setSelectedFileIds(new Set(localFiles.map((f) => f._id)));
   };
 
   const deselectAllFiles = () => {
@@ -214,71 +220,116 @@ export const FolderExplorerView: React.FC<Props> = ({
     setSelectedFileIds(new Set());
   };
 
-  // Rename handler
+  // Rename handler (Optimistic)
   const handleRename = async () => {
     if (!renameFile || !renameValue.trim()) return;
-    setRenaming(true);
+    const targetId = renameFile._id;
+    const oldName = renameFile.filename;
+    const newName = renameValue.trim();
+
+    // Optimistically update filename immediately
+    setLocalFiles((prev) =>
+      prev.map((f) => (f._id === targetId ? { ...f, filename: newName } : f))
+    );
+    setRenameFile(null);
+    setRenameValue('');
+
     try {
-      await api.renameFile(renameFile._id, renameValue.trim());
-      setRenameFile(null);
-      setRenameValue('');
+      await api.renameFile(targetId, newName);
       onRefresh();
     } catch (err: any) {
+      // Rollback
+      setLocalFiles((prev) =>
+        prev.map((f) => (f._id === targetId ? { ...f, filename: oldName } : f))
+      );
       alert(err.message || 'Failed to rename file');
     } finally {
       setRenaming(false);
     }
   };
 
-  // Move handler
+  // Move handler (Optimistic)
   const handleMove = async () => {
     setMoving(true);
+    const targetFolder = moveTargetFolderId;
+    const isMovingBulk = isBulkMove;
+    const movedIds = isMovingBulk ? Array.from(selectedFileIds) : moveFile ? [moveFile._id] : [];
+    const movedIdSet = new Set(movedIds);
+    const movedItems = localFiles.filter((f) => movedIdSet.has(f._id));
+
+    // Optimistically remove moved files from the current folder view
+    setLocalFiles((prev) => prev.filter((f) => !movedIdSet.has(f._id)));
+    setMoveFile(null);
+    setIsBulkMove(false);
+    setMoveTargetFolderId(null);
+    if (isMovingBulk) exitSelectionMode();
+
     try {
-      if (isBulkMove) {
-        await api.bulkAction('move', Array.from(selectedFileIds), moveTargetFolderId);
-        exitSelectionMode();
-      } else if (moveFile) {
-        await api.moveFile(moveFile._id, moveTargetFolderId);
+      if (isMovingBulk) {
+        await api.bulkAction('move', movedIds, targetFolder);
+      } else if (movedIds.length > 0) {
+        await api.moveFile(movedIds[0], targetFolder);
       }
-      setMoveFile(null);
-      setIsBulkMove(false);
-      setMoveTargetFolderId(null);
       onRefresh();
     } catch (err: any) {
+      // Rollback
+      setLocalFiles((prev) => [...prev, ...movedItems]);
       alert(err.message || 'Failed to move file(s)');
     } finally {
       setMoving(false);
     }
   };
 
-  // Favorite handler
+  // Favorite handler (Optimistic)
   const handleToggleFavorite = async (file: FileItem) => {
+    const nextFav = !file.isFavorite;
+    // Optimistically toggle heart icon immediately
+    setLocalFiles((prev) =>
+      prev.map((f) => (f._id === file._id ? { ...f, isFavorite: nextFav } : f))
+    );
     try {
-      await api.toggleFavorite(file._id, !file.isFavorite);
+      await api.toggleFavorite(file._id, nextFav);
       onRefresh();
     } catch (err: any) {
+      // Rollback
+      setLocalFiles((prev) =>
+        prev.map((f) => (f._id === file._id ? { ...f, isFavorite: !nextFav } : f))
+      );
       alert(err.message || 'Failed to toggle favorite');
     }
   };
 
-  // Bulk actions
+  // Bulk actions (Optimistic)
   const handleBulkFavorite = async () => {
+    const ids = new Set(selectedFileIds);
+    setLocalFiles((prev) =>
+      prev.map((f) => (ids.has(f._id) ? { ...f, isFavorite: true } : f))
+    );
+    exitSelectionMode();
     try {
-      await api.bulkAction('favorite', Array.from(selectedFileIds));
-      exitSelectionMode();
+      await api.bulkAction('favorite', Array.from(ids));
       onRefresh();
     } catch (err: any) {
       alert(err.message || 'Failed to favorite files');
+      onRefresh();
     }
   };
 
   const handleBulkTrash = async () => {
     if (!confirm(`Move ${selectedFileIds.size} selected file(s) to Trash?`)) return;
+    const ids = new Set(selectedFileIds);
+    const removedFiles = localFiles.filter((f) => ids.has(f._id));
+
+    // Optimistically remove from view immediately
+    setLocalFiles((prev) => prev.filter((f) => !ids.has(f._id)));
+    exitSelectionMode();
+
     try {
-      await api.bulkAction('trash', Array.from(selectedFileIds));
-      exitSelectionMode();
+      await api.bulkAction('trash', Array.from(ids));
       onRefresh();
     } catch (err: any) {
+      // Rollback
+      setLocalFiles((prev) => [...prev, ...removedFiles]);
       alert(err.message || 'Failed to trash files');
     }
   };
@@ -471,11 +522,18 @@ export const FolderExplorerView: React.FC<Props> = ({
 
   const handleTrashFile = async (id: string, name: string) => {
     if (!confirm(`Move "${name}" to Trash? (Preserved in cloud for 30 days)`)) return;
+    const removedFile = localFiles.find((f) => f._id === id);
+    // Optimistically remove from view immediately
+    setLocalFiles((prev) => prev.filter((f) => f._id !== id));
     try {
       await api.moveToTrash(id);
       onRefresh();
     } catch (err: any) {
-      alert(err.message);
+      // Rollback
+      if (removedFile) {
+        setLocalFiles((prev) => [removedFile, ...prev]);
+      }
+      alert(err.message || 'Failed to move file to Trash');
     }
   };
 
@@ -810,7 +868,7 @@ export const FolderExplorerView: React.FC<Props> = ({
             {currentFolder ? currentFolder.name : 'My Drive'}
           </h3>
           <span className="text-xs text-zinc-500">
-            ({folders.length} folders, {files.length} files)
+            ({folders.length} folders, {localFiles.length} files)
           </span>
         </div>
 
@@ -862,13 +920,13 @@ export const FolderExplorerView: React.FC<Props> = ({
 
       {/* Files Table */}
       <div className="bg-[#111114] rounded-2xl border border-[#222227] shadow-lg">
-        {files.length === 0 && folders.length === 0 && !(!currentFolderId && recentFiles.length > 0) ? (
+        {localFiles.length === 0 && folders.length === 0 && !(!currentFolderId && recentFiles.length > 0) ? (
           <div className="p-16 text-center text-zinc-500 space-y-2">
             <Folder className="w-12 h-12 mx-auto text-zinc-700" />
             <p className="text-sm font-semibold text-zinc-300">This folder is empty</p>
             <p className="text-xs text-zinc-500">Upload files or create subfolders to get started</p>
           </div>
-        ) : files.length > 0 ? (
+        ) : localFiles.length > 0 ? (
           <div className="overflow-x-auto min-h-[340px] pb-16">
             <table className="w-full text-left text-xs">
               <thead className="bg-[#141418] border-b border-[#222227] text-zinc-400 uppercase font-semibold text-[10px] tracking-wider rounded-t-2xl">
@@ -877,12 +935,12 @@ export const FolderExplorerView: React.FC<Props> = ({
                     <th className="py-3 pl-4 pr-1 w-8">
                       <button
                         onClick={() => {
-                          if (selectedFileIds.size === files.length) deselectAllFiles();
+                          if (selectedFileIds.size === localFiles.length) deselectAllFiles();
                           else selectAllFiles();
                         }}
                         className="text-zinc-500 hover:text-purple-400 transition"
                       >
-                        {selectedFileIds.size === files.length && files.length > 0 ? (
+                        {selectedFileIds.size === localFiles.length && localFiles.length > 0 ? (
                           <CheckSquare className="w-4 h-4 text-purple-400" />
                         ) : (
                           <Square className="w-4 h-4" />
@@ -898,7 +956,7 @@ export const FolderExplorerView: React.FC<Props> = ({
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#18181f]">
-                {files.map((file, idx) => renderFileRow(file, true, idx, files.length))}
+                {localFiles.map((file, idx) => renderFileRow(file, true, idx, localFiles.length))}
               </tbody>
             </table>
           </div>
@@ -941,11 +999,11 @@ export const FolderExplorerView: React.FC<Props> = ({
             {selectedFileIds.size} selected
           </span>
           <button
-            onClick={() => { if (selectedFileIds.size === files.length) deselectAllFiles(); else selectAllFiles(); }}
+            onClick={() => { if (selectedFileIds.size === localFiles.length) deselectAllFiles(); else selectAllFiles(); }}
             className="p-2 rounded-lg text-zinc-400 hover:text-white hover:bg-[#22222b] transition"
-            title={selectedFileIds.size === files.length ? 'Deselect All' : 'Select All'}
+            title={selectedFileIds.size === localFiles.length ? 'Deselect All' : 'Select All'}
           >
-            {selectedFileIds.size === files.length && files.length > 0 ? <XCircle className="w-4 h-4" /> : <CheckCircle2 className="w-4 h-4" />}
+            {selectedFileIds.size === localFiles.length && localFiles.length > 0 ? <XCircle className="w-4 h-4" /> : <CheckCircle2 className="w-4 h-4" />}
           </button>
           <div className="w-px h-5 bg-[#333]" />
           <button onClick={handleBulkFavorite} disabled={selectedFileIds.size === 0} className="p-2 rounded-lg text-zinc-400 hover:text-pink-400 hover:bg-pink-950/30 transition disabled:opacity-30" title="Favorite selected">

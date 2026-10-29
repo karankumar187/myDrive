@@ -114,8 +114,20 @@ class BackgroundUploadManager {
       task.message = `Computing hash...`;
       this.notify();
 
-      const buffer = await task.file.arrayBuffer();
-      const contentHash = await VaultCryptoService.calculateSha256(buffer);
+      let contentHash: string;
+      const MAX_IN_MEMORY_SIZE = 20 * 1024 * 1024; // 20 MB
+      if (task.file.size <= MAX_IN_MEMORY_SIZE) {
+        const buffer = await task.file.arrayBuffer();
+        contentHash = await VaultCryptoService.calculateSha256(buffer);
+      } else {
+        // Low-memory chunk hash for large videos/files on mobile Safari/iPhone
+        const head = await task.file.slice(0, 4 * 1024 * 1024).arrayBuffer();
+        const tail = await task.file.slice(Math.max(0, task.file.size - 4 * 1024 * 1024)).arrayBuffer();
+        const combined = new Uint8Array(head.byteLength + tail.byteLength);
+        combined.set(new Uint8Array(head), 0);
+        combined.set(new Uint8Array(tail), head.byteLength);
+        contentHash = await VaultCryptoService.calculateSha256(combined.buffer);
+      }
 
       task.progress = 25;
       task.message = `Allocating storage pool...`;
@@ -177,7 +189,8 @@ class BackgroundUploadManager {
           reject(new Error('Network error during file upload stream'));
         };
 
-        xhr.send(buffer);
+        // Stream directly from File object (zero memory buffer allocation for large videos on iPhone)
+        xhr.send(task.file);
       });
 
       task.progress = 92;

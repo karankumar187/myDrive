@@ -30,6 +30,13 @@ export const TrashBinView: React.FC<Props> = ({ trashedFiles, onRefresh }) => {
   const [actionLoading, setActionLoading] = useState<'restore-all' | 'empty' | 'dedup' | null>(null);
   const [previewFile, setPreviewFile] = useState<FileItem | null>(null);
   const [previewRotation, setPreviewRotation] = useState<number>(0);
+
+  // Optimistic local state for instantaneous Trash responses
+  const [localList, setLocalList] = useState<FileItem[]>(trashedFiles);
+  useEffect(() => {
+    setLocalList(trashedFiles);
+  }, [trashedFiles]);
+
   const [globalProgress, setGlobalProgress] = useState<GlobalProgressState>({
     progress: 0,
     isVisible: false,
@@ -53,38 +60,54 @@ export const TrashBinView: React.FC<Props> = ({ trashedFiles, onRefresh }) => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
+  // Optimistic Restore Single File
   const handleRestore = async (id: string) => {
+    const removedItem = localList.find((f) => f._id === id);
+    setLocalList((prev) => prev.filter((f) => f._id !== id));
     try {
       await api.restoreFromTrash(id);
       onRefresh();
     } catch (err: any) {
-      alert(err.message);
+      if (removedItem) {
+        setLocalList((prev) => [removedItem, ...prev]);
+      }
+      alert(err.message || 'Failed to restore file');
     }
   };
 
+  // Optimistic Permanent Delete Single File
   const handlePermanentDelete = async (id: string, name: string) => {
     if (!confirm(`Are you SURE you want to permanently purge "${name}" from Google Drive? This action CANNOT be undone.`)) {
       return;
     }
+    const removedItem = localList.find((f) => f._id === id);
+    setLocalList((prev) => prev.filter((f) => f._id !== id));
     try {
       await api.permanentDelete(id);
       onRefresh();
     } catch (err: any) {
-      alert(err.message);
+      if (removedItem) {
+        setLocalList((prev) => [removedItem, ...prev]);
+      }
+      alert(err.message || 'Failed to permanently delete file');
     }
   };
 
+  // Optimistic Recover All
   const handleRestoreAll = async () => {
-    if (trashedFiles.length === 0) return;
-    if (!confirm(`Are you sure you want to recover all ${trashedFiles.length} file(s) from Trash?`)) {
+    if (localList.length === 0) return;
+    if (!confirm(`Are you sure you want to recover all ${localList.length} file(s) from Trash?`)) {
       return;
     }
+    const backupList = [...localList];
+    setLocalList([]);
     const stop = startGlobalLoading('trash');
     try {
       setActionLoading('restore-all');
       await api.restoreAllTrash();
       onRefresh();
     } catch (err: any) {
+      setLocalList(backupList);
       alert(err.message || 'Failed to restore all files');
     } finally {
       stop();
@@ -92,17 +115,21 @@ export const TrashBinView: React.FC<Props> = ({ trashedFiles, onRefresh }) => {
     }
   };
 
+  // Optimistic Empty Trash
   const handleEmptyTrash = async () => {
-    if (trashedFiles.length === 0) return;
-    if (!confirm(`Are you SURE you want to permanently delete ALL ${trashedFiles.length} file(s) from Google Drive? This action CANNOT be undone.`)) {
+    if (localList.length === 0) return;
+    if (!confirm(`Are you SURE you want to permanently delete ALL ${localList.length} file(s) from Google Drive? This action CANNOT be undone.`)) {
       return;
     }
+    const backupList = [...localList];
+    setLocalList([]);
     const stop = startGlobalLoading('trash');
     try {
       setActionLoading('empty');
       await api.emptyTrash();
       onRefresh();
     } catch (err: any) {
+      setLocalList(backupList);
       alert(err.message || 'Failed to empty trash');
     } finally {
       stop();
@@ -212,7 +239,7 @@ export const TrashBinView: React.FC<Props> = ({ trashedFiles, onRefresh }) => {
             <span>{actionLoading === 'dedup' ? 'Cleaning...' : 'Clean Duplicates'}</span>
           </button>
 
-          {trashedFiles.length > 0 && (
+          {localList.length > 0 && (
             <>
               <button
                 onClick={handleRestoreAll}
@@ -225,7 +252,7 @@ export const TrashBinView: React.FC<Props> = ({ trashedFiles, onRefresh }) => {
                 ) : (
                   <RotateCcw className="w-3.5 h-3.5" />
                 )}
-                <span>{actionLoading === 'restore-all' ? 'Restoring...' : `Recover All (${trashedFiles.length})`}</span>
+                <span>{actionLoading === 'restore-all' ? 'Restoring...' : `Recover All (${localList.length})`}</span>
               </button>
 
               <button
@@ -266,7 +293,7 @@ export const TrashBinView: React.FC<Props> = ({ trashedFiles, onRefresh }) => {
       </div>
 
       <div className="bg-[#111114] rounded-2xl border border-[#222227] shadow-xl overflow-hidden">
-        {trashedFiles.length === 0 ? (
+        {localList.length === 0 ? (
           <div className="p-16 text-center text-zinc-500 space-y-2">
             <Trash2 className="w-10 h-10 mx-auto text-zinc-700" />
             <p className="text-sm font-semibold text-zinc-300">Recycle Bin is empty</p>
@@ -284,7 +311,7 @@ export const TrashBinView: React.FC<Props> = ({ trashedFiles, onRefresh }) => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#18181f]">
-                {trashedFiles.map((file) => (
+                {localList.map((file) => (
                   <tr
                     key={file._id}
                     className="hover:bg-[#15151a] transition cursor-pointer group"

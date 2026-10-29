@@ -32,7 +32,9 @@ import {
   Check,
   Smartphone,
   Send,
+  Upload,
 } from 'lucide-react';
+import { uploadService } from '../services/UploadService.js';
 import { VaultCryptoService } from '../services/vault-crypto.js';
 import { mediaCache, mediaQueue, isVideoFile, extractVideoThumbnailFromUrl } from '../services/media-cache.js';
 import { getStreamUrl, formatBytes, formatDate, formatDateTime } from '../utils/format.js';
@@ -369,7 +371,7 @@ export const GalleryTimelineView: React.FC<Props> = ({
     }
   };
 
-  // Confirm Move
+  // Confirm Move (Optimistic)
   const handleConfirmMove = async () => {
     setIsMoving(true);
     const ids = isSelectionMode
@@ -377,55 +379,92 @@ export const GalleryTimelineView: React.FC<Props> = ({
       : selectedMediaIndex !== null
       ? [filteredMedia[selectedMediaIndex]._id]
       : [];
+    if (ids.length === 0) {
+      setIsMoving(false);
+      return;
+    }
+    const idSet = new Set(ids);
+    const movedItems = localMediaList.filter((m) => idSet.has(m._id));
+
+    // Optimistically update folderId in local media list
+    setLocalMediaList((prev) =>
+      prev.map((m) => (idSet.has(m._id) ? { ...m, folderId: selectedFolderId } : m))
+    );
+    setIsMoveOpen(false);
+    deselectAll();
+
     try {
       if (ids.length === 1) {
         await api.moveFile(ids[0], selectedFolderId);
       } else {
         await api.bulkAction('move', ids, selectedFolderId);
       }
-      setIsMoveOpen(false);
-      deselectAll();
       onRefresh?.();
     } catch (err) {
       console.error('Failed to move:', err);
+      // Rollback
+      setLocalMediaList((prev) =>
+        prev.map((m) => {
+          const orig = movedItems.find((o) => o._id === m._id);
+          return orig ? orig : m;
+        })
+      );
       alert('Failed to move files');
     } finally {
       setIsMoving(false);
     }
   };
 
-  // Rename single file
+  // Rename single file (Optimistic)
   const handleConfirmRename = async () => {
     if (selectedMediaIndex === null) return;
     const current = filteredMedia[selectedMediaIndex];
     if (!renameValue.trim()) return;
+    const oldName = current.filename;
+    const newName = renameValue.trim();
+
+    // Optimistically update filename immediately
+    setLocalMediaList((prev) =>
+      prev.map((m) => (m._id === current._id ? { ...m, filename: newName } : m))
+    );
+    setIsRenameOpen(false);
+
     try {
-      await api.renameFile(current._id, renameValue.trim());
-      setLocalMediaList((prev) =>
-        prev.map((m) => (m._id === current._id ? { ...m, filename: renameValue.trim() } : m))
-      );
-      setIsRenameOpen(false);
+      await api.renameFile(current._id, newName);
       onRefresh?.();
     } catch (err) {
       console.error('Failed to rename:', err);
+      // Rollback
+      setLocalMediaList((prev) =>
+        prev.map((m) => (m._id === current._id ? { ...m, filename: oldName } : m))
+      );
       alert('Failed to rename file');
     }
   };
 
-  // Single file delete in viewer
+  // Single file delete in viewer (Optimistic)
   const handleDeleteCurrent = async () => {
     if (selectedMediaIndex === null) return;
     const current = filteredMedia[selectedMediaIndex];
     if (!confirm(`Move "${current.filename}" to Trash?`)) return;
+
+    const deletedItem = current;
+    const deletedIndex = selectedMediaIndex;
+
+    // Optimistically remove from view immediately
+    setLocalMediaList((prev) => prev.filter((m) => m._id !== current._id));
+    if (selectedMediaIndex >= filteredMedia.length - 1) {
+      setSelectedMediaIndex(filteredMedia.length > 1 ? filteredMedia.length - 2 : null);
+    }
+
     try {
-      await api.moveToTrash(current._id);
-      setLocalMediaList((prev) => prev.filter((m) => m._id !== current._id));
-      if (selectedMediaIndex >= filteredMedia.length - 1) {
-        setSelectedMediaIndex(filteredMedia.length > 1 ? filteredMedia.length - 2 : null);
-      }
+      await api.moveToTrash(deletedItem._id);
       onRefresh?.();
     } catch (err) {
       console.error('Failed to delete:', err);
+      // Rollback on failure
+      setLocalMediaList((prev) => [...prev.slice(0, deletedIndex), deletedItem, ...prev.slice(deletedIndex)]);
+      alert('Failed to delete file from cloud. Restored.');
     }
   };
 
@@ -639,8 +678,26 @@ export const GalleryTimelineView: React.FC<Props> = ({
           )}
         </div>
 
-        {/* Right Actions: Select Mode, Vault Status */}
+        {/* Right Actions: Select Mode, Upload Photos/Videos */}
         <div className="flex items-center space-x-2">
+          {/* Direct Photo & Video Upload (Optimized for iPhone & Web) */}
+          <label className="inline-flex items-center space-x-1.5 px-3.5 py-1.5 rounded-full text-xs font-bold text-white bg-gradient-to-r from-purple-600 to-violet-500 hover:from-purple-500 hover:to-violet-400 shadow-glow-purple cursor-pointer transition active:scale-95" title="Upload Photos or Videos">
+            <Upload className="w-3.5 h-3.5" />
+            <span>Upload</span>
+            <input
+              type="file"
+              multiple
+              accept="image/*,video/*"
+              className="hidden"
+              onChange={(e) => {
+                if (e.target.files && e.target.files.length > 0) {
+                  uploadService.enqueue(e.target.files, null);
+                  e.target.value = '';
+                }
+              }}
+            />
+          </label>
+
           <button
             onClick={() => {
               if (isSelectionMode) {
@@ -1257,8 +1314,14 @@ const FullScreenViewer: React.FC<{
   const [isImageLoaded, setIsImageLoaded] = useState(false);
   const [videoError, setVideoError] = useState(false);
   const [imgError, setImgError] = useState(false);
-  // Keep previous image URL so we can show it while the next image loads (no blank screen / spinner)
-  const prevUrlRef = useRef<string | null>(null);
+
+  // Optimistic UI: Derive current item's thumbnail to display instantaneously during left/right navigation
+  const itemThumbnailUrl = useMemo(() => {
+    if (item.metadata?.thumbnail && item.metadata.thumbnail.startsWith('data:image/')) {
+      return item.metadata.thumbnail;
+    }
+    return mediaCache.getThumbnail(item._id) || mediaCache.get(item._id) || api.getThumbnailUrl(item._id);
+  }, [item._id, item.metadata?.thumbnail]);
 
   const [globalProgress, setGlobalProgress] = useState<GlobalProgressState>({
     progress: 0,
@@ -1270,6 +1333,15 @@ const FullScreenViewer: React.FC<{
 
   useEffect(() => {
     return subscribeToProgress(setGlobalProgress);
+  }, []);
+
+  // Lock body scroll on mobile Safari/iOS while viewing full screen
+  useEffect(() => {
+    const origOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = origOverflow;
+    };
   }, []);
 
   useEffect(() => {
@@ -1305,18 +1377,24 @@ const FullScreenViewer: React.FC<{
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [currentIndex, mediaList.length]);
 
-  // Preload adjacent images (next 2 and previous 1) into browser cache for instantaneous transitions
+  // Preload adjacent images & thumbnails (next 3 and previous 2) for instantaneous transitions
   useEffect(() => {
-    const toPreload: string[] = [];
-    if (currentIndex < mediaList.length - 1) toPreload.push(mediaList[currentIndex + 1]._id);
-    if (currentIndex < mediaList.length - 2) toPreload.push(mediaList[currentIndex + 2]._id);
-    if (currentIndex > 0) toPreload.push(mediaList[currentIndex - 1]._id);
-
-    toPreload.forEach((id) => {
-      const m = mediaList.find((x) => x._id === id);
-      if (m && !(isVideoFile(m.mimeType) || isVideoFile(m.filename))) {
-        const preImg = new Image();
-        preImg.src = getStreamUrl(id);
+    const indicesToPreload = [currentIndex + 1, currentIndex - 1, currentIndex + 2, currentIndex - 2];
+    indicesToPreload.forEach((idx) => {
+      if (idx >= 0 && idx < mediaList.length) {
+        const m = mediaList[idx];
+        const isMVideo = isVideoFile(m.mimeType) || isVideoFile(m.filename);
+        if (!isMVideo) {
+          const preImg = new Image();
+          preImg.src = getStreamUrl(m._id);
+        }
+        const thumbUrl = m.metadata?.thumbnail && m.metadata.thumbnail.startsWith('data:image/')
+          ? m.metadata.thumbnail
+          : (mediaCache.getThumbnail(m._id) || api.getThumbnailUrl(m._id));
+        if (thumbUrl && !thumbUrl.startsWith('data:')) {
+          const tImg = new Image();
+          tImg.src = thumbUrl;
+        }
       }
     });
   }, [currentIndex, mediaList]);
@@ -1630,71 +1708,83 @@ const FullScreenViewer: React.FC<{
           </button>
         )}
 
-        {/* Show previous image blurred as background while next image resolves — no spinner */}
-        {loading && prevUrlRef.current && !isVideo ? (
-          <img
-            src={prevUrlRef.current}
-            alt="Previous"
-            className="max-h-[82vh] max-w-full object-contain rounded-xl shadow-2xl pointer-events-none transition-all duration-200 filter blur-sm opacity-60 scale-95"
-          />
-        ) : loading && !prevUrlRef.current && !isVideo ? (
-          // Very first image ever — show nothing (progress line at top is enough)
-          <div className="w-32 h-32" />
-        ) : isVideo && fullUrl ? (
-          <div className="w-[90vw] max-w-4xl max-h-[82vh] flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
-            <ModernVideoPlayer
-              src={fullUrl}
-              filename={item.filename}
-              autoPlay
-              className="w-full max-h-[80vh] shadow-2xl"
-              onDownload={() => {}}
-            />
-          </div>
-        ) : fullUrl && !imgError ? (
-          <div className="relative flex items-center justify-center max-h-[82vh] max-w-full">
-            {/* Keep showing previous loaded image without loading screen while next image loads */}
-            {!isImageLoaded && prevUrlRef.current ? (
-              <img
-                src={prevUrlRef.current}
-                alt="Previous Loaded Image"
-                className="max-h-[82vh] max-w-full object-contain rounded-xl shadow-2xl pointer-events-none"
+        {isVideo ? (
+          fullUrl ? (
+            <div className="w-[90vw] max-w-4xl max-h-[82vh] flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
+              <ModernVideoPlayer
+                key={item._id}
+                src={fullUrl}
+                filename={item.filename}
+                poster={itemThumbnailUrl || undefined}
+                autoPlay
+                className="w-full max-h-[80vh] shadow-2xl"
+                onDownload={() => {}}
               />
-            ) : !isImageLoaded ? (
+            </div>
+          ) : (
+            <div className="relative flex items-center justify-center max-h-[82vh] max-w-full">
+              {itemThumbnailUrl ? (
+                <img
+                  src={itemThumbnailUrl}
+                  alt="Video thumbnail"
+                  className="max-h-[82vh] max-w-full object-contain rounded-xl filter blur-[1px] opacity-75"
+                />
+              ) : (
+                <div className="w-48 h-48 flex items-center justify-center bg-zinc-900 rounded-xl">
+                  <Film className="w-12 h-12 text-zinc-600 animate-pulse" />
+                </div>
+              )}
+              <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                <div className="w-14 h-14 rounded-full bg-black/60 backdrop-blur-md flex items-center justify-center border border-white/20">
+                  <Loader2 className="w-6 h-6 text-purple-400 animate-spin" />
+                </div>
+              </div>
+            </div>
+          )
+        ) : !imgError ? (
+          <div className="relative flex items-center justify-center max-h-[82vh] max-w-full w-full h-full">
+            {/* Optimistic Thumbnail: Shown immediately on open or swipe left/right while full HD image loads */}
+            {!isImageLoaded && (
               <img
                 key={`thumb-${item._id}`}
-                src={
-                  item.metadata?.thumbnail && item.metadata.thumbnail.startsWith('data:image/')
-                    ? item.metadata.thumbnail
-                    : api.getThumbnailUrl(item._id)
-                }
-                alt="Loading placeholder"
-                className="max-h-[82vh] max-w-full object-contain filter blur-sm opacity-60 scale-95 transition-all duration-300 pointer-events-none"
+                src={itemThumbnailUrl}
+                alt={item.filename}
+                style={{
+                  transform: `scale(${scale}) rotate(${rotation}deg)`,
+                  transition: 'transform 0.2s ease-out',
+                }}
+                className="max-h-[82vh] max-w-full object-contain rounded-xl filter blur-[1px] opacity-80 pointer-events-none select-none transition-all duration-300"
               />
-            ) : null}
+            )}
 
-            <img
-              key={item._id}
-              src={fullUrl}
-              alt={item.filename}
-              onLoad={() => {
-                if (fullUrl) prevUrlRef.current = fullUrl;
-                setIsImageLoaded(true);
-                setLoading(false);
-              }}
-              onError={() => {
-                setIsImageLoaded(false);
-                setLoading(false);
-                setImgError(true);
-              }}
-              onDoubleClick={(e) => {
-                e.stopPropagation();
-                setScale((s) => (s === 1 ? 2 : 1));
-              }}
-              style={{ transform: `scale(${scale}) rotate(${rotation}deg)`, transition: 'transform 0.2s ease-out, opacity 0.25s ease-in' }}
-              className={`max-h-[82vh] max-w-full object-contain rounded-xl shadow-2xl cursor-zoom-in ${
-                isImageLoaded ? 'opacity-100' : 'opacity-0 absolute'
-              }`}
-            />
+            {/* High-Resolution Full Image: Preloaded or streaming; fades in seamlessly on load */}
+            {fullUrl && (
+              <img
+                key={`full-${item._id}`}
+                src={fullUrl}
+                alt={item.filename}
+                onLoad={() => {
+                  setIsImageLoaded(true);
+                  setLoading(false);
+                }}
+                onError={() => {
+                  setIsImageLoaded(false);
+                  setLoading(false);
+                  setImgError(true);
+                }}
+                onDoubleClick={(e) => {
+                  e.stopPropagation();
+                  setScale((s) => (s === 1 ? 2 : 1));
+                }}
+                style={{
+                  transform: `scale(${scale}) rotate(${rotation}deg)`,
+                  transition: 'transform 0.2s ease-out, opacity 0.3s ease-in',
+                }}
+                className={`max-h-[82vh] max-w-full object-contain rounded-xl shadow-2xl cursor-zoom-in ${
+                  isImageLoaded ? 'opacity-100' : 'opacity-0 absolute inset-0 m-auto'
+                }`}
+              />
+            )}
           </div>
         ) : imgError ? (
           <div className="p-8 text-center bg-[#16161d] border border-red-500/30 rounded-2xl max-w-md space-y-4">
