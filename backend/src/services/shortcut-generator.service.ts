@@ -213,28 +213,10 @@ export class ShortcutGeneratorService {
 
   /**
    * Builds a native multipart file attachment form field (WFItemType 5) for WFFormValues.
-   * In Apple WorkflowKit, a file attachment parameter requires WFTokenAttachmentParameterState
-   * wrapping a WFTextTokenAttachment to stream binary photos and videos without base64.
-   * Coerces to WFMediaContentItem by default to guarantee both videos and photos materialize as files.
+   * References a magic variable (like "Repeat Item") as the file source.
+   * @deprecated Use formFieldFileFromOutput instead for Encode Media output.
    */
-  private static formFieldFile(
-    key: string,
-    variableName: string = 'Repeat Item',
-    coercionClass: string = 'WFMediaContentItem'
-  ): string {
-    const aggrandizements = coercionClass
-      ? `
-                    <key>Aggrandizements</key>
-                    <array>
-                      <dict>
-                        <key>CoercionItemClass</key>
-                        <string>${this.esc(coercionClass)}</string>
-                        <key>Type</key>
-                        <string>WFCoercionVariableAggrandizement</string>
-                      </dict>
-                    </array>`
-      : '';
-
+  private static formFieldFile(key: string, variableName: string = 'Repeat Item', _coercionClass?: string): string {
     return `<dict>
               <key>WFItemType</key>
               <integer>5</integer>
@@ -245,11 +227,44 @@ export class ShortcutGeneratorService {
                 <key>Value</key>
                 <dict>
                   <key>Value</key>
-                  <dict>${aggrandizements}
+                  <dict>
                     <key>Type</key>
                     <string>Variable</string>
                     <key>VariableName</key>
                     <string>${this.esc(variableName)}</string>
+                  </dict>
+                  <key>WFSerializationType</key>
+                  <string>WFTextTokenAttachment</string>
+                </dict>
+                <key>WFSerializationType</key>
+                <string>WFTokenAttachmentParameterState</string>
+              </dict>
+            </dict>`;
+  }
+
+  /**
+   * Builds a native multipart file attachment form field (WFItemType 5) for WFFormValues.
+   * References an action output (by UUID) as the file source — used after Encode Media
+   * produces a real file from PHAsset that downstream actions can read.
+   */
+  private static formFieldFileFromOutput(key: string, outputUUID: string, outputName: string): string {
+    return `<dict>
+              <key>WFItemType</key>
+              <integer>5</integer>
+              <key>WFKey</key>
+              ${this.text(key)}
+              <key>WFValue</key>
+              <dict>
+                <key>Value</key>
+                <dict>
+                  <key>Value</key>
+                  <dict>
+                    <key>OutputName</key>
+                    <string>${this.esc(outputName)}</string>
+                    <key>OutputUUID</key>
+                    <string>${outputUUID}</string>
+                    <key>Type</key>
+                    <string>ActionOutput</string>
                   </dict>
                   <key>WFSerializationType</key>
                   <string>WFTextTokenAttachment</string>
@@ -284,6 +299,7 @@ export class ShortcutGeneratorService {
   static generateAutoSyncShortcut(serverUrl: string, deviceId: string, deviceKey: string): string {
     const findPhotosUUID = this.uuid();
     const countUUID = this.uuid();
+    const encodeUUID = this.uuid();
     const nameUUID = this.uuid();
     const uploadUUID = this.uuid();
     const loopGroupId = this.uuid();
@@ -342,11 +358,33 @@ export class ShortcutGeneratorService {
         <key>WFControlFlowMode</key>
         <integer>0</integer>
         <key>WFInput</key>
-        ${this.actionInput(findPhotosUUID, 'NewPhotos', 'WFMediaContentItem')}
+        ${this.actionInput(findPhotosUUID, 'NewPhotos')}
       </dict>
     </dict>
 
-    <!-- LOOP 1: Get Item Filename (supports photos and videos natively without coercion) -->
+    <!-- LOOP 0: Encode Media (Passthrough) — exports PHAsset to a real file on disk.
+         This is THE fix for "WFPhotoMediaContentItem produced no file representation".
+         Videos: uses PHImageManager.requestAVAsset (works!) instead of file representation (fails!).
+         Photos: passes through unchanged. Zero re-encoding, zero quality loss. -->
+    <dict>
+      <key>WFWorkflowActionIdentifier</key>
+      <string>is.workflow.actions.encodemedia</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict>
+        <key>UUID</key>
+        <string>${encodeUUID}</string>
+        <key>CustomOutputName</key>
+        <string>ReadyMedia</string>
+        <key>WFInput</key>
+        ${this.varInput('Repeat Item')}
+        <key>WFMediaSize</key>
+        <string>Passthrough</string>
+        <key>WFMediaAudioOnly</key>
+        <false/>
+      </dict>
+    </dict>
+
+    <!-- LOOP 1: Get Item Filename from encoded output -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.getitemname</string>
@@ -357,11 +395,11 @@ export class ShortcutGeneratorService {
         <key>CustomOutputName</key>
         <string>FileName</string>
         <key>WFInput</key>
-        ${this.varInput('Repeat Item', 'WFMediaContentItem')}
+        ${this.actionInput(encodeUUID, 'ReadyMedia')}
       </dict>
     </dict>
 
-    <!-- LOOP 2: Multipart Form Upload (Native binary streaming, zero base64 encoding) -->
+    <!-- LOOP 2: Multipart Form Upload (Native binary streaming from Encode Media output) -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.downloadurl</string>
@@ -384,7 +422,7 @@ export class ShortcutGeneratorService {
         <string>Form</string>
         <key>WFFormValues</key>
         ${this.headersDict([
-          this.formFieldFile('media', 'Repeat Item', 'WFMediaContentItem'),
+          this.formFieldFileFromOutput('media', encodeUUID, 'ReadyMedia'),
           this.formFieldText('filename', nameUUID, 'FileName'),
           this.formFieldText('deviceAssetId', nameUUID, 'FileName'),
           this.formFieldStaticText('deviceId', deviceId),
@@ -464,6 +502,7 @@ export class ShortcutGeneratorService {
   static generateUploadShortcut(serverUrl: string, deviceId: string, deviceKey: string): string {
     const selectPhotosUUID = this.uuid();
     const countUUID = this.uuid();
+    const encodeUUID = this.uuid();
     const fileNameUUID = this.uuid();
     const uploadUUID = this.uuid();
     const loopGroupId = this.uuid();
@@ -522,11 +561,33 @@ export class ShortcutGeneratorService {
         <key>WFControlFlowMode</key>
         <integer>0</integer>
         <key>WFInput</key>
-        ${this.actionInput(selectPhotosUUID, 'SelectedPhotos', 'WFMediaContentItem')}
+        ${this.actionInput(selectPhotosUUID, 'SelectedPhotos')}
       </dict>
     </dict>
 
-    <!-- LOOP: Get filename (supports photos and videos natively without coercion) -->
+    <!-- LOOP 0: Encode Media (Passthrough) — exports PHAsset to a real file on disk.
+         THE fix for "WFPhotoMediaContentItem produced no file representation".
+         Videos: uses PHImageManager.requestAVAsset (works!). Photos: passes through unchanged.
+         Zero re-encoding, zero quality loss. -->
+    <dict>
+      <key>WFWorkflowActionIdentifier</key>
+      <string>is.workflow.actions.encodemedia</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict>
+        <key>UUID</key>
+        <string>${encodeUUID}</string>
+        <key>CustomOutputName</key>
+        <string>ReadyMedia</string>
+        <key>WFInput</key>
+        ${this.varInput('Repeat Item')}
+        <key>WFMediaSize</key>
+        <string>Passthrough</string>
+        <key>WFMediaAudioOnly</key>
+        <false/>
+      </dict>
+    </dict>
+
+    <!-- LOOP: Get filename from encoded output -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.getitemname</string>
@@ -537,11 +598,11 @@ export class ShortcutGeneratorService {
         <key>CustomOutputName</key>
         <string>FileName</string>
         <key>WFInput</key>
-        ${this.varInput('Repeat Item', 'WFMediaContentItem')}
+        ${this.actionInput(encodeUUID, 'ReadyMedia')}
       </dict>
     </dict>
 
-    <!-- LOOP: Direct Multipart Form Upload (Native binary streaming, zero base64 encoding) -->
+    <!-- LOOP: Direct Multipart Form Upload from Encode Media output -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.downloadurl</string>
@@ -564,7 +625,7 @@ export class ShortcutGeneratorService {
         <string>Form</string>
         <key>WFFormValues</key>
         ${this.headersDict([
-          this.formFieldFile('media', 'Repeat Item', 'WFMediaContentItem'),
+          this.formFieldFileFromOutput('media', encodeUUID, 'ReadyMedia'),
           this.formFieldText('filename', fileNameUUID, 'FileName'),
           this.formFieldText('deviceAssetId', fileNameUUID, 'FileName'),
           this.formFieldStaticText('deviceId', deviceId),
