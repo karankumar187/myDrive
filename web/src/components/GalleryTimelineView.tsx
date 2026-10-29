@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { FileItem, FolderItem, DeviceItem } from '../types.js';
 import {
   Film,
@@ -662,7 +663,7 @@ export const GalleryTimelineView: React.FC<Props> = ({
 
       {/* Floating Selection Action Bar — Anchored at bottom with rich actions */}
       {(selectedIds.size > 0 || isSelectionMode) && (
-        <div className="fixed bottom-6 inset-x-0 mx-auto w-[94%] max-w-3xl z-50 bg-[#13131c]/95 backdrop-blur-2xl border border-purple-500/50 rounded-2xl px-4 py-3 shadow-2xl flex flex-wrap sm:flex-nowrap items-center justify-between gap-3 animate-in fade-in slide-in-from-bottom-4">
+        <div className="fixed bottom-[max(4.5rem,calc(env(safe-area-inset-bottom,0px)+3.75rem))] sm:bottom-6 inset-x-0 mx-auto w-[94%] max-w-3xl z-50 bg-[#13131c]/95 backdrop-blur-2xl border border-purple-500/50 rounded-2xl px-4 py-3 shadow-2xl flex flex-wrap sm:flex-nowrap items-center justify-between gap-3 animate-in fade-in slide-in-from-bottom-4">
           <div className="flex items-center space-x-3">
             <div className="bg-purple-600/20 border border-purple-500/40 px-2.5 py-1 rounded-lg">
               <span className="text-xs font-bold text-purple-300">
@@ -763,7 +764,7 @@ export const GalleryTimelineView: React.FC<Props> = ({
         Object.entries(groupedMedia).map(([groupTitle, items]) => (
           <div key={groupTitle} className="space-y-3">
             {/* Date Group Header */}
-            <div className="sticky top-0 bg-[#0a0a0d]/90 backdrop-blur-md py-2.5 z-20 flex items-center justify-between border-b border-[#1c1c24]">
+            <div className="sticky top-14 sm:top-16 bg-[#0a0a0d]/95 backdrop-blur-md py-2 z-20 flex items-center justify-between border-b border-[#1c1c24]">
               <div className="flex items-center space-x-2">
                 <Calendar className="w-3.5 h-3.5 text-purple-400" />
                 <span className="text-xs font-bold text-zinc-200 tracking-wide uppercase">{groupTitle}</span>
@@ -790,8 +791,8 @@ export const GalleryTimelineView: React.FC<Props> = ({
               )}
             </div>
 
-            {/* Grid: 4 columns mobile, 5–7 columns desktop */}
-            <div className="grid grid-cols-4 sm:grid-cols-5 md:grid-cols-6 lg:grid-cols-7 xl:grid-cols-8 gap-2 sm:gap-2.5">
+            {/* Grid: 3 columns mobile (iOS Photos standard), 4–8 columns desktop */}
+            <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-8 gap-1.5 sm:gap-2.5">
               {items.map((item) => {
                 const isSelected = selectedIds.has(item._id);
                 return (
@@ -860,8 +861,8 @@ export const GalleryTimelineView: React.FC<Props> = ({
       )}
 
       {/* Rename Dialog */}
-      {isRenameOpen && currentMedia && (
-        <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+      {isRenameOpen && currentMedia && createPortal(
+        <div className="fixed inset-0 bg-black/80 z-[110] flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-[#16161e] border border-[#2d2d3d] rounded-2xl max-w-sm w-full p-5 space-y-4 shadow-2xl">
             <h3 className="text-sm font-bold text-white">Rename File</h3>
             <input
@@ -886,12 +887,13 @@ export const GalleryTimelineView: React.FC<Props> = ({
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* Move to Folder Dialog */}
-      {isMoveOpen && (
-        <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+      {isMoveOpen && createPortal(
+        <div className="fixed inset-0 bg-black/80 z-[110] flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-[#16161e] border border-[#2d2d3d] rounded-2xl max-w-md w-full p-5 space-y-4 shadow-2xl">
             <h3 className="text-sm font-bold text-white">Move to Folder</h3>
             <p className="text-xs text-zinc-400">Choose a destination folder in your unified cloud drive:</p>
@@ -941,12 +943,13 @@ export const GalleryTimelineView: React.FC<Props> = ({
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* Force Download to Paired Device Modal */}
-      {isForceDownloadOpen && (
-        <div className="fixed inset-0 bg-black/85 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
+      {isForceDownloadOpen && createPortal(
+        <div className="fixed inset-0 bg-black/85 z-[110] flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
           <div className="bg-[#15151e] border border-purple-500/50 rounded-3xl max-w-md w-full p-6 space-y-5 shadow-2xl">
             <div className="flex items-center justify-between">
               <div className="flex items-center space-x-3">
@@ -1055,7 +1058,8 @@ export const GalleryTimelineView: React.FC<Props> = ({
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );
@@ -1110,28 +1114,12 @@ const GalleryGridTile: React.FC<{
 
     setThumbUrl(api.getThumbnailUrl(item._id));
     setLoading(false);
-
-    // If it's a video and lacks an extracted frame thumbnail, generate one on client in background
-    if (isVideo && !(item as any).hasThumbnail && !hasRealThumb) {
-      mediaQueue.enqueue(async () => {
-        try {
-          const streamUrl = getStreamUrl(item._id);
-          const captured = await extractVideoThumbnailFromUrl(streamUrl);
-          if (captured) {
-            setThumbUrl(captured);
-            mediaCache.saveThumbnail(item._id, captured);
-            api.updateThumbnail(item._id, captured).catch(() => {});
-          }
-        } catch {}
-      });
-    }
   }, [item._id, isVideo, item.metadata?.thumbnail]);
 
   return (
     <div
       onClick={onClick}
-      style={{ contentVisibility: 'auto', containIntrinsicSize: '160px' }}
-      className={`group relative aspect-square bg-[#121217] border rounded-xl sm:rounded-2xl overflow-hidden cursor-pointer transition-colors duration-150 select-none ${
+      className={`group relative aspect-square bg-[#121217] border rounded-lg sm:rounded-2xl overflow-hidden cursor-pointer transition-transform duration-100 active:scale-95 select-none ${
         isSelected
           ? 'border-purple-500 ring-2 ring-purple-500/80 scale-[0.98]'
           : 'border-[#202026] hover:border-purple-500/40'
@@ -1152,17 +1140,7 @@ const GalleryGridTile: React.FC<{
           decoding="async"
           onError={() => {
             if (isVideo) {
-              extractVideoThumbnailFromUrl(getStreamUrl(item._id)).then((captured) => {
-                if (captured) {
-                  setThumbUrl(captured);
-                  mediaCache.saveThumbnail(item._id, captured);
-                  api.updateThumbnail(item._id, captured).catch(() => {});
-                } else {
-                  setLoadError(true);
-                }
-              }).catch(() => {
-                setLoadError(true);
-              });
+              setLoadError(true);
             } else {
               const fallbackUrl = getStreamUrl(item._id);
               if (thumbUrl !== fallbackUrl) {
@@ -1474,9 +1452,9 @@ const FullScreenViewer: React.FC<{
     }
   };
 
-  return (
+  return createPortal(
     <div
-      className="fixed inset-0 bg-black z-50 flex flex-col justify-between select-none overflow-hidden"
+      className="fixed inset-0 bg-[#000000] z-[100] flex flex-col justify-between select-none overflow-hidden"
       onTouchStart={handleTouchStart}
       onTouchEnd={handleTouchEnd}
       onClick={() => setShowControls(!showControls)}
@@ -1496,10 +1474,10 @@ const FullScreenViewer: React.FC<{
         </div>
       )}
 
-      {/* Top Bar Controls */}
+      {/* Top Bar Controls with Safe Area Inset */}
       <div
         onClick={(e) => e.stopPropagation()}
-        className={`w-full bg-gradient-to-b from-black/90 via-black/50 to-transparent p-4 flex items-center justify-between z-50 transition-opacity duration-200 ${
+        className={`w-full bg-gradient-to-b from-black via-black/80 to-transparent pt-[max(1rem,env(safe-area-inset-top,0px))] px-4 pb-3 flex items-center justify-between z-50 transition-opacity duration-200 ${
           showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'
         }`}
       >
@@ -1756,10 +1734,10 @@ const FullScreenViewer: React.FC<{
         ) : null}
       </div>
 
-      {/* Bottom Action Bar */}
+      {/* Bottom Action Bar with Safe Area Inset */}
       <div
         onClick={(e) => e.stopPropagation()}
-        className={`w-full bg-gradient-to-t from-black/90 via-black/50 to-transparent p-4 flex items-center justify-around sm:justify-center sm:space-x-12 z-50 transition-opacity duration-200 ${
+        className={`w-full bg-gradient-to-t from-black via-black/80 to-transparent pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] pt-3 px-3 flex items-center justify-around sm:justify-center sm:space-x-12 z-50 transition-opacity duration-200 ${
           showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'
         }`}
       >
@@ -1797,11 +1775,11 @@ const FullScreenViewer: React.FC<{
           <span className="text-[10px] text-zinc-400 group-hover:text-white">Share</span>
         </button>
 
-        {/* Send to Device */}
+        {/* Send to Device (Visible on Desktop / Tablets, in More Menu on Mobile) */}
         {onOpenForceDownload && (
           <button
             onClick={onOpenForceDownload}
-            className="flex flex-col items-center space-y-1 text-white hover:text-purple-400 transition group active:scale-90"
+            className="hidden sm:flex flex-col items-center space-y-1 text-white hover:text-purple-400 transition group active:scale-90"
             title="Force Download to Paired Device"
           >
             <div className="p-2 rounded-full group-hover:bg-white/10">
@@ -1810,17 +1788,6 @@ const FullScreenViewer: React.FC<{
             <span className="text-[10px] text-zinc-400 group-hover:text-white">Send to Device</span>
           </button>
         )}
-
-        {/* Delete */}
-        <button
-          onClick={onDelete}
-          className="flex flex-col items-center space-y-1 text-white hover:text-red-400 transition group active:scale-90"
-        >
-          <div className="p-2 rounded-full group-hover:bg-white/10">
-            <Trash2 className="w-5 h-5" />
-          </div>
-          <span className="text-[10px] text-zinc-400 group-hover:text-white">Delete</span>
-        </button>
 
         {/* Details */}
         <button
@@ -1832,8 +1799,20 @@ const FullScreenViewer: React.FC<{
           </div>
           <span className="text-[10px] text-zinc-400 group-hover:text-white">Details</span>
         </button>
+
+        {/* Delete */}
+        <button
+          onClick={onDelete}
+          className="flex flex-col items-center space-y-1 text-white hover:text-red-400 transition group active:scale-90"
+        >
+          <div className="p-2 rounded-full group-hover:bg-white/10">
+            <Trash2 className="w-5 h-5" />
+          </div>
+          <span className="text-[10px] text-zinc-400 group-hover:text-white">Delete</span>
+        </button>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };
 
@@ -1856,8 +1835,8 @@ const PhotoDetailsModal: React.FC<{ item: FileItem; onClose: () => void }> = ({ 
   const backedUpFrom = item.sourceDeviceName || 'Pixel 8';
   const storageAccount = item.storageAccountName || 'Google Drive • Account 1';
 
-  return (
-    <div className="fixed inset-0 bg-black/85 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+  return createPortal(
+    <div className="fixed inset-0 bg-black/85 z-[110] flex items-center justify-center p-4 backdrop-blur-sm">
       <div className="bg-[#15151c] border border-[#2b2b3a] rounded-3xl max-w-sm w-full p-6 space-y-5 shadow-2xl">
         <div className="flex items-center justify-between border-b border-[#252533] pb-3">
           <h3 className="text-xs font-black tracking-wider text-purple-400 uppercase">Photo Details</h3>
@@ -1915,6 +1894,7 @@ const PhotoDetailsModal: React.FC<{ item: FileItem; onClose: () => void }> = ({ 
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };

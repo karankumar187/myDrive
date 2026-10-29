@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { FileItem, FolderItem, BreadcrumbItem, DeviceItem } from '../types.js';
 import {
   Folder,
@@ -969,8 +970,8 @@ export const FolderExplorerView: React.FC<Props> = ({
       )}
 
       {/* ======== FILE PREVIEW LIGHTBOX ======== */}
-      {previewFile && (
-        <div className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4 backdrop-blur-sm" onClick={closePreview}>
+      {previewFile && createPortal(
+        <div className="fixed inset-0 bg-black/95 z-[100] flex items-center justify-center p-4 backdrop-blur-sm" onClick={closePreview}>
           {previewLoading && (
             <div
               className="absolute top-0 left-0 right-0 h-[3px] overflow-hidden bg-purple-950/20 z-50 pointer-events-none transition-opacity duration-300"
@@ -984,10 +985,10 @@ export const FolderExplorerView: React.FC<Props> = ({
               />
             </div>
           )}
-          <button onClick={closePreview} className="absolute top-4 right-4 z-50 w-10 h-10 rounded-full bg-zinc-800/80 hover:bg-zinc-700 flex items-center justify-center text-white transition">
+          <button onClick={closePreview} className="absolute top-[max(1rem,env(safe-area-inset-top,0px))] right-4 z-50 w-10 h-10 rounded-full bg-zinc-800/80 hover:bg-zinc-700 flex items-center justify-center text-white transition">
             <X className="w-5 h-5" />
           </button>
-          <div className="absolute top-4 left-4 z-50 flex items-center space-x-3 max-w-[60%]">
+          <div className="absolute top-[max(1rem,env(safe-area-inset-top,0px))] left-4 z-50 flex items-center space-x-3 max-w-[60%]">
             <span className="text-sm font-semibold text-white truncate">{previewFile.filename}</span>
             <span className="text-xs text-zinc-400">{formatBytes(previewFile.sizeBytes)}</span>
           </div>
@@ -997,13 +998,13 @@ export const FolderExplorerView: React.FC<Props> = ({
                 e.stopPropagation();
                 setPreviewRotation((r) => (r + 90) % 360);
               }}
-              className="absolute top-4 right-28 z-50 w-10 h-10 rounded-full bg-zinc-800/80 hover:bg-purple-700 flex items-center justify-center text-white transition"
+              className="absolute top-[max(1rem,env(safe-area-inset-top,0px))] right-28 z-50 w-10 h-10 rounded-full bg-zinc-800/80 hover:bg-purple-700 flex items-center justify-center text-white transition"
               title="Rotate 90°"
             >
               <RotateCw className="w-5 h-5" />
             </button>
           )}
-          <a href={getStreamUrl(previewFile._id)} download={previewFile.filename} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} className="absolute top-4 right-16 z-50 w-10 h-10 rounded-full bg-zinc-800/80 hover:bg-purple-700 flex items-center justify-center text-white transition" title="Download">
+          <a href={getStreamUrl(previewFile._id)} download={previewFile.filename} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} className="absolute top-[max(1rem,env(safe-area-inset-top,0px))] right-16 z-50 w-10 h-10 rounded-full bg-zinc-800/80 hover:bg-purple-700 flex items-center justify-center text-white transition" title="Download">
             <Download className="w-5 h-5" />
           </a>
           <div className="max-w-[90vw] max-h-[85vh] flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
@@ -1072,12 +1073,13 @@ export const FolderExplorerView: React.FC<Props> = ({
               <div className="text-zinc-400 text-sm">Unable to load preview</div>
             )}
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* ======== NEW FOLDER MODAL ======== */}
-      {showFolderModal && (
-        <div className="fixed inset-0 bg-black/75 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+      {showFolderModal && createPortal(
+        <div className="fixed inset-0 bg-black/75 z-[110] flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-[#111114] border border-[#222227] rounded-3xl p-6 max-w-sm w-full shadow-2xl space-y-4">
             <h3 className="font-bold text-white text-base">Create New Folder</h3>
             <form onSubmit={handleCreateFolder} className="space-y-4">
@@ -1088,12 +1090,13 @@ export const FolderExplorerView: React.FC<Props> = ({
               </div>
             </form>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* ======== RENAME FOLDER MODAL ======== */}
-      {renameFolder && (
-        <div className="fixed inset-0 bg-black/75 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+      {renameFolder && createPortal(
+        <div className="fixed inset-0 bg-black/75 z-[110] flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-[#111114] border border-[#222227] rounded-3xl p-6 max-w-sm w-full shadow-2xl space-y-4">
             <div className="flex items-center space-x-2.5">
               <div className="p-2 rounded-xl bg-amber-600/20 text-amber-400 border border-amber-500/30">
@@ -1128,12 +1131,13 @@ export const FolderExplorerView: React.FC<Props> = ({
               </div>
             </form>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* ======== RENAME FILE MODAL ======== */}
-      {renameFile && (
-        <div className="fixed inset-0 bg-black/75 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+      {renameFile && createPortal(
+        <div className="fixed inset-0 bg-black/75 z-[110] flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-[#111114] border border-[#222227] rounded-3xl p-6 max-w-sm w-full shadow-2xl space-y-4">
             <div className="flex items-center space-x-2.5">
               <div className="p-2 rounded-xl bg-amber-600/20 text-amber-400 border border-amber-500/30">
@@ -1151,12 +1155,13 @@ export const FolderExplorerView: React.FC<Props> = ({
               </div>
             </form>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* ======== MOVE TO FOLDER MODAL ======== */}
-      {(moveFile || isBulkMove) && (
-        <div className="fixed inset-0 bg-black/75 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+      {(moveFile || isBulkMove) && createPortal(
+        <div className="fixed inset-0 bg-black/75 z-[110] flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-[#111114] border border-[#222227] rounded-3xl p-6 max-w-md w-full shadow-2xl space-y-4">
             <div className="flex items-center space-x-2.5">
               <div className="p-2 rounded-xl bg-cyan-600/20 text-cyan-400 border border-cyan-500/30">
@@ -1194,12 +1199,13 @@ export const FolderExplorerView: React.FC<Props> = ({
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* ======== FILE DETAILS MODAL ======== */}
-      {detailsFile && (
-        <div className="fixed inset-0 bg-black/75 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+      {detailsFile && createPortal(
+        <div className="fixed inset-0 bg-black/75 z-[110] flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-[#111114] border border-[#222227] rounded-3xl p-6 max-w-md w-full shadow-2xl space-y-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center space-x-2.5">
@@ -1248,12 +1254,13 @@ export const FolderExplorerView: React.FC<Props> = ({
               </div>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* ======== FORCE DOWNLOAD TO DEVICE MODAL ======== */}
-      {(forceDownloadFile || forceDownloadFileIds.length > 0) && (
-        <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
+      {(forceDownloadFile || forceDownloadFileIds.length > 0) && createPortal(
+        <div className="fixed inset-0 bg-black/80 z-[110] flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
           <div className="bg-[#15151e] border border-[#2d2d3e] rounded-2xl max-w-md w-full p-6 space-y-5 shadow-2xl">
             <div className="flex items-center justify-between">
               <div className="flex items-center space-x-2.5">
@@ -1301,7 +1308,8 @@ export const FolderExplorerView: React.FC<Props> = ({
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );

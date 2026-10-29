@@ -41,7 +41,7 @@ export const UploadDrawer: React.FC = () => {
   };
 
   return (
-    <div className="fixed bottom-4 right-4 z-40 w-[92vw] max-w-sm sm:w-96 rounded-2xl bg-[#13131a] border border-[#272736] shadow-2xl overflow-hidden transition-all duration-300">
+    <div className="fixed bottom-[max(4.5rem,calc(env(safe-area-inset-bottom,0px)+3.75rem))] sm:bottom-4 left-1/2 -translate-x-1/2 sm:left-auto sm:right-4 sm:translate-x-0 z-40 w-[92vw] max-w-sm sm:w-96 rounded-2xl bg-[#13131a] border border-[#272736] shadow-2xl overflow-hidden transition-all duration-300">
       {/* Drawer Header */}
       <div 
         className="flex items-center justify-between px-4 py-3 bg-[#181824] border-b border-[#272736] cursor-pointer select-none"

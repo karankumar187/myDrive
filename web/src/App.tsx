@@ -496,13 +496,13 @@ export const App: React.FC = () => {
   const firstName = currentUser.name.split(' ')[0] || 'there';
 
   return (
-    <div className="min-h-screen bg-[#08080a] text-zinc-100 flex flex-col relative selection:bg-purple-600 selection:text-white pb-24 md:pb-8">
+    <div className="min-h-screen bg-[#08080a] text-zinc-100 flex flex-col relative selection:bg-purple-600 selection:text-white pb-[max(5.5rem,calc(env(safe-area-inset-bottom,0px)+4.75rem))] md:pb-8">
       {/* Subtle top ambient purple glow */}
       <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[300px] bg-purple-600/10 rounded-full blur-[160px] pointer-events-none" />
 
       {/* TOP FLOATING NAVBAR */}
-      <header className="sticky top-0 z-40 w-full backdrop-blur-xl bg-[#08080a]/75 border-b border-[#1c1c22] relative">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+      <header className="sticky top-0 z-40 w-full backdrop-blur-xl bg-[#08080a]/85 border-b border-[#1c1c22] relative pt-safe">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-14 sm:h-16 flex items-center justify-between">
           {/* Left Brand Logo (Clickable Home / Dashboard Navigation) */}
           <button
             onClick={() => {
@@ -715,12 +715,12 @@ export const App: React.FC = () => {
       </main>
 
       {/* MOBILE / APP / SHORTCUT FLOATING BOTTOM NAVBAR */}
-      <nav className="md:hidden fixed bottom-4 left-1/2 -translate-x-1/2 z-50 bg-[#121217]/95 border border-[#272733] shadow-2xl backdrop-blur-xl rounded-full px-3 py-2 flex items-center space-x-2">
+      <nav className="md:hidden fixed bottom-[max(0.75rem,calc(env(safe-area-inset-bottom,0px)+6px))] left-1/2 -translate-x-1/2 z-40 bg-[#121217]/95 border border-[#272733] shadow-2xl backdrop-blur-xl rounded-full px-3 py-1.5 flex items-center space-x-2">
         {TABS.map(({ id, label, icon: Icon }) => (
           <button
             key={id}
             onClick={() => setActiveTab(id)}
-            className={`p-2.5 rounded-full text-xs flex items-center justify-center transition ${
+            className={`p-2.5 rounded-full text-xs flex items-center justify-center transition active:scale-90 ${
               activeTab === id ? 'bg-white text-zinc-950 shadow-md' : 'text-zinc-400 hover:text-white'
             }`}
             title={label}

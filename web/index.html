@@ -3,11 +3,18 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/png" href="/logo.png" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="apple-touch-icon" href="/logo.png" />
+    <link rel="manifest" href="/manifest.json" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <meta name="theme-color" content="#08080a" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="myDrive" />
     <title>myDrive — Unified Personal Cloud Storage</title>
   </head>
-  <body class="bg-[#08080a] text-zinc-100 antialiased font-sans overscroll-none" style="background-color: #08080a;">
+  <body class="bg-[#08080a] text-zinc-100 antialiased font-sans overscroll-none select-none" style="background-color: #08080a;">
     <div id="root" class="min-h-screen bg-[#08080a]"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

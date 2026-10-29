@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { DeviceItem, FileItem, FolderItem } from '../types.js';
 import {
   Smartphone,
@@ -451,8 +452,8 @@ export const DeviceManagerView: React.FC<Props> = ({
       )}
 
       {/* Uploaded Docs Inspection Modal */}
-      {inspectDevice && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fade-in">
+      {inspectDevice && createPortal(
+        <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/85 backdrop-blur-sm animate-fade-in">
           <div className="bg-[#13131a] border border-[#27273a] rounded-3xl w-full max-w-2xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden">
             <div className="p-5 border-b border-[#22222d] flex items-center justify-between">
               <div className="flex items-center space-x-3">
@@ -536,12 +537,13 @@ export const DeviceManagerView: React.FC<Props> = ({
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* Live Sync Activity & Logs Modal */}
-      {viewingLogsDevice && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fade-in">
+      {viewingLogsDevice && createPortal(
+        <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/85 backdrop-blur-sm animate-fade-in">
           <div className="bg-[#13131a] border border-[#27273a] rounded-3xl w-full max-w-2xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden">
             <div className="p-5 border-b border-[#22222d] flex items-center justify-between">
               <div className="flex items-center space-x-3">
@@ -659,7 +661,8 @@ export const DeviceManagerView: React.FC<Props> = ({
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );
