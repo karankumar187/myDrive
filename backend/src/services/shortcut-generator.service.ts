@@ -205,7 +205,7 @@ export class ShortcutGeneratorService {
   private static formFieldFile(key: string): string {
     return `<dict>
               <key>WFItemType</key>
-              <integer>5</integer>
+              <integer>0</integer>
               <key>WFKey</key>
               ${this.text(key)}
               <key>WFValue</key>
