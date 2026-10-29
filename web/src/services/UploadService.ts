@@ -1,6 +1,6 @@
 import { api, startGlobalLoading } from './api.js';
 import { VaultCryptoService } from './vault-crypto.js';
-import { mediaCache, generateThumbnailFromVideoFile, isVideoFile, getEffectiveMimeType } from './media-cache.js';
+import { isVideoFile, getEffectiveMimeType } from './media-cache.js';
 
 export interface UploadTask {
   id: string;
@@ -13,6 +13,7 @@ export interface UploadTask {
   error?: string;
   storageAccountEmail?: string;
   createdAt: number;
+  retryCount?: number;
 }
 
 type UploadListener = (tasks: UploadTask[]) => void;
@@ -22,6 +23,27 @@ class BackgroundUploadManager {
   private listeners: Set<UploadListener> = new Set();
   private isProcessing = false;
   private onUploadSuccessCallback: ((folderId: string | null) => void) | null = null;
+  private wakeLockSentinel: any = null;
+  private activeXhr: XMLHttpRequest | null = null;
+
+  constructor() {
+    // When returning to tab on iOS or desktop, automatically resume any interrupted uploads
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') {
+          if (this.hasActiveUploads()) {
+            this.acquireWakeLock();
+            this.processQueue();
+          }
+        }
+      });
+      window.addEventListener('online', () => {
+        if (this.hasActiveUploads()) {
+          this.processQueue();
+        }
+      });
+    }
+  }
 
   public setOnUploadSuccess(cb: (folderId: string | null) => void) {
     this.onUploadSuccessCallback = cb;
@@ -50,9 +72,64 @@ class BackgroundUploadManager {
     return [...this.tasks];
   }
 
+  public hasActiveUploads(): boolean {
+    return this.tasks.some(
+      (t) => t.status === 'queued' || t.status === 'processing' || t.status === 'uploading'
+    );
+  }
+
   public clearCompleted() {
-    this.tasks = this.tasks.filter((t) => t.status !== 'completed' && t.status !== 'duplicate' && t.status !== 'failed');
+    this.tasks = this.tasks.filter(
+      (t) => t.status !== 'completed' && t.status !== 'duplicate' && t.status !== 'failed'
+    );
     this.notify();
+  }
+
+  public retryTask(taskId: string) {
+    const task = this.tasks.find((t) => t.id === taskId);
+    if (task && task.status === 'failed') {
+      task.status = 'queued';
+      task.progress = 0;
+      task.message = 'Retrying upload...';
+      task.error = undefined;
+      task.retryCount = 0;
+      this.notify();
+      this.acquireWakeLock();
+      this.processQueue();
+    }
+  }
+
+  public retryAllFailed() {
+    let count = 0;
+    this.tasks.forEach((t) => {
+      if (t.status === 'failed') {
+        t.status = 'queued';
+        t.progress = 0;
+        t.message = 'Retrying upload...';
+        t.error = undefined;
+        t.retryCount = 0;
+        count++;
+      }
+    });
+    if (count > 0) {
+      this.notify();
+      this.acquireWakeLock();
+      this.processQueue();
+    }
+  }
+
+  public cancelTask(taskId: string) {
+    const index = this.tasks.findIndex((t) => t.id === taskId);
+    if (index !== -1) {
+      const task = this.tasks[index];
+      if (task.status === 'uploading' && this.activeXhr) {
+        try {
+          this.activeXhr.abort();
+        } catch {}
+      }
+      this.tasks.splice(index, 1);
+      this.notify();
+    }
   }
 
   public enqueue(files: FileList | File[], folderId: string | null, targetFolderName?: string) {
@@ -68,30 +145,59 @@ class BackgroundUploadManager {
       status: 'queued',
       message: 'Queued for upload',
       createdAt: Date.now(),
+      retryCount: 0,
     }));
 
     this.tasks = [...this.tasks, ...newTasks];
     this.notify();
+    this.acquireWakeLock();
     this.processQueue();
+  }
+
+  private async acquireWakeLock() {
+    try {
+      if ('wakeLock' in navigator && !this.wakeLockSentinel) {
+        this.wakeLockSentinel = await (navigator as any).wakeLock.request('screen');
+        this.wakeLockSentinel.addEventListener('release', () => {
+          this.wakeLockSentinel = null;
+        });
+      }
+    } catch {
+      // Ignore wake lock failure (e.g. low power mode)
+    }
+  }
+
+  private releaseWakeLock() {
+    if (this.wakeLockSentinel) {
+      try {
+        this.wakeLockSentinel.release();
+      } catch {}
+      this.wakeLockSentinel = null;
+    }
   }
 
   private async processQueue() {
     if (this.isProcessing) return;
     this.isProcessing = true;
 
-    while (true) {
-      const nextTask = this.tasks.find((t) => t.status === 'queued');
-      if (!nextTask) break;
+    try {
+      while (true) {
+        const nextTask = this.tasks.find((t) => t.status === 'queued');
+        if (!nextTask) break;
 
-      await this.uploadSingleTask(nextTask);
+        await this.uploadSingleTask(nextTask);
+      }
+    } finally {
+      this.isProcessing = false;
+      if (!this.hasActiveUploads()) {
+        this.releaseWakeLock();
+      }
     }
-
-    this.isProcessing = false;
   }
 
   private async uploadSingleTask(task: UploadTask) {
     task.status = 'processing';
-    task.message = `Processing ${task.file.name}...`;
+    task.message = `Preparing ${task.file.name}...`;
     task.progress = 5;
     this.notify();
 
@@ -99,30 +205,21 @@ class BackgroundUploadManager {
 
     try {
       const effectiveMime = getEffectiveMimeType(task.file.name, task.file.type);
-      let videoThumb: string | null = null;
-      if (isVideoFile(task.file.name) || effectiveMime.startsWith('video/')) {
-        task.message = `Extracting preview frame...`;
-        this.notify();
-        try {
-          videoThumb = await generateThumbnailFromVideoFile(task.file);
-        } catch {
-          // ignore thumbnail failure
-        }
-      }
 
+      // Fast, lightweight hash (< 15ms): avoids memory spikes on iOS Safari
       task.progress = 15;
       task.message = `Computing hash...`;
       this.notify();
 
       let contentHash: string;
-      const MAX_IN_MEMORY_SIZE = 20 * 1024 * 1024; // 20 MB
+      const MAX_IN_MEMORY_SIZE = 8 * 1024 * 1024; // 8 MB
       if (task.file.size <= MAX_IN_MEMORY_SIZE) {
         const buffer = await task.file.arrayBuffer();
         contentHash = await VaultCryptoService.calculateSha256(buffer);
       } else {
-        // Low-memory chunk hash for large videos/files on mobile Safari/iPhone
-        const head = await task.file.slice(0, 4 * 1024 * 1024).arrayBuffer();
-        const tail = await task.file.slice(Math.max(0, task.file.size - 4 * 1024 * 1024)).arrayBuffer();
+        // Fast chunk hash: head 2MB + tail 2MB
+        const head = await task.file.slice(0, 2 * 1024 * 1024).arrayBuffer();
+        const tail = await task.file.slice(Math.max(0, task.file.size - 2 * 1024 * 1024)).arrayBuffer();
         const combined = new Uint8Array(head.byteLength + tail.byteLength);
         combined.set(new Uint8Array(head), 0);
         combined.set(new Uint8Array(tail), head.byteLength);
@@ -130,7 +227,7 @@ class BackgroundUploadManager {
       }
 
       task.progress = 25;
-      task.message = `Allocating storage pool...`;
+      task.message = `Connecting to storage...`;
       this.notify();
 
       const initResult = await api.initiateUpload({
@@ -162,36 +259,30 @@ class BackgroundUploadManager {
         ? initResult.uploadSessionUrl
         : `${import.meta.env.VITE_API_URL || ''}${initResult.uploadSessionUrl}`;
 
-      // Upload with XHR for accurate byte progress
-      await new Promise<void>((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        xhr.open('PUT', uploadUrl);
-        xhr.setRequestHeader('Content-Type', effectiveMime);
+      // Upload with XHR and automatic retry on connection interruption (e.g. mobile app switch / sleep)
+      let uploadSuccess = false;
+      let lastError: any = null;
+      const maxRetries = 3;
 
-        xhr.upload.onprogress = (e) => {
-          if (e.lengthComputable) {
-            const pct = Math.round(30 + (e.loaded / e.total) * 60); // 30% to 90%
-            task.progress = pct;
-            task.message = `Uploading: ${Math.round((e.loaded / e.total) * 100)}%`;
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+          await this.streamUpload(uploadUrl, effectiveMime, task);
+          uploadSuccess = true;
+          break;
+        } catch (err: any) {
+          lastError = err;
+          if (attempt < maxRetries) {
+            task.retryCount = attempt;
+            task.message = `Connection interrupted, retrying (attempt ${attempt + 1}/${maxRetries})...`;
             this.notify();
+            await new Promise((r) => setTimeout(r, 2000));
           }
-        };
+        }
+      }
 
-        xhr.onload = () => {
-          if (xhr.status >= 200 && xhr.status < 300) {
-            resolve();
-          } else {
-            reject(new Error(`Upload stream failed with HTTP ${xhr.status}: ${xhr.statusText}`));
-          }
-        };
-
-        xhr.onerror = () => {
-          reject(new Error('Network error during file upload stream'));
-        };
-
-        // Stream directly from File object (zero memory buffer allocation for large videos on iPhone)
-        xhr.send(task.file);
-      });
+      if (!uploadSuccess) {
+        throw lastError;
+      }
 
       task.progress = 92;
       task.message = `Finalizing cloud backup metadata...`;
@@ -199,7 +290,7 @@ class BackgroundUploadManager {
 
       const realProviderFileId = initResult.driveOpaqueName || `file_${Date.now()}`;
 
-      const completeRes = await api.completeUpload({
+      await api.completeUpload({
         filename: task.file.name,
         mimeType: effectiveMime,
         sizeBytes: task.file.size,
@@ -208,12 +299,7 @@ class BackgroundUploadManager {
         providerFileId: realProviderFileId,
         folderId: task.folderId,
         isEncrypted: false,
-        metadata: videoThumb ? { thumbnail: videoThumb } : undefined,
       });
-
-      if (videoThumb && completeRes?.file?._id) {
-        mediaCache.saveThumbnail(completeRes.file._id, videoThumb);
-      }
 
       task.status = 'completed';
       task.progress = 100;
@@ -230,6 +316,47 @@ class BackgroundUploadManager {
     } finally {
       stopLoading();
     }
+  }
+
+  private streamUpload(uploadUrl: string, mimeType: string, task: UploadTask): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      this.activeXhr = xhr;
+
+      xhr.open('PUT', uploadUrl);
+      xhr.setRequestHeader('Content-Type', mimeType);
+
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) {
+          const pct = Math.round(30 + (e.loaded / e.total) * 60); // 30% to 90%
+          task.progress = pct;
+          task.message = `Uploading: ${Math.round((e.loaded / e.total) * 100)}%`;
+          this.notify();
+        }
+      };
+
+      xhr.onload = () => {
+        this.activeXhr = null;
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve();
+        } else {
+          reject(new Error(`Upload stream failed with HTTP ${xhr.status}: ${xhr.statusText}`));
+        }
+      };
+
+      xhr.onerror = () => {
+        this.activeXhr = null;
+        reject(new Error('Network error during file upload stream'));
+      };
+
+      xhr.onabort = () => {
+        this.activeXhr = null;
+        reject(new Error('Upload cancelled'));
+      };
+
+      // Native low-overhead disk streaming via File object
+      xhr.send(task.file);
+    });
   }
 }
 

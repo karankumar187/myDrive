@@ -9,7 +9,9 @@ import {
   Sparkles, 
   FileText, 
   Film, 
-  Image as ImageIcon 
+  Image as ImageIcon,
+  RotateCcw,
+  Zap,
 } from 'lucide-react';
 
 export const UploadDrawer: React.FC = () => {
@@ -60,15 +62,28 @@ export const UploadDrawer: React.FC = () => {
             <span className="text-xs font-bold text-white truncate">
               {activeCount > 0
                 ? `Uploading ${activeCount} item${activeCount > 1 ? 's' : ''}`
+                : failedCount > 0
+                ? `${failedCount} upload${failedCount > 1 ? 's' : ''} failed`
                 : `${completedCount} upload${completedCount > 1 ? 's' : ''} complete`}
             </span>
             <span className="text-[10px] text-zinc-400 truncate">
-              {activeCount > 0 ? 'Background upload running…' : 'All uploads completed'}
+              {activeCount > 0 ? 'Background upload running…' : failedCount > 0 ? 'Tap Retry to resume' : 'All uploads completed'}
             </span>
           </div>
         </div>
 
-        <div className="flex items-center space-x-1" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center space-x-1.5" onClick={(e) => e.stopPropagation()}>
+          {failedCount > 0 && (
+            <button
+              onClick={() => uploadService.retryAllFailed()}
+              className="px-2 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 text-[10px] font-bold flex items-center space-x-1 transition active:scale-95"
+              title="Retry all failed uploads"
+            >
+              <RotateCcw className="w-3 h-3" />
+              <span>Retry All</span>
+            </button>
+          )}
+
           <button
             onClick={() => setIsMinimized(!isMinimized)}
             className="p-1 text-zinc-400 hover:text-white rounded-lg hover:bg-white/5 transition"
@@ -76,10 +91,11 @@ export const UploadDrawer: React.FC = () => {
           >
             {isMinimized ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
           </button>
+
           <button
             onClick={() => uploadService.clearCompleted()}
             className="p-1 text-zinc-400 hover:text-white rounded-lg hover:bg-white/5 transition"
-            title="Clear list"
+            title="Clear finished items"
           >
             <X className="w-4 h-4" />
           </button>
@@ -89,6 +105,14 @@ export const UploadDrawer: React.FC = () => {
       {/* Drawer Body (Task List) */}
       {!isMinimized && (
         <div className="max-h-72 overflow-y-auto divide-y divide-[#222230] p-2 space-y-1">
+          {/* Active upload notice */}
+          {activeCount > 0 && (
+            <div className="px-3 py-1.5 mb-1.5 bg-cyan-950/40 border border-cyan-800/40 rounded-xl text-[10px] text-cyan-300 flex items-center space-x-2">
+              <Zap className="w-3.5 h-3.5 flex-shrink-0 text-cyan-400" />
+              <span>Screen awake active. Keep this tab open while uploading.</span>
+            </div>
+          )}
+
           {tasks.map((task) => (
             <div key={task.id} className="p-2 rounded-xl hover:bg-white/[0.02] transition space-y-1.5">
               <div className="flex items-center justify-between space-x-2">
@@ -103,7 +127,7 @@ export const UploadDrawer: React.FC = () => {
                   </div>
                 </div>
 
-                <div className="shrink-0 text-right">
+                <div className="shrink-0 text-right flex items-center space-x-1.5">
                   {task.status === 'completed' && (
                     <CheckCircle2 className="w-4 h-4 text-emerald-400" />
                   )}
@@ -113,7 +137,23 @@ export const UploadDrawer: React.FC = () => {
                     </span>
                   )}
                   {task.status === 'failed' && (
-                    <AlertCircle className="w-4 h-4 text-red-400" />
+                    <div className="flex items-center space-x-1">
+                      <button
+                        onClick={() => uploadService.retryTask(task.id)}
+                        className="px-2 py-0.5 rounded-md bg-red-600/80 hover:bg-red-500 text-white text-[10px] font-bold flex items-center space-x-1 transition active:scale-95 shadow-sm"
+                        title="Retry upload"
+                      >
+                        <RotateCcw className="w-3 h-3" />
+                        <span>Retry</span>
+                      </button>
+                      <button
+                        onClick={() => uploadService.cancelTask(task.id)}
+                        className="p-1 text-zinc-500 hover:text-zinc-300 transition"
+                        title="Dismiss"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   )}
                   {(task.status === 'queued' || task.status === 'processing' || task.status === 'uploading') && (
                     <span className="text-[11px] font-semibold text-cyan-400">

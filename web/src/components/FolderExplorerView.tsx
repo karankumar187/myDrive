@@ -449,9 +449,13 @@ export const FolderExplorerView: React.FC<Props> = ({
 
   const uploadFiles = (selectedFiles: FileList | File[]) => {
     if (!selectedFiles || selectedFiles.length === 0) return;
+    const fileArray = Array.from(selectedFiles);
     const targetFolderName = currentFolder ? currentFolder.name : 'My Drive';
-    uploadService.enqueue(selectedFiles, currentFolderId, targetFolderName);
     if (fileInputRef.current) fileInputRef.current.value = '';
+    // Defer enqueue so mobile photo picker dismisses smoothly without freezing
+    setTimeout(() => {
+      uploadService.enqueue(fileArray, currentFolderId, targetFolderName);
+    }, 50);
   };
 
   const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {

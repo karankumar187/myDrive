@@ -691,8 +691,12 @@ export const GalleryTimelineView: React.FC<Props> = ({
               className="hidden"
               onChange={(e) => {
                 if (e.target.files && e.target.files.length > 0) {
-                  uploadService.enqueue(e.target.files, null);
+                  const selected = Array.from(e.target.files);
                   e.target.value = '';
+                  // Defer to allow the iOS photo picker sheet to dismiss smoothly without freezing
+                  setTimeout(() => {
+                    uploadService.enqueue(selected, null);
+                  }, 50);
                 }
               }}
             />
