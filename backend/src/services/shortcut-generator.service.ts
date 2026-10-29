@@ -170,7 +170,7 @@ export class ShortcutGeneratorService {
   }
 
   /**
-   * Builds a text form field (WFItemType 0) for WFFormValues.
+   * Builds a text form field referencing an action output (WFItemType 0) for WFFormValues.
    */
   private static formFieldText(key: string, valueOutputUUID: string, valueOutputName: string): string {
     return `<dict>
@@ -184,14 +184,28 @@ export class ShortcutGeneratorService {
   }
 
   /**
-   * Builds a file form field (WFItemType 0) for WFFormValues — references "Repeat Item".
-   * Note: In WorkflowKit, dictionary field values use WFItemType 0 (string/token attachment)
-   * which resolves dynamically at runtime to multipart file streaming.
+   * Builds a static text form field (WFItemType 0) for WFFormValues.
+   */
+  private static formFieldStaticText(key: string, value: string): string {
+    return `<dict>
+              <key>WFItemType</key>
+              <integer>0</integer>
+              <key>WFKey</key>
+              ${this.text(key)}
+              <key>WFValue</key>
+              ${this.text(value)}
+            </dict>`;
+  }
+
+  /**
+   * Builds a file form field (WFItemType 5) for WFFormValues — references "Repeat Item".
+   * In Apple Shortcuts, WFItemType 5 designates a native file attachment (multipart/form-data streaming)
+   * eliminating the need for any in-memory base64 encoding.
    */
   private static formFieldFile(key: string): string {
     return `<dict>
               <key>WFItemType</key>
-              <integer>0</integer>
+              <integer>5</integer>
               <key>WFKey</key>
               ${this.text(key)}
               <key>WFValue</key>
@@ -224,7 +238,6 @@ export class ShortcutGeneratorService {
     const findPhotosUUID = this.uuid();
     const countUUID = this.uuid();
     const nameUUID = this.uuid();
-    const b64UUID = this.uuid();
     const uploadUUID = this.uuid();
     const loopGroupId = this.uuid();
 
@@ -286,7 +299,7 @@ export class ShortcutGeneratorService {
       </dict>
     </dict>
 
-    <!-- LOOP 1: Get Item Filename (supports photos and videos) -->
+    <!-- LOOP 1: Get Item Filename (supports photos and videos natively without coercion) -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.getitemname</string>
@@ -297,30 +310,11 @@ export class ShortcutGeneratorService {
         <key>CustomOutputName</key>
         <string>FileName</string>
         <key>WFInput</key>
-        ${this.varInput('Repeat Item', 'WFGenericFileContentItem')}
+        ${this.varInput('Repeat Item')}
       </dict>
     </dict>
 
-    <!-- LOOP 2: Base64 Encode Media File (generic file representation prevents public.mpeg-4 error) -->
-    <dict>
-      <key>WFWorkflowActionIdentifier</key>
-      <string>is.workflow.actions.base64encode</string>
-      <key>WFWorkflowActionParameters</key>
-      <dict>
-        <key>UUID</key>
-        <string>${b64UUID}</string>
-        <key>CustomOutputName</key>
-        <string>Base64Media</string>
-        <key>WFEncodeMode</key>
-        <string>Encode</string>
-        <key>WFBase64LineBreakMode</key>
-        <string>None</string>
-        <key>WFInput</key>
-        ${this.varInput('Repeat Item', 'WFGenericFileContentItem')}
-      </dict>
-    </dict>
-
-    <!-- LOOP 3: Upload Media to myDrive Cloud -->
+    <!-- LOOP 2: Multipart Form Upload (Native binary streaming, zero base64 encoding) -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.downloadurl</string>
@@ -340,14 +334,14 @@ export class ShortcutGeneratorService {
           this.headerItem('X-Device-Key', deviceKey),
         ])}
         <key>WFHTTPBodyType</key>
-        <string>JSON</string>
-        <key>WFJSONValues</key>
+        <string>Form</string>
+        <key>WFFormValues</key>
         ${this.headersDict([
-          this.formFieldText('media', b64UUID, 'Base64Media'),
+          this.formFieldFile('media'),
           this.formFieldText('filename', nameUUID, 'FileName'),
           this.formFieldText('deviceAssetId', nameUUID, 'FileName'),
-          this.headerItem('deviceId', deviceId),
-          this.headerItem('deviceKey', deviceKey),
+          this.formFieldStaticText('deviceId', deviceId),
+          this.formFieldStaticText('deviceKey', deviceKey),
         ])}
       </dict>
     </dict>
@@ -424,7 +418,6 @@ export class ShortcutGeneratorService {
     const selectPhotosUUID = this.uuid();
     const countUUID = this.uuid();
     const fileNameUUID = this.uuid();
-    const b64UUID = this.uuid();
     const uploadUUID = this.uuid();
     const loopGroupId = this.uuid();
 
@@ -486,7 +479,7 @@ export class ShortcutGeneratorService {
       </dict>
     </dict>
 
-    <!-- LOOP: Get filename (supports photos and videos) -->
+    <!-- LOOP: Get filename (supports photos and videos natively without coercion) -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.getitemname</string>
@@ -497,30 +490,11 @@ export class ShortcutGeneratorService {
         <key>CustomOutputName</key>
         <string>FileName</string>
         <key>WFInput</key>
-        ${this.varInput('Repeat Item', 'WFGenericFileContentItem')}
+        ${this.varInput('Repeat Item')}
       </dict>
     </dict>
 
-    <!-- LOOP: Base64 Encode Media (as generic file so videos & photos load without coercion errors) -->
-    <dict>
-      <key>WFWorkflowActionIdentifier</key>
-      <string>is.workflow.actions.base64encode</string>
-      <key>WFWorkflowActionParameters</key>
-      <dict>
-        <key>UUID</key>
-        <string>${b64UUID}</string>
-        <key>CustomOutputName</key>
-        <string>Base64Media</string>
-        <key>WFEncodeMode</key>
-        <string>Encode</string>
-        <key>WFBase64LineBreakMode</key>
-        <string>None</string>
-        <key>WFInput</key>
-        ${this.varInput('Repeat Item', 'WFGenericFileContentItem')}
-      </dict>
-    </dict>
-
-    <!-- LOOP: Upload via JSON -->
+    <!-- LOOP: Direct Multipart Form Upload (Native binary streaming, zero base64 encoding) -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.downloadurl</string>
@@ -540,14 +514,14 @@ export class ShortcutGeneratorService {
           this.headerItem('X-Device-Key', deviceKey),
         ])}
         <key>WFHTTPBodyType</key>
-        <string>JSON</string>
-        <key>WFJSONValues</key>
+        <string>Form</string>
+        <key>WFFormValues</key>
         ${this.headersDict([
-          this.formFieldText('media', b64UUID, 'Base64Media'),
+          this.formFieldFile('media'),
           this.formFieldText('filename', fileNameUUID, 'FileName'),
           this.formFieldText('deviceAssetId', fileNameUUID, 'FileName'),
-          this.headerItem('deviceId', deviceId),
-          this.headerItem('deviceKey', deviceKey),
+          this.formFieldStaticText('deviceId', deviceId),
+          this.formFieldStaticText('deviceKey', deviceKey),
         ])}
       </dict>
     </dict>

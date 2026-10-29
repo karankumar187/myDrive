@@ -1,18 +1,37 @@
 import { Router } from 'express';
+import express from 'express';
 import multer from 'multer';
 import { ShortcutController } from '../controllers/shortcut.controller.js';
 import { requireDeviceAuth, requireUserAuth } from '../middlewares/auth.middleware.js';
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 250 * 1024 * 1024 }, // 250MB max per individual Shortcut upload
+  limits: { fileSize: 500 * 1024 * 1024 }, // 500MB max per individual Shortcut upload
+});
+
+// Middleware for direct binary streaming (when WFHTTPBodyType: File is used)
+const rawBinaryParser = express.raw({
+  type: (req) => {
+    const contentType = req.headers['content-type'] || '';
+    if (contentType.includes('multipart/form-data') || contentType.includes('application/json')) {
+      return false;
+    }
+    return true; // Parse video/*, image/*, application/octet-stream as raw Buffer
+  },
+  limit: '500mb',
 });
 
 const router = Router();
 
 // iPhone Shortcut endpoints (authenticated with X-Device-Id and X-Device-Key)
 router.get('/sync-check', requireDeviceAuth, ShortcutController.syncCheck);
-router.post('/upload', requireDeviceAuth, upload.single('media'), ShortcutController.uploadFromShortcut);
+router.post(
+  '/upload',
+  requireDeviceAuth,
+  rawBinaryParser,
+  upload.single('media'),
+  ShortcutController.uploadFromShortcut
+);
 router.post('/reconcile-deletions', requireDeviceAuth, ShortcutController.reconcileDeletions);
 
 /**

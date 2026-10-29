@@ -65,6 +65,8 @@ export class ShortcutController {
       console.log(`[Shortcut Upload] Request from device: ${req.device.deviceId} (${req.device.deviceName}) - User: ${req.user.email || req.user._id}`);
       if (req.file) {
         console.log(`[Shortcut Upload] Multipart file received: name=${req.file.originalname}, size=${req.file.size}, type=${req.file.mimetype}`);
+      } else if (Buffer.isBuffer(req.body)) {
+        console.log(`[Shortcut Upload] Raw binary stream received: size=${req.body.length}, type=${req.headers['content-type']}`);
       } else if (req.body?.media) {
         console.log(`[Shortcut Upload] Base64 JSON received: name=${req.body.filename}, base64 len=${typeof req.body.media === 'string' ? req.body.media.length : 'not string'}`);
       } else {
@@ -80,6 +82,22 @@ export class ShortcutController {
         fileBuffer = req.file.buffer;
         sizeBytes = req.file.size;
         originalName = req.body?.filename || req.file.originalname || originalName;
+      } else if (Buffer.isBuffer(req.body) && req.body.length > 0) {
+        fileBuffer = req.body;
+        sizeBytes = req.body.length;
+        const headerFilename = req.headers['x-filename'] as string | undefined;
+        const queryFilename = req.query.filename as string | undefined;
+        const contentDisposition = req.headers['content-disposition'] as string | undefined;
+        let cdFilename: string | undefined;
+        if (contentDisposition) {
+          const match = /filename\*?=(?:UTF-8'')?["']?([^"';]+)["']?/i.exec(contentDisposition);
+          if (match) cdFilename = decodeURIComponent(match[1]);
+        }
+        originalName = headerFilename
+          ? decodeURIComponent(headerFilename)
+          : queryFilename
+          ? decodeURIComponent(queryFilename)
+          : cdFilename || originalName;
       } else if (req.body?.media && typeof req.body.media === 'string') {
         const base64Data = req.body.media.replace(/^data:[^;]+;base64,/, '');
         fileBuffer = Buffer.from(base64Data, 'base64');
@@ -93,12 +111,20 @@ export class ShortcutController {
       }
 
       // Auto-detect format from magic bytes & ensure proper extension
-      const detected = ShortcutController.detectMediaFormat(fileBuffer, originalName, req.file?.mimetype || req.body?.mimeType);
+      const detected = ShortcutController.detectMediaFormat(
+        fileBuffer,
+        originalName,
+        req.file?.mimetype || (typeof req.headers['content-type'] === 'string' ? req.headers['content-type'] : undefined) || req.body?.mimeType
+      );
       mimeType = detected.mimeType;
       originalName = detected.filename;
       console.log(`[Shortcut Upload] Processing ${originalName} (${sizeBytes} bytes, ${mimeType})`);
 
-      const deviceAssetId = (req.body?.deviceAssetId as string) || `iphone_${Date.now()}`;
+      const deviceAssetId =
+        (req.body?.deviceAssetId as string) ||
+        (req.headers['x-device-asset-id'] as string) ||
+        originalName ||
+        `iphone_${Date.now()}`;
 
       // Compute raw SHA-256 for instant deduplication
       const contentHash = crypto.createHash('sha256').update(fileBuffer).digest('hex');
