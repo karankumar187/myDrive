@@ -5,7 +5,7 @@ import { requireDeviceAuth, requireUserAuth } from '../middlewares/auth.middlewa
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 50 * 1024 * 1024 }, // 50MB max per individual Shortcut upload
+  limits: { fileSize: 250 * 1024 * 1024 }, // 250MB max per individual Shortcut upload
 });
 
 const router = Router();

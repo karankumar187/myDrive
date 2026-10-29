@@ -100,12 +100,26 @@ export class ShortcutGeneratorService {
 
   /**
    * Variable input attachment — directly attaches a variable (like "Repeat Item") as an object input.
-   * Used for WFInput in actions like base64encode, properties.images, etc.
+   * Optionally coerces the variable to a specific content item class (e.g. WFGenericFileContentItem)
+   * to ensure photos AND videos load raw file bytes without triggering public.mpeg-4 coercion errors.
    */
-  private static varInput(variableName: string): string {
+  private static varInput(variableName: string, coercionClass?: string): string {
+    const aggrandizements = coercionClass
+      ? `
+                <key>Aggrandizements</key>
+                <array>
+                  <dict>
+                    <key>CoercionItemClass</key>
+                    <string>${this.esc(coercionClass)}</string>
+                    <key>Type</key>
+                    <string>WFCoercionVariableAggrandizement</string>
+                  </dict>
+                </array>`
+      : '';
+
     return `<dict>
               <key>Value</key>
-              <dict>
+              <dict>${aggrandizements}
                 <key>Type</key>
                 <string>Variable</string>
                 <key>VariableName</key>
@@ -272,24 +286,22 @@ export class ShortcutGeneratorService {
       </dict>
     </dict>
 
-    <!-- LOOP 1: Get Photo Filename -->
+    <!-- LOOP 1: Get Item Filename (supports photos and videos) -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
-      <string>is.workflow.actions.properties.images</string>
+      <string>is.workflow.actions.getitemname</string>
       <key>WFWorkflowActionParameters</key>
       <dict>
         <key>UUID</key>
         <string>${nameUUID}</string>
         <key>CustomOutputName</key>
         <string>FileName</string>
-        <key>WFContentItemPropertyName</key>
-        <string>Name</string>
         <key>WFInput</key>
-        ${this.varInput('Repeat Item')}
+        ${this.varInput('Repeat Item', 'WFGenericFileContentItem')}
       </dict>
     </dict>
 
-    <!-- LOOP 2: Base64 Encode Photo for reliable transfer -->
+    <!-- LOOP 2: Base64 Encode Media File (generic file representation prevents public.mpeg-4 error) -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.base64encode</string>
@@ -298,17 +310,17 @@ export class ShortcutGeneratorService {
         <key>UUID</key>
         <string>${b64UUID}</string>
         <key>CustomOutputName</key>
-        <string>Base64Photo</string>
+        <string>Base64Media</string>
         <key>WFEncodeMode</key>
         <string>Encode</string>
         <key>WFBase64LineBreakMode</key>
         <string>None</string>
         <key>WFInput</key>
-        ${this.varInput('Repeat Item')}
+        ${this.varInput('Repeat Item', 'WFGenericFileContentItem')}
       </dict>
     </dict>
 
-    <!-- LOOP 3: Upload Photo to myDrive Cloud -->
+    <!-- LOOP 3: Upload Media to myDrive Cloud -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.downloadurl</string>
@@ -331,7 +343,7 @@ export class ShortcutGeneratorService {
         <string>JSON</string>
         <key>WFJSONValues</key>
         ${this.headersDict([
-          this.formFieldText('media', b64UUID, 'Base64Photo'),
+          this.formFieldText('media', b64UUID, 'Base64Media'),
           this.formFieldText('filename', nameUUID, 'FileName'),
           this.formFieldText('deviceAssetId', nameUUID, 'FileName'),
           this.headerItem('deviceId', deviceId),
@@ -356,14 +368,14 @@ export class ShortcutGeneratorService {
           <dict>
             <key>attachmentsByRange</key>
             <dict>
-              <key>{14, 1}</key>
+              <key>{13, 1}</key>
               <dict>
                 <key>Type</key>
                 <string>Variable</string>
                 <key>VariableName</key>
                 <string>Repeat Index</string>
               </dict>
-              <key>{19, 1}</key>
+              <key>{18, 1}</key>
               <dict>
                 <key>OutputName</key>
                 <string>TotalCount</string>
@@ -374,7 +386,7 @@ export class ShortcutGeneratorService {
               </dict>
             </dict>
             <key>string</key>
-            <string>Syncing photo \uFFFC of \uFFFC…</string>
+            <string>Syncing item \uFFFC of \uFFFC…</string>
           </dict>
           <key>WFSerializationType</key>
           <string>WFTextTokenString</string>
@@ -404,7 +416,7 @@ export class ShortcutGeneratorService {
         <key>WFNotificationActionTitle</key>
         <string>myDrive Auto Sync</string>
         <key>WFNotificationActionBody</key>
-        <string>🎉 Photos backed up to your personal cloud!</string>
+        <string>🎉 Media backed up to your personal cloud!</string>
         <key>WFNotificationActionSound</key>
         <true/>
       </dict>
@@ -428,7 +440,13 @@ export class ShortcutGeneratorService {
   <key>WFWorkflowImportQuestions</key>
   <array/>
   <key>WFWorkflowInputContentItemClasses</key>
-  <array/>
+  <array>
+    <string>WFPhotoMediaContentItem</string>
+    <string>WFImageContentItem</string>
+    <string>WFGenericFileContentItem</string>
+    <string>WFMediaContentItem</string>
+    <string>WFAVAssetContentItem</string>
+  </array>
   <key>WFWorkflowTypes</key>
   <array>
     <string>NCWidget</string>
@@ -459,7 +477,7 @@ export class ShortcutGeneratorService {
   <key>WFWorkflowActions</key>
   <array>
 
-    <!-- Select Photos -->
+    <!-- Select Photos & Videos -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.selectphoto</string>
@@ -471,10 +489,16 @@ export class ShortcutGeneratorService {
         <string>SelectedPhotos</string>
         <key>WFSelectMultiplePhotos</key>
         <true/>
+        <key>WFPhotoPickerTypes</key>
+        <array>
+          <string>Images</string>
+          <string>Videos</string>
+          <string>Live Photos</string>
+        </array>
       </dict>
     </dict>
 
-    <!-- Count Selected Photos -->
+    <!-- Count Selected Photos & Videos -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.count</string>
@@ -504,24 +528,22 @@ export class ShortcutGeneratorService {
       </dict>
     </dict>
 
-    <!-- LOOP: Get filename -->
+    <!-- LOOP: Get filename (supports photos and videos) -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
-      <string>is.workflow.actions.properties.images</string>
+      <string>is.workflow.actions.getitemname</string>
       <key>WFWorkflowActionParameters</key>
       <dict>
         <key>UUID</key>
         <string>${fileNameUUID}</string>
         <key>CustomOutputName</key>
         <string>FileName</string>
-        <key>WFContentItemPropertyName</key>
-        <string>Name</string>
         <key>WFInput</key>
-        ${this.varInput('Repeat Item')}
+        ${this.varInput('Repeat Item', 'WFGenericFileContentItem')}
       </dict>
     </dict>
 
-    <!-- LOOP: Base64 Encode Photo -->
+    <!-- LOOP: Base64 Encode Media (as generic file so videos & photos load without coercion errors) -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.base64encode</string>
@@ -530,13 +552,13 @@ export class ShortcutGeneratorService {
         <key>UUID</key>
         <string>${b64UUID}</string>
         <key>CustomOutputName</key>
-        <string>Base64Photo</string>
+        <string>Base64Media</string>
         <key>WFEncodeMode</key>
         <string>Encode</string>
         <key>WFBase64LineBreakMode</key>
         <string>None</string>
         <key>WFInput</key>
-        ${this.varInput('Repeat Item')}
+        ${this.varInput('Repeat Item', 'WFGenericFileContentItem')}
       </dict>
     </dict>
 
@@ -563,7 +585,7 @@ export class ShortcutGeneratorService {
         <string>JSON</string>
         <key>WFJSONValues</key>
         ${this.headersDict([
-          this.formFieldText('media', b64UUID, 'Base64Photo'),
+          this.formFieldText('media', b64UUID, 'Base64Media'),
           this.formFieldText('filename', fileNameUUID, 'FileName'),
           this.formFieldText('deviceAssetId', fileNameUUID, 'FileName'),
           this.headerItem('deviceId', deviceId),
@@ -588,14 +610,14 @@ export class ShortcutGeneratorService {
           <dict>
             <key>attachmentsByRange</key>
             <dict>
-              <key>{16, 1}</key>
+              <key>{15, 1}</key>
               <dict>
                 <key>Type</key>
                 <string>Variable</string>
                 <key>VariableName</key>
                 <string>Repeat Index</string>
               </dict>
-              <key>{21, 1}</key>
+              <key>{20, 1}</key>
               <dict>
                 <key>OutputName</key>
                 <string>TotalCount</string>
@@ -606,7 +628,7 @@ export class ShortcutGeneratorService {
               </dict>
             </dict>
             <key>string</key>
-            <string>Uploading photo \uFFFC of \uFFFC…</string>
+            <string>Uploading item \uFFFC of \uFFFC…</string>
           </dict>
           <key>WFSerializationType</key>
           <string>WFTextTokenString</string>
@@ -636,7 +658,7 @@ export class ShortcutGeneratorService {
         <key>WFNotificationActionTitle</key>
         <string>myDrive Upload Complete</string>
         <key>WFNotificationActionBody</key>
-        <string>🎉 All photos backed up to your personal cloud!</string>
+        <string>🎉 All media backed up to your personal cloud!</string>
         <key>WFNotificationActionSound</key>
         <true/>
       </dict>
@@ -664,6 +686,8 @@ export class ShortcutGeneratorService {
     <string>WFPhotoMediaContentItem</string>
     <string>WFImageContentItem</string>
     <string>WFGenericFileContentItem</string>
+    <string>WFMediaContentItem</string>
+    <string>WFAVAssetContentItem</string>
   </array>
   <key>WFWorkflowTypes</key>
   <array>

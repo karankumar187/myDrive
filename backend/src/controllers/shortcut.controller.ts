@@ -74,11 +74,10 @@ export class ShortcutController {
       let fileBuffer: Buffer | null = null;
       let mimeType = 'image/jpeg';
       let sizeBytes = 0;
-      let originalName = (req.body?.filename as string) || `Photo_${Date.now()}.jpg`;
+      let originalName = (req.body?.filename as string) || `Media_${Date.now()}`;
 
       if (req.file) {
         fileBuffer = req.file.buffer;
-        mimeType = req.file.mimetype || 'image/jpeg';
         sizeBytes = req.file.size;
         originalName = req.body?.filename || req.file.originalname || originalName;
       } else if (req.body?.media && typeof req.body.media === 'string') {
@@ -86,21 +85,18 @@ export class ShortcutController {
         fileBuffer = Buffer.from(base64Data, 'base64');
         sizeBytes = fileBuffer.length;
         console.log(`[Shortcut Upload] Decoded base64 buffer: ${sizeBytes} bytes`);
-        if (req.body.mimeType) {
-          mimeType = req.body.mimeType;
-        } else if (originalName.toLowerCase().endsWith('.png')) {
-          mimeType = 'image/png';
-        } else if (originalName.toLowerCase().endsWith('.mov')) {
-          mimeType = 'video/quicktime';
-        } else if (originalName.toLowerCase().endsWith('.mp4')) {
-          mimeType = 'video/mp4';
-        }
       }
 
       if (!fileBuffer || fileBuffer.length === 0) {
         res.status(400).json({ error: 'No media file provided in request' });
         return;
       }
+
+      // Auto-detect format from magic bytes & ensure proper extension
+      const detected = ShortcutController.detectMediaFormat(fileBuffer, originalName, req.file?.mimetype || req.body?.mimeType);
+      mimeType = detected.mimeType;
+      originalName = detected.filename;
+      console.log(`[Shortcut Upload] Processing ${originalName} (${sizeBytes} bytes, ${mimeType})`);
 
       const deviceAssetId = (req.body?.deviceAssetId as string) || `iphone_${Date.now()}`;
 
@@ -345,6 +341,72 @@ export class ShortcutController {
       console.error('Shortcut download error:', error);
       res.status(500).json({ error: error.message });
     }
+  }
+
+  /**
+   * Sniffs magic bytes to accurately detect format for video (MOV, MP4) and images (HEIC, JPEG, PNG, GIF, WEBP).
+   * Automatically adds the extension to the filename if omitted.
+   */
+  private static detectMediaFormat(
+    buffer: Buffer,
+    originalFilename: string,
+    providedMime?: string
+  ): { mimeType: string; filename: string } {
+    let mimeType = providedMime && providedMime !== 'application/octet-stream' ? providedMime : 'image/jpeg';
+    let ext = '';
+
+    if (buffer.length >= 8) {
+      const boxType = buffer.subarray(4, 8).toString('ascii');
+      if (boxType === 'ftyp') {
+        const brand = buffer.length >= 12 ? buffer.subarray(8, 12).toString('ascii').toLowerCase() : '';
+        if (brand.startsWith('qt') || brand.startsWith('moov')) {
+          mimeType = 'video/quicktime';
+          ext = '.mov';
+        } else if (brand.startsWith('heic') || brand.startsWith('mif1')) {
+          mimeType = 'image/heic';
+          ext = '.heic';
+        } else {
+          mimeType = 'video/mp4';
+          ext = '.mp4';
+        }
+      } else if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+        mimeType = 'image/jpeg';
+        ext = '.jpg';
+      } else if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) {
+        mimeType = 'image/png';
+        ext = '.png';
+      } else if (buffer[0] === 0x47 && buffer[1] === 0x49 && buffer[2] === 0x46) {
+        mimeType = 'image/gif';
+        ext = '.gif';
+      } else if (
+        buffer[0] === 0x52 &&
+        buffer[1] === 0x49 &&
+        buffer[2] === 0x46 &&
+        buffer[3] === 0x46 &&
+        buffer.length >= 12 &&
+        buffer.subarray(8, 12).toString('ascii') === 'WEBP'
+      ) {
+        mimeType = 'image/webp';
+        ext = '.webp';
+      }
+    }
+
+    let filename = originalFilename;
+    const hasValidExt = /\.(jpe?g|png|heic|mov|mp4|gif|webp|m4v)$/i.test(filename);
+    if (!hasValidExt && ext) {
+      filename = `${filename}${ext}`;
+    } else if (hasValidExt) {
+      const lower = filename.toLowerCase();
+      if (lower.endsWith('.mov')) mimeType = 'video/quicktime';
+      else if (lower.endsWith('.mp4') || lower.endsWith('.m4v')) mimeType = 'video/mp4';
+      else if (lower.endsWith('.heic')) mimeType = 'image/heic';
+      else if (lower.endsWith('.png')) mimeType = 'image/png';
+      else if (lower.endsWith('.gif')) mimeType = 'image/gif';
+      else if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) mimeType = 'image/jpeg';
+      else if (lower.endsWith('.webp')) mimeType = 'image/webp';
+    }
+
+    return { mimeType, filename };
   }
 }
 
