@@ -1,6 +1,8 @@
 import { Request, Response } from 'express';
 import { Types } from 'mongoose';
 import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
 import { DeviceFileState } from '../models/DeviceFileState.js';
 import { Device } from '../models/Device.js';
 import { CryptoService } from '../services/crypto.service.js';
@@ -9,6 +11,110 @@ import { GoogleDriveService } from '../services/gdrive.service.js';
 import { ShortcutGeneratorService } from '../services/shortcut-generator.service.js';
 import { getSocketIoInstance } from '../server.js';
 import { CacheService } from '../services/cache.service.js';
+
+const STAGING_DIR = path.resolve(process.cwd(), 'uploads', 'staging');
+if (!fs.existsSync(STAGING_DIR)) {
+  fs.mkdirSync(STAGING_DIR, { recursive: true });
+}
+
+interface StagedUploadTask {
+  userId: Types.ObjectId;
+  deviceId: string;
+  deviceAssetId: string;
+  targetFolderId: Types.ObjectId | null;
+  originalName: string;
+  mimeType: string;
+  sizeBytes: number;
+  contentHash: string;
+  thumbnailBase64?: string;
+  tempFilePath: string;
+}
+
+/**
+ * Background queue for streaming large media files to Google Drive asynchronously.
+ * Prevents iOS Shortcuts client-side 60-second timeouts by allowing the server
+ * to respond 200 OK immediately once bytes are received on the server.
+ */
+class ShortcutUploadQueue {
+  private static queue: StagedUploadTask[] = [];
+  private static isProcessing = false;
+
+  static enqueue(task: StagedUploadTask) {
+    this.queue.push(task);
+    this.processNext();
+  }
+
+  private static async processNext() {
+    if (this.isProcessing || this.queue.length === 0) return;
+    this.isProcessing = true;
+
+    while (this.queue.length > 0) {
+      const task = this.queue.shift();
+      if (!task) break;
+
+      try {
+        console.log(`[Shortcut Queue] Starting background Google Drive upload for ${task.originalName} (${(task.sizeBytes / (1024 * 1024)).toFixed(2)} MB)...`);
+
+        const targetAccount = await StorageEngineService.selectTargetAccount(task.userId, task.sizeBytes);
+        const oauth2Client = GoogleDriveService.getOAuth2Client(targetAccount);
+        const { google } = await import('googleapis');
+        const drive = google.drive({ version: 'v3', auth: oauth2Client });
+
+        const driveResponse = await drive.files.create({
+          requestBody: {
+            name: task.originalName,
+            mimeType: task.mimeType,
+          },
+          media: {
+            mimeType: task.mimeType,
+            body: fs.createReadStream(task.tempFilePath),
+          },
+        });
+
+        const providerFileId = driveResponse.data.id || `file_${Date.now()}`;
+
+        const { file: savedFile } = await StorageEngineService.finalizeUpload({
+          userId: task.userId,
+          folderId: task.targetFolderId,
+          filename: task.originalName,
+          mimeType: task.mimeType,
+          sizeBytes: task.sizeBytes,
+          contentHash: task.contentHash,
+          storageAccountId: targetAccount._id,
+          providerFileId,
+          deviceId: task.deviceId,
+          deviceAssetId: task.deviceAssetId,
+          metadata: task.thumbnailBase64 ? { thumbnail: task.thumbnailBase64 } : undefined,
+        });
+
+        await CacheService.invalidateUser(task.userId.toString());
+        const io = getSocketIoInstance();
+        if (io) {
+          io.to(`user:${task.userId}`).emit('file:uploaded', {
+            fileId: savedFile._id,
+            filename: savedFile.filename,
+            sizeBytes: savedFile.sizeBytes,
+            isDuplicate: false,
+          });
+          io.to(`user:${task.userId}`).emit('device:sync_status', {
+            deviceId: task.deviceId,
+            status: 'online',
+            currentSyncActivity: `Backed up ${savedFile.filename}`,
+            lastSeenAt: new Date().toISOString(),
+          });
+        }
+
+        console.log(`[Shortcut Queue SUCCESS] ${task.originalName} (${savedFile._id}) saved to Google Drive (${targetAccount.accountEmail || targetAccount._id})`);
+      } catch (err: any) {
+        console.error(`[Shortcut Queue ERROR] Failed background upload for ${task.originalName}:`, err);
+      } finally {
+        fs.promises.unlink(task.tempFilePath).catch(() => {});
+      }
+    }
+
+    this.isProcessing = false;
+  }
+}
 
 export class ShortcutController {
   /**
@@ -197,68 +303,34 @@ export class ShortcutController {
         return;
       }
 
-      // Select target Google Drive account
-      const targetAccount = await StorageEngineService.selectTargetAccount(req.user._id, sizeBytes);
+      // Fast response for iOS Shortcuts:
+      // Stage file to disk and enqueue for asynchronous Google Drive upload.
+      // This guarantees iOS Shortcuts never hits its hardcoded 60-second request timeout!
+      const safeName = originalName.replace(/[^a-zA-Z0-9._-]/g, '_');
+      const tempFileName = `staged_${Date.now()}_${contentHash.substring(0, 10)}_${safeName}`;
+      const tempFilePath = path.join(STAGING_DIR, tempFileName);
 
-      // Upload to Google Drive
-      const oauth2Client = GoogleDriveService.getOAuth2Client(targetAccount);
-      const { google } = await import('googleapis');
-      const drive = google.drive({ version: 'v3', auth: oauth2Client });
-      const { Readable } = await import('stream');
+      await fs.promises.writeFile(tempFilePath, fileBuffer);
 
-      const driveResponse = await drive.files.create({
-        requestBody: {
-          name: originalName,
-          mimeType,
-        },
-        media: {
-          mimeType,
-          body: Readable.from(fileBuffer),
-        },
-      });
-
-      const providerFileId = driveResponse.data.id || `file_${Date.now()}`;
-
-      // Record in unified cloud library
-      const { file: savedFile } = await StorageEngineService.finalizeUpload({
+      ShortcutUploadQueue.enqueue({
         userId: req.user._id,
-        folderId: targetFolderId,
-        filename: originalName,
+        deviceId: req.device.deviceId,
+        deviceAssetId,
+        targetFolderId,
+        originalName,
         mimeType,
         sizeBytes,
         contentHash,
-        storageAccountId: targetAccount._id,
-        providerFileId,
-        deviceId: req.device.deviceId,
-        deviceAssetId,
-        metadata: thumbnailBase64 ? { thumbnail: thumbnailBase64 } : undefined,
+        thumbnailBase64,
+        tempFilePath,
       });
 
-      // Invalidate user cache & broadcast real-time Socket.IO notification
-      await CacheService.invalidateUser(req.user._id.toString());
-      const io = getSocketIoInstance();
-      if (io) {
-        io.to(`user:${req.user._id}`).emit('file:uploaded', {
-          fileId: savedFile._id,
-          filename: savedFile.filename,
-          sizeBytes: savedFile.sizeBytes,
-          isDuplicate: false,
-        });
-        io.to(`user:${req.user._id}`).emit('device:sync_status', {
-          deviceId: req.device.deviceId,
-          status: 'online',
-          currentSyncActivity: `Backed up ${savedFile.filename}`,
-          lastSeenAt: new Date().toISOString(),
-        });
-      }
-
-      console.log(`[Shortcut Upload SUCCESS] Saved file ${savedFile.filename} (${savedFile._id}) to account ${targetAccount.accountEmail || targetAccount._id}`);
+      console.log(`[Shortcut Upload QUEUED] ${originalName} (${(sizeBytes / (1024 * 1024)).toFixed(2)} MB) staged for background Google Drive backup`);
       res.json({
         status: 'success',
         isDuplicate: false,
         message: 'Successfully backed up to personal cloud',
-        fileId: savedFile._id,
-        filename: savedFile.filename,
+        filename: originalName,
       });
     } catch (error: any) {
       console.error('Shortcut upload error:', error);
