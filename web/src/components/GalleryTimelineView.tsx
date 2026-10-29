@@ -906,6 +906,7 @@ export const GalleryTimelineView: React.FC<Props> = ({
             setForceDownloadTargetIds([currentMedia._id]);
             setIsForceDownloadOpen(true);
           }}
+          onLoadMore={loadMoreMedia}
         />
       )}
 
@@ -1288,6 +1289,7 @@ const FullScreenViewer: React.FC<{
   onOpenRename: () => void;
   onOpenMove: () => void;
   onOpenForceDownload?: () => void;
+  onLoadMore?: () => void;
 }> = ({
   mediaList,
   currentIndex,
@@ -1300,6 +1302,7 @@ const FullScreenViewer: React.FC<{
   onOpenRename,
   onOpenMove,
   onOpenForceDownload,
+  onLoadMore,
 }) => {
   const item = mediaList[currentIndex];
   const isVideo = isVideoFile(item.mimeType) || isVideoFile(item.filename);
@@ -1377,27 +1380,61 @@ const FullScreenViewer: React.FC<{
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [currentIndex, mediaList.length]);
 
-  // Preload adjacent images & thumbnails (next 3 and previous 2) for instantaneous transitions
+  // Preload adjacent images & thumbnails (next 5 and previous 5) for ultra-smooth photo transitions
   useEffect(() => {
-    const indicesToPreload = [currentIndex + 1, currentIndex - 1, currentIndex + 2, currentIndex - 2];
+    // Interleaved proximity order: +1, -1, +2, -2, +3, -3, +4, -4, +5, -5
+    const offsets = [1, -1, 2, -2, 3, -3, 4, -4, 5, -5];
+    const indicesToPreload = offsets
+      .map((offset) => currentIndex + offset)
+      .filter((idx) => idx >= 0 && idx < mediaList.length);
+
     indicesToPreload.forEach((idx) => {
-      if (idx >= 0 && idx < mediaList.length) {
-        const m = mediaList[idx];
-        const isMVideo = isVideoFile(m.mimeType) || isVideoFile(m.filename);
-        if (!isMVideo) {
-          const preImg = new Image();
-          preImg.src = getStreamUrl(m._id);
-        }
-        const thumbUrl = m.metadata?.thumbnail && m.metadata.thumbnail.startsWith('data:image/')
+      const m = mediaList[idx];
+      if (!m) return;
+      const isMVideo = isVideoFile(m.mimeType) || isVideoFile(m.filename);
+
+      // 1. Preload thumbnail immediately for instant placeholder display
+      const thumbUrl =
+        m.metadata?.thumbnail && m.metadata.thumbnail.startsWith('data:image/')
           ? m.metadata.thumbnail
-          : (mediaCache.getThumbnail(m._id) || api.getThumbnailUrl(m._id));
-        if (thumbUrl && !thumbUrl.startsWith('data:')) {
-          const tImg = new Image();
-          tImg.src = thumbUrl;
+          : mediaCache.getThumbnail(m._id) || api.getThumbnailUrl(m._id);
+      if (thumbUrl && !thumbUrl.startsWith('data:')) {
+        const tImg = new Image();
+        tImg.src = thumbUrl;
+      }
+
+      // 2. Preload full-resolution image if not a video
+      if (!isMVideo) {
+        const streamUrl = getStreamUrl(m._id);
+        const fImg = new Image();
+        fImg.src = streamUrl;
+
+        // 3. Pre-decrypt into memory cache if vault key is active for immediate neighbors
+        const distance = Math.abs(idx - currentIndex);
+        if (vaultKey && distance <= 2 && !mediaCache.has(m._id)) {
+          const version = m.versions?.[m.versions.length - 1];
+          if (version?.isEncrypted && version?.iv) {
+            fetch(streamUrl)
+              .then((res) => {
+                if (res.ok) return res.arrayBuffer();
+                throw new Error('Preload fetch failed');
+              })
+              .then((ciphertext) => VaultCryptoService.decryptBuffer(ciphertext, version.iv!, vaultKey))
+              .then((decrypted) => {
+                const blobUrl = URL.createObjectURL(new Blob([decrypted], { type: m.mimeType }));
+                mediaCache.set(m._id, blobUrl);
+              })
+              .catch(() => {});
+          }
         }
       }
     });
-  }, [currentIndex, mediaList]);
+
+    // If viewer is approaching the end of loaded media (within 6 items), trigger infinite scroll
+    if (currentIndex >= mediaList.length - 6 && onLoadMore) {
+      onLoadMore();
+    }
+  }, [currentIndex, mediaList, vaultKey, onLoadMore]);
 
   // Load media stream / decrypt
   useEffect(() => {
