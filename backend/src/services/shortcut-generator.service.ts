@@ -81,11 +81,25 @@ export class ShortcutGeneratorService {
   /**
    * Action input attachment — directly attaches an action output as an object input (not a string token).
    * Used for WFInput in actions like repeat.each, count, etc.
+   * Optionally coerces the output to a specific class (e.g. WFMediaContentItem).
    */
-  private static actionInput(outputUUID: string, outputName: string): string {
+  private static actionInput(outputUUID: string, outputName: string, coercionClass?: string): string {
+    const aggrandizements = coercionClass
+      ? `
+                <key>Aggrandizements</key>
+                <array>
+                  <dict>
+                    <key>CoercionItemClass</key>
+                    <string>${this.esc(coercionClass)}</string>
+                    <key>Type</key>
+                    <string>WFCoercionVariableAggrandizement</string>
+                  </dict>
+                </array>`
+      : '';
+
     return `<dict>
               <key>Value</key>
-              <dict>
+              <dict>${aggrandizements}
                 <key>OutputName</key>
                 <string>${this.esc(outputName)}</string>
                 <key>OutputUUID</key>
@@ -201,8 +215,26 @@ export class ShortcutGeneratorService {
    * Builds a native multipart file attachment form field (WFItemType 5) for WFFormValues.
    * In Apple WorkflowKit, a file attachment parameter requires WFTokenAttachmentParameterState
    * wrapping a WFTextTokenAttachment to stream binary photos and videos without base64.
+   * Coerces to WFMediaContentItem by default to guarantee both videos and photos materialize as files.
    */
-  private static formFieldFile(key: string, variableName: string = 'Repeat Item'): string {
+  private static formFieldFile(
+    key: string,
+    variableName: string = 'Repeat Item',
+    coercionClass: string = 'WFMediaContentItem'
+  ): string {
+    const aggrandizements = coercionClass
+      ? `
+                    <key>Aggrandizements</key>
+                    <array>
+                      <dict>
+                        <key>CoercionItemClass</key>
+                        <string>${this.esc(coercionClass)}</string>
+                        <key>Type</key>
+                        <string>WFCoercionVariableAggrandizement</string>
+                      </dict>
+                    </array>`
+      : '';
+
     return `<dict>
               <key>WFItemType</key>
               <integer>5</integer>
@@ -213,7 +245,7 @@ export class ShortcutGeneratorService {
                 <key>Value</key>
                 <dict>
                   <key>Value</key>
-                  <dict>
+                  <dict>${aggrandizements}
                     <key>Type</key>
                     <string>Variable</string>
                     <key>VariableName</key>
@@ -310,7 +342,7 @@ export class ShortcutGeneratorService {
         <key>WFControlFlowMode</key>
         <integer>0</integer>
         <key>WFInput</key>
-        ${this.actionInput(findPhotosUUID, 'NewPhotos')}
+        ${this.actionInput(findPhotosUUID, 'NewPhotos', 'WFMediaContentItem')}
       </dict>
     </dict>
 
@@ -325,7 +357,7 @@ export class ShortcutGeneratorService {
         <key>CustomOutputName</key>
         <string>FileName</string>
         <key>WFInput</key>
-        ${this.varInput('Repeat Item')}
+        ${this.varInput('Repeat Item', 'WFMediaContentItem')}
       </dict>
     </dict>
 
@@ -352,7 +384,7 @@ export class ShortcutGeneratorService {
         <string>Form</string>
         <key>WFFormValues</key>
         ${this.headersDict([
-          this.formFieldFile('media'),
+          this.formFieldFile('media', 'Repeat Item', 'WFMediaContentItem'),
           this.formFieldText('filename', nameUUID, 'FileName'),
           this.formFieldText('deviceAssetId', nameUUID, 'FileName'),
           this.formFieldStaticText('deviceId', deviceId),
@@ -490,7 +522,7 @@ export class ShortcutGeneratorService {
         <key>WFControlFlowMode</key>
         <integer>0</integer>
         <key>WFInput</key>
-        ${this.actionInput(selectPhotosUUID, 'SelectedPhotos')}
+        ${this.actionInput(selectPhotosUUID, 'SelectedPhotos', 'WFMediaContentItem')}
       </dict>
     </dict>
 
@@ -505,7 +537,7 @@ export class ShortcutGeneratorService {
         <key>CustomOutputName</key>
         <string>FileName</string>
         <key>WFInput</key>
-        ${this.varInput('Repeat Item')}
+        ${this.varInput('Repeat Item', 'WFMediaContentItem')}
       </dict>
     </dict>
 
@@ -532,7 +564,7 @@ export class ShortcutGeneratorService {
         <string>Form</string>
         <key>WFFormValues</key>
         ${this.headersDict([
-          this.formFieldFile('media'),
+          this.formFieldFile('media', 'Repeat Item', 'WFMediaContentItem'),
           this.formFieldText('filename', fileNameUUID, 'FileName'),
           this.formFieldText('deviceAssetId', fileNameUUID, 'FileName'),
           this.formFieldStaticText('deviceId', deviceId),
