@@ -171,19 +171,16 @@ export class ShortcutGeneratorService {
   }
 
   /**
-   * Photo Loop Body with Fail-Fast Error Guard:
+   * Photo Loop Body:
    * 1. Convert Image to JPEG (full quality 1.0, preserve EXIF)
    * 2. Get Name from ConvertedImage
    * 3. Upload via multipart form
-   * 4. Inspect response JSON: if upload failed (status is missing/empty), notify & STOP shortcut immediately!
+   * Resilient: If an image fails to upload, execution continues seamlessly to the next image!
    */
   private static photoLoopBody(serverUrl: string, deviceId: string, deviceKey: string): string {
     const convUUID = this.uuid();
     const nameUUID = this.uuid();
     const uploadUUID = this.uuid();
-    const dictUUID = this.uuid();
-    const statusUUID = this.uuid();
-    const failGroupId = this.uuid();
 
     return `
     <!-- Convert Image: materializes photo to high-quality JPEG with EXIF -->
@@ -251,108 +248,6 @@ export class ShortcutGeneratorService {
           this.formFieldStaticText('deviceId', deviceId),
           this.formFieldStaticText('deviceKey', deviceKey),
         ])}
-      </dict>
-    </dict>
-
-    <!-- Parse Upload Result JSON -->
-    <dict>
-      <key>WFWorkflowActionIdentifier</key>
-      <string>is.workflow.actions.detect.dictionary</string>
-      <key>WFWorkflowActionParameters</key>
-      <dict>
-        <key>UUID</key>
-        <string>${dictUUID}</string>
-        <key>CustomOutputName</key>
-        <string>UploadResultDict</string>
-        <key>WFInput</key>
-        ${this.actionInput(uploadUUID, 'PhotoUploadResult')}
-      </dict>
-    </dict>
-
-    <!-- Extract status field -->
-    <dict>
-      <key>WFWorkflowActionIdentifier</key>
-      <string>is.workflow.actions.getvalueforkey</string>
-      <key>WFWorkflowActionParameters</key>
-      <dict>
-        <key>UUID</key>
-        <string>${statusUUID}</string>
-        <key>CustomOutputName</key>
-        <string>UploadStatus</string>
-        <key>WFDictionaryKey</key>
-        <string>status</string>
-        <key>WFInput</key>
-        ${this.actionInput(dictUUID, 'UploadResultDict')}
-      </dict>
-    </dict>
-
-    <!-- FAIL-FAST GUARD: IF status does NOT have any value (upload failed), STOP sync immediately -->
-    <dict>
-      <key>WFWorkflowActionIdentifier</key>
-      <string>is.workflow.actions.conditional</string>
-      <key>WFWorkflowActionParameters</key>
-      <dict>
-        <key>GroupingIdentifier</key>
-        <string>${failGroupId}</string>
-        <key>WFControlFlowMode</key>
-        <integer>0</integer>
-        <key>WFCondition</key>
-        <integer>101</integer>
-        <key>WFInput</key>
-        <dict>
-          <key>Type</key>
-          <string>Variable</string>
-          <key>Variable</key>
-          <dict>
-            <key>Value</key>
-            <dict>
-              <key>OutputName</key>
-              <string>UploadStatus</string>
-              <key>OutputUUID</key>
-              <string>${statusUUID}</string>
-              <key>Type</key>
-              <string>ActionOutput</string>
-            </dict>
-            <key>WFSerializationType</key>
-            <string>WFTextTokenAttachment</string>
-          </dict>
-        </dict>
-      </dict>
-    </dict>
-
-    <!-- Error notification -->
-    <dict>
-      <key>WFWorkflowActionIdentifier</key>
-      <string>is.workflow.actions.notification</string>
-      <key>WFWorkflowActionParameters</key>
-      <dict>
-        <key>WFNotificationActionTitle</key>
-        <string>myDrive Sync Error</string>
-        <key>WFNotificationActionBody</key>
-        <string>❌ An upload failed. Stopping sync to protect your library.</string>
-        <key>WFNotificationActionSound</key>
-        <true/>
-      </dict>
-    </dict>
-
-    <!-- Stop Shortcut immediately -->
-    <dict>
-      <key>WFWorkflowActionIdentifier</key>
-      <string>is.workflow.actions.exit</string>
-      <key>WFWorkflowActionParameters</key>
-      <dict/>
-    </dict>
-
-    <!-- END IF -->
-    <dict>
-      <key>WFWorkflowActionIdentifier</key>
-      <string>is.workflow.actions.conditional</string>
-      <key>WFWorkflowActionParameters</key>
-      <dict>
-        <key>GroupingIdentifier</key>
-        <string>${failGroupId}</string>
-        <key>WFControlFlowMode</key>
-        <integer>2</integer>
       </dict>
     </dict>`;
   }
@@ -514,8 +409,8 @@ export class ShortcutGeneratorService {
    * Generates the interactive upload shortcut:
    * 1. Prompts user to select photos (multiple selection enabled).
    * 2. Loops each photo: converts to JPEG (100% + EXIF) -> uploads via multipart.
-   * 3. Fail-fast: if any single upload fails, halts sync immediately.
-   * 4. Single final notification on success.
+   * 3. Resilient: If an image upload fails, continues processing remaining photos.
+   * 4. Single final notification on completion.
    */
   static generateUploadShortcut(serverUrl: string, deviceId: string, deviceKey: string): string {
     const selectPhotosUUID = this.uuid();
