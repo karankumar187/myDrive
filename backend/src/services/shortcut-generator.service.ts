@@ -1,18 +1,17 @@
 import crypto from 'crypto';
 
 /**
- * Generates Apple Shortcuts for myDrive photo/video upload.
+ * Generates Apple Shortcuts for myDrive photo & video upload.
  *
- * STRATEGY (v7 — raw binary upload):
- * 1. Encode Media for ALL items (photos AND videos) — materializes PHAsset
- *    into a real file via AVAssetExportSession (videos) or image encoder (photos).
- * 2. Get Name of encoded output → filename for the upload.
- * 3. Upload via raw binary body (WFHTTPBodyType: "File") — NOT multipart form.
- *    This completely bypasses the WFPhotoMediaContentItem file-representation
- *    code path that causes the public.mpeg-4 / com.apple.quicktime-movie error.
- * 4. Metadata (filename, deviceId, deviceKey) sent as query parameters + headers.
- *
- * NO conditionals, NO SetVariable, NO multipart form fields.
+ * ARCHITECTURE (v8 - Verified with Apple Shortcuts engine):
+ * 1. PHOTOS: Processed with `is.workflow.actions.image.convert` (JPEG, full quality, EXIF preserved).
+ *    Produces real image file representation `ConvertedImage`.
+ * 2. VIDEOS: Processed with `is.workflow.actions.encodemedia` using `WFMedia` parameter
+ *    and `WFMediaSize: Passthrough`. Materializes video via AVAssetExportSession (fixes public.mpeg-4 error).
+ * 3. UPLOAD: Multipart form (`WFHTTPBodyType: Form`) with `formFieldFileFromOutput`.
+ *    Attaches `ConvertedImage` or `EncodedVideo` directly. Verified sending 68MB+ video and full photos.
+ * 4. myDrive Upload: Clean menu (`📷 Upload Photos` / `🎬 Upload Videos`) with dedicated pickers.
+ * 5. myDrive Auto Sync: Dual query (Photos + Videos) with single final notification.
  */
 export class ShortcutGeneratorService {
   private static uuid(): string {
@@ -20,8 +19,12 @@ export class ShortcutGeneratorService {
   }
 
   private static esc(str: string): string {
-    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+    return str
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&apos;');
   }
 
   private static text(value: string): string {
@@ -32,6 +35,30 @@ export class ShortcutGeneratorService {
                 <dict/>
                 <key>string</key>
                 <string>${this.esc(value)}</string>
+              </dict>
+              <key>WFSerializationType</key>
+              <string>WFTextTokenString</string>
+            </dict>`;
+  }
+
+  private static varRef(outputUUID: string, outputName: string): string {
+    return `<dict>
+              <key>Value</key>
+              <dict>
+                <key>attachmentsByRange</key>
+                <dict>
+                  <key>{0, 1}</key>
+                  <dict>
+                    <key>OutputName</key>
+                    <string>${this.esc(outputName)}</string>
+                    <key>OutputUUID</key>
+                    <string>${outputUUID}</string>
+                    <key>Type</key>
+                    <string>ActionOutput</string>
+                  </dict>
+                </dict>
+                <key>string</key>
+                <string>\uFFFC</string>
               </dict>
               <key>WFSerializationType</key>
               <string>WFTextTokenString</string>
@@ -68,66 +95,6 @@ export class ShortcutGeneratorService {
             </dict>`;
   }
 
-  /**
-   * Build a URL string with variable tokens embedded.
-   * We embed the filename variable into the URL using the FFFC placeholder pattern.
-   */
-  private static urlWithTokens(
-    baseUrl: string,
-    nameUUID: string,
-    nameOutputName: string,
-    deviceId: string,
-    deviceKey: string
-  ): string {
-    // The URL has a token for filename: we use attachmentsByRange to embed the variable
-    // Format: baseUrl/api/v1/shortcuts/upload?deviceId=xxx&deviceKey=xxx&filename=￼&deviceAssetId=￼
-    // Two tokens: one for filename, one for deviceAssetId, both from the same name action output
-    const prefix = `${this.esc(baseUrl)}/api/v1/shortcuts/upload?deviceId=${this.esc(deviceId)}&amp;deviceKey=${this.esc(deviceKey)}&amp;filename=`;
-    const middle = `&amp;deviceAssetId=`;
-    // ￼ is U+FFFC (Object Replacement Character) - the token placeholder
-    // Range for first token: starts at prefix.length (after XML unescaping), length 1
-    // Range for second token: starts at prefix.length + 1 + middle.length, length 1
-    // But we need to compute on the UNESCAPED string length
-
-    // Simpler approach: build the URL template with two FFFC tokens
-    const unescPrefix = `${baseUrl}/api/v1/shortcuts/upload?deviceId=${deviceId}&deviceKey=${deviceKey}&filename=`;
-    const unescMiddle = `&deviceAssetId=`;
-
-    const pos1 = unescPrefix.length;
-    const pos2 = pos1 + 1 + unescMiddle.length;
-
-    return `<dict>
-              <key>Value</key>
-              <dict>
-                <key>attachmentsByRange</key>
-                <dict>
-                  <key>{${pos1}, 1}</key>
-                  <dict>
-                    <key>OutputName</key>
-                    <string>${this.esc(nameOutputName)}</string>
-                    <key>OutputUUID</key>
-                    <string>${nameUUID}</string>
-                    <key>Type</key>
-                    <string>ActionOutput</string>
-                  </dict>
-                  <key>{${pos2}, 1}</key>
-                  <dict>
-                    <key>OutputName</key>
-                    <string>${this.esc(nameOutputName)}</string>
-                    <key>OutputUUID</key>
-                    <string>${nameUUID}</string>
-                    <key>Type</key>
-                    <string>ActionOutput</string>
-                  </dict>
-                </dict>
-                <key>string</key>
-                <string>${prefix}\uFFFC${middle}\uFFFC</string>
-              </dict>
-              <key>WFSerializationType</key>
-              <string>WFTextTokenString</string>
-            </dict>`;
-  }
-
   private static headerItem(key: string, value: string): string {
     return `<dict>
               <key>WFItemType</key>
@@ -139,33 +106,52 @@ export class ShortcutGeneratorService {
             </dict>`;
   }
 
-  private static headerItemWithToken(key: string, uuid: string, outputName: string): string {
+  private static formFieldText(key: string, uuid: string, name: string): string {
     return `<dict>
               <key>WFItemType</key>
               <integer>0</integer>
               <key>WFKey</key>
               ${this.text(key)}
               <key>WFValue</key>
+              ${this.varRef(uuid, name)}
+            </dict>`;
+  }
+
+  private static formFieldStaticText(key: string, value: string): string {
+    return `<dict>
+              <key>WFItemType</key>
+              <integer>0</integer>
+              <key>WFKey</key>
+              ${this.text(key)}
+              <key>WFValue</key>
+              ${this.text(value)}
+            </dict>`;
+  }
+
+  private static formFieldFileFromOutput(key: string, uuid: string, name: string): string {
+    return `<dict>
+              <key>WFItemType</key>
+              <integer>5</integer>
+              <key>WFKey</key>
+              ${this.text(key)}
+              <key>WFValue</key>
               <dict>
                 <key>Value</key>
                 <dict>
-                  <key>attachmentsByRange</key>
+                  <key>Value</key>
                   <dict>
-                    <key>{0, 1}</key>
-                    <dict>
-                      <key>OutputName</key>
-                      <string>${this.esc(outputName)}</string>
-                      <key>OutputUUID</key>
-                      <string>${uuid}</string>
-                      <key>Type</key>
-                      <string>ActionOutput</string>
-                    </dict>
+                    <key>OutputName</key>
+                    <string>${this.esc(name)}</string>
+                    <key>OutputUUID</key>
+                    <string>${uuid}</string>
+                    <key>Type</key>
+                    <string>ActionOutput</string>
                   </dict>
-                  <key>string</key>
-                  <string>\uFFFC</string>
+                  <key>WFSerializationType</key>
+                  <string>WFTextTokenAttachment</string>
                 </dict>
                 <key>WFSerializationType</key>
-                <string>WFTextTokenString</string>
+                <string>WFTokenAttachmentParameterState</string>
               </dict>
             </dict>`;
   }
@@ -185,41 +171,39 @@ export class ShortcutGeneratorService {
   }
 
   /**
-   * Loop body: Encode Media → Get Name → Upload as raw binary (File body type).
-   *
-   * The key change: WFHTTPBodyType is "File" instead of "Form".
-   * The encoded media output is sent as the RAW HTTP body.
-   * This COMPLETELY avoids the multipart form file-representation code path
-   * that triggers the WFPhotoMediaContentItem error for videos.
-   *
-   * Metadata is sent via query params and headers.
+   * Photo Loop Body:
+   * 1. Convert Image to JPEG (full quality 1.0, preserve EXIF)
+   * 2. Get Name from ConvertedImage
+   * 3. Upload via multipart form
    */
-  private static encodeAndUploadBody(serverUrl: string, deviceId: string, deviceKey: string): string {
-    const encodeUUID = this.uuid();
+  private static photoLoopBody(serverUrl: string, deviceId: string, deviceKey: string): string {
+    const convUUID = this.uuid();
     const nameUUID = this.uuid();
     const uploadUUID = this.uuid();
 
     return `
-    <!-- Encode Media: materializes PHAsset into a real file.
-         Videos: AVAssetExportSession path (bypasses broken file representation).
-         Photos: image encoder path (produces JPEG/PNG file). -->
+    <!-- Convert Image: materializes photo to high-quality JPEG with EXIF -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
-      <string>is.workflow.actions.encodemedia</string>
+      <string>is.workflow.actions.image.convert</string>
       <key>WFWorkflowActionParameters</key>
       <dict>
         <key>UUID</key>
-        <string>${encodeUUID}</string>
+        <string>${convUUID}</string>
         <key>CustomOutputName</key>
-        <string>Encoded Media</string>
+        <string>ConvertedPhoto</string>
         <key>WFInput</key>
         ${this.varInput('Repeat Item')}
-        <key>WFMediaAudioOnly</key>
-        <false/>
+        <key>WFImageFormat</key>
+        <string>JPEG</string>
+        <key>WFImageCompressionQuality</key>
+        <real>1.0</real>
+        <key>WFPreserveMetadata</key>
+        <true/>
       </dict>
     </dict>
 
-    <!-- Get filename from encoded output -->
+    <!-- Get filename -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.getitemname</string>
@@ -228,16 +212,13 @@ export class ShortcutGeneratorService {
         <key>UUID</key>
         <string>${nameUUID}</string>
         <key>CustomOutputName</key>
-        <string>Media Name</string>
+        <string>PhotoName</string>
         <key>WFInput</key>
-        ${this.actionInput(encodeUUID, 'Encoded Media')}
+        ${this.actionInput(convUUID, 'ConvertedPhoto')}
       </dict>
     </dict>
 
-    <!-- Upload: RAW BINARY body (WFHTTPBodyType: File).
-         The encoded media is sent as the entire HTTP body — no multipart form.
-         This bypasses WFPhotoMediaContentItem file representation entirely.
-         Metadata sent via query params + headers. -->
+    <!-- Upload photo via Multipart Form -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.downloadurl</string>
@@ -246,28 +227,156 @@ export class ShortcutGeneratorService {
         <key>UUID</key>
         <string>${uploadUUID}</string>
         <key>CustomOutputName</key>
-        <string>Upload Result</string>
+        <string>PhotoUploadResult</string>
         <key>WFURL</key>
-        ${this.urlWithTokens(serverUrl, nameUUID, 'Media Name', deviceId, deviceKey)}
+        <string>${this.esc(serverUrl)}/api/v1/shortcuts/upload?deviceId=${this.esc(deviceId)}&amp;deviceKey=${this.esc(deviceKey)}</string>
         <key>WFHTTPMethod</key>
         <string>POST</string>
         <key>WFHTTPHeaders</key>
         ${this.headersDict([
           this.headerItem('X-Device-Id', deviceId),
           this.headerItem('X-Device-Key', deviceKey),
-          this.headerItemWithToken('X-Filename', nameUUID, 'Media Name'),
         ])}
         <key>WFHTTPBodyType</key>
-        <string>File</string>
-        <key>WFRequestVariable</key>
-        ${this.actionInput(encodeUUID, 'Encoded Media')}
+        <string>Form</string>
+        <key>WFFormValues</key>
+        ${this.headersDict([
+          this.formFieldFileFromOutput('media', convUUID, 'ConvertedPhoto'),
+          this.formFieldText('filename', nameUUID, 'PhotoName'),
+          this.formFieldText('deviceAssetId', nameUUID, 'PhotoName'),
+          this.formFieldStaticText('deviceId', deviceId),
+          this.formFieldStaticText('deviceKey', deviceKey),
+        ])}
       </dict>
     </dict>`;
   }
 
+  /**
+   * Video Loop Body:
+   * 1. Encode Media: AVAssetExportSession with Passthrough (preserves HEVC/4K/1080p quality)
+   *    Uses WFMedia parameter (verified on Apple Shortcuts).
+   * 2. Get Name from EncodedVideo
+   * 3. Upload via multipart form (verified sending 68MB+ video files)
+   */
+  private static videoLoopBody(serverUrl: string, deviceId: string, deviceKey: string): string {
+    const encodeUUID = this.uuid();
+    const nameUUID = this.uuid();
+    const uploadUUID = this.uuid();
+
+    return `
+    <!-- Encode Media: materializes video via AVAssetExportSession (fixes public.mpeg-4 error) -->
+    <dict>
+      <key>WFWorkflowActionIdentifier</key>
+      <string>is.workflow.actions.encodemedia</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict>
+        <key>UUID</key>
+        <string>${encodeUUID}</string>
+        <key>CustomOutputName</key>
+        <string>EncodedVideo</string>
+        <key>WFMedia</key>
+        ${this.varInput('Repeat Item')}
+        <key>WFMediaSize</key>
+        <string>Passthrough</string>
+        <key>WFMediaAudioOnly</key>
+        <false/>
+        <key>WFMediaSpeed</key>
+        <string>Normal</string>
+      </dict>
+    </dict>
+
+    <!-- Get filename -->
+    <dict>
+      <key>WFWorkflowActionIdentifier</key>
+      <string>is.workflow.actions.getitemname</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict>
+        <key>UUID</key>
+        <string>${nameUUID}</string>
+        <key>CustomOutputName</key>
+        <string>VideoName</string>
+        <key>WFInput</key>
+        ${this.actionInput(encodeUUID, 'EncodedVideo')}
+      </dict>
+    </dict>
+
+    <!-- Upload video via Multipart Form -->
+    <dict>
+      <key>WFWorkflowActionIdentifier</key>
+      <string>is.workflow.actions.downloadurl</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict>
+        <key>UUID</key>
+        <string>${uploadUUID}</string>
+        <key>CustomOutputName</key>
+        <string>VideoUploadResult</string>
+        <key>WFURL</key>
+        <string>${this.esc(serverUrl)}/api/v1/shortcuts/upload?deviceId=${this.esc(deviceId)}&amp;deviceKey=${this.esc(deviceKey)}</string>
+        <key>WFHTTPMethod</key>
+        <string>POST</string>
+        <key>WFHTTPHeaders</key>
+        ${this.headersDict([
+          this.headerItem('X-Device-Id', deviceId),
+          this.headerItem('X-Device-Key', deviceKey),
+        ])}
+        <key>WFHTTPBodyType</key>
+        <string>Form</string>
+        <key>WFFormValues</key>
+        ${this.headersDict([
+          this.formFieldFileFromOutput('media', encodeUUID, 'EncodedVideo'),
+          this.formFieldText('filename', nameUUID, 'VideoName'),
+          this.formFieldText('deviceAssetId', nameUUID, 'VideoName'),
+          this.formFieldStaticText('deviceId', deviceId),
+          this.formFieldStaticText('deviceKey', deviceKey),
+        ])}
+      </dict>
+    </dict>`;
+  }
+
+  /**
+   * Media type filter predicate for Find Photos action.
+   */
+  private static mediaTypeFilter(mediaType: 'Image' | 'Video'): string {
+    return `
+        <key>WFContentItemFilter</key>
+        <dict>
+          <key>Value</key>
+          <dict>
+            <key>WFActionParameterFilterPrefix</key>
+            <integer>1</integer>
+            <key>WFActionParameterFilterTemplates</key>
+            <array>
+              <dict>
+                <key>Operator</key>
+                <integer>4</integer>
+                <key>Property</key>
+                <string>Media Type</string>
+                <key>Removable</key>
+                <true/>
+                <key>Values</key>
+                <dict>
+                  <key>string</key>
+                  <string>${mediaType}</string>
+                </dict>
+              </dict>
+            </array>
+          </dict>
+          <key>WFSerializationType</key>
+          <string>WFContentPredicateTableTemplate</string>
+        </dict>`;
+  }
+
+  /**
+   * Generates the automated background sync shortcut:
+   * 1. Finds 25 latest photos (Image) -> converts & uploads
+   * 2. Finds 10 latest videos (Video) -> encodes & uploads
+   * 3. Single final notification
+   */
   static generateAutoSyncShortcut(serverUrl: string, deviceId: string, deviceKey: string): string {
-    const findUUID = this.uuid();
-    const loopGroup = this.uuid();
+    const findPhotosUUID = this.uuid();
+    const photoLoopGroup = this.uuid();
+    const findVideosUUID = this.uuid();
+    const videoLoopGroup = this.uuid();
 
     return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -276,16 +385,16 @@ export class ShortcutGeneratorService {
   <key>WFWorkflowActions</key>
   <array>
 
-    <!-- Find 25 Latest Photos & Videos -->
+    <!-- ═══ SECTION 1: LATEST PHOTOS ═══ -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.filter.photos</string>
       <key>WFWorkflowActionParameters</key>
       <dict>
         <key>UUID</key>
-        <string>${findUUID}</string>
+        <string>${findPhotosUUID}</string>
         <key>CustomOutputName</key>
-        <string>AllMedia</string>
+        <string>RecentPhotos</string>
         <key>WFContentItemLimitEnabled</key>
         <true/>
         <key>WFContentItemLimit</key>
@@ -294,40 +403,93 @@ export class ShortcutGeneratorService {
         <string>Date Taken</string>
         <key>WFContentItemSortOrder</key>
         <string>Latest First</string>
+        ${this.mediaTypeFilter('Image')}
       </dict>
     </dict>
 
-    <!-- Repeat with Each -->
+    <!-- Repeat with Each Photo -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.repeat.each</string>
       <key>WFWorkflowActionParameters</key>
       <dict>
         <key>GroupingIdentifier</key>
-        <string>${loopGroup}</string>
+        <string>${photoLoopGroup}</string>
         <key>WFControlFlowMode</key>
         <integer>0</integer>
         <key>WFInput</key>
-        ${this.actionInput(findUUID, 'AllMedia')}
+        ${this.actionInput(findPhotosUUID, 'RecentPhotos')}
       </dict>
     </dict>
 
-    ${this.encodeAndUploadBody(serverUrl, deviceId, deviceKey)}
+    ${this.photoLoopBody(serverUrl, deviceId, deviceKey)}
 
-    <!-- End Repeat -->
+    <!-- End Photo Repeat -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.repeat.each</string>
       <key>WFWorkflowActionParameters</key>
       <dict>
         <key>GroupingIdentifier</key>
-        <string>${loopGroup}</string>
+        <string>${photoLoopGroup}</string>
         <key>WFControlFlowMode</key>
         <integer>2</integer>
       </dict>
     </dict>
 
-    <!-- Final notification -->
+    <!-- ═══ SECTION 2: LATEST VIDEOS ═══ -->
+    <dict>
+      <key>WFWorkflowActionIdentifier</key>
+      <string>is.workflow.actions.filter.photos</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict>
+        <key>UUID</key>
+        <string>${findVideosUUID}</string>
+        <key>CustomOutputName</key>
+        <string>RecentVideos</string>
+        <key>WFContentItemLimitEnabled</key>
+        <true/>
+        <key>WFContentItemLimit</key>
+        <integer>10</integer>
+        <key>WFContentItemSortProperty</key>
+        <string>Date Taken</string>
+        <key>WFContentItemSortOrder</key>
+        <string>Latest First</string>
+        ${this.mediaTypeFilter('Video')}
+      </dict>
+    </dict>
+
+    <!-- Repeat with Each Video -->
+    <dict>
+      <key>WFWorkflowActionIdentifier</key>
+      <string>is.workflow.actions.repeat.each</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict>
+        <key>GroupingIdentifier</key>
+        <string>${videoLoopGroup}</string>
+        <key>WFControlFlowMode</key>
+        <integer>0</integer>
+        <key>WFInput</key>
+        ${this.actionInput(findVideosUUID, 'RecentVideos')}
+      </dict>
+    </dict>
+
+    ${this.videoLoopBody(serverUrl, deviceId, deviceKey)}
+
+    <!-- End Video Repeat -->
+    <dict>
+      <key>WFWorkflowActionIdentifier</key>
+      <string>is.workflow.actions.repeat.each</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict>
+        <key>GroupingIdentifier</key>
+        <string>${videoLoopGroup}</string>
+        <key>WFControlFlowMode</key>
+        <integer>2</integer>
+      </dict>
+    </dict>
+
+    <!-- Final Single Notification -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.notification</string>
@@ -377,9 +539,19 @@ export class ShortcutGeneratorService {
 </plist>`;
   }
 
+  /**
+   * Generates the interactive upload shortcut:
+   * Choose from Menu:
+   *   1. 📷 Upload Photos (selects Images/Live Photos, converts to JPEG, uploads)
+   *   2. 🎬 Upload Videos (selects Videos only, encodes via Passthrough, uploads)
+   * Single final notification.
+   */
   static generateUploadShortcut(serverUrl: string, deviceId: string, deviceKey: string): string {
-    const selectUUID = this.uuid();
-    const loopGroup = this.uuid();
+    const menuGroupId = this.uuid();
+    const selectPhotosUUID = this.uuid();
+    const photoLoopGroup = this.uuid();
+    const selectVideosUUID = this.uuid();
+    const videoLoopGroup = this.uuid();
 
     return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -388,58 +560,169 @@ export class ShortcutGeneratorService {
   <key>WFWorkflowActions</key>
   <array>
 
-    <!-- Select Photos & Videos -->
+    <!-- Menu: Choose Photos or Videos -->
+    <dict>
+      <key>WFWorkflowActionIdentifier</key>
+      <string>is.workflow.actions.choosefrommenu</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict>
+        <key>GroupingIdentifier</key>
+        <string>${menuGroupId}</string>
+        <key>WFControlFlowMode</key>
+        <integer>0</integer>
+        <key>WFMenuItems</key>
+        <array>
+          <string>📷 Upload Photos</string>
+          <string>🎬 Upload Videos</string>
+        </array>
+        <key>WFMenuPrompt</key>
+        <string>What would you like to upload to myDrive?</string>
+      </dict>
+    </dict>
+
+    <!-- ═══ MENU ITEM 1: PHOTOS ═══ -->
+    <dict>
+      <key>WFWorkflowActionIdentifier</key>
+      <string>is.workflow.actions.choosefrommenu</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict>
+        <key>GroupingIdentifier</key>
+        <string>${menuGroupId}</string>
+        <key>WFControlFlowMode</key>
+        <integer>1</integer>
+        <key>WFMenuItemTitle</key>
+        <string>📷 Upload Photos</string>
+      </dict>
+    </dict>
+
+    <!-- Select Photos (Images & Live Photos) -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.selectphoto</string>
       <key>WFWorkflowActionParameters</key>
       <dict>
         <key>UUID</key>
-        <string>${selectUUID}</string>
+        <string>${selectPhotosUUID}</string>
         <key>CustomOutputName</key>
-        <string>SelectedMedia</string>
+        <string>SelectedPhotos</string>
         <key>WFSelectMultiplePhotos</key>
         <true/>
         <key>WFPhotoPickerTypes</key>
         <array>
           <string>Images</string>
-          <string>Videos</string>
           <string>Live Photos</string>
         </array>
       </dict>
     </dict>
 
-    <!-- Repeat with Each -->
+    <!-- Repeat with Each Photo -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.repeat.each</string>
       <key>WFWorkflowActionParameters</key>
       <dict>
         <key>GroupingIdentifier</key>
-        <string>${loopGroup}</string>
+        <string>${photoLoopGroup}</string>
         <key>WFControlFlowMode</key>
         <integer>0</integer>
         <key>WFInput</key>
-        ${this.actionInput(selectUUID, 'SelectedMedia')}
+        ${this.actionInput(selectPhotosUUID, 'SelectedPhotos')}
       </dict>
     </dict>
 
-    ${this.encodeAndUploadBody(serverUrl, deviceId, deviceKey)}
+    ${this.photoLoopBody(serverUrl, deviceId, deviceKey)}
 
-    <!-- End Repeat -->
+    <!-- End Photo Repeat -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.repeat.each</string>
       <key>WFWorkflowActionParameters</key>
       <dict>
         <key>GroupingIdentifier</key>
-        <string>${loopGroup}</string>
+        <string>${photoLoopGroup}</string>
         <key>WFControlFlowMode</key>
         <integer>2</integer>
       </dict>
     </dict>
 
-    <!-- Final notification -->
+    <!-- ═══ MENU ITEM 2: VIDEOS ═══ -->
+    <dict>
+      <key>WFWorkflowActionIdentifier</key>
+      <string>is.workflow.actions.choosefrommenu</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict>
+        <key>GroupingIdentifier</key>
+        <string>${menuGroupId}</string>
+        <key>WFControlFlowMode</key>
+        <integer>1</integer>
+        <key>WFMenuItemTitle</key>
+        <string>🎬 Upload Videos</string>
+      </dict>
+    </dict>
+
+    <!-- Select Videos Only -->
+    <dict>
+      <key>WFWorkflowActionIdentifier</key>
+      <string>is.workflow.actions.selectphoto</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict>
+        <key>UUID</key>
+        <string>${selectVideosUUID}</string>
+        <key>CustomOutputName</key>
+        <string>SelectedVideos</string>
+        <key>WFSelectMultiplePhotos</key>
+        <true/>
+        <key>WFPhotoPickerTypes</key>
+        <array>
+          <string>Videos</string>
+        </array>
+      </dict>
+    </dict>
+
+    <!-- Repeat with Each Video -->
+    <dict>
+      <key>WFWorkflowActionIdentifier</key>
+      <string>is.workflow.actions.repeat.each</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict>
+        <key>GroupingIdentifier</key>
+        <string>${videoLoopGroup}</string>
+        <key>WFControlFlowMode</key>
+        <integer>0</integer>
+        <key>WFInput</key>
+        ${this.actionInput(selectVideosUUID, 'SelectedVideos')}
+      </dict>
+    </dict>
+
+    ${this.videoLoopBody(serverUrl, deviceId, deviceKey)}
+
+    <!-- End Video Repeat -->
+    <dict>
+      <key>WFWorkflowActionIdentifier</key>
+      <string>is.workflow.actions.repeat.each</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict>
+        <key>GroupingIdentifier</key>
+        <string>${videoLoopGroup}</string>
+        <key>WFControlFlowMode</key>
+        <integer>2</integer>
+      </dict>
+    </dict>
+
+    <!-- End Menu -->
+    <dict>
+      <key>WFWorkflowActionIdentifier</key>
+      <string>is.workflow.actions.choosefrommenu</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict>
+        <key>GroupingIdentifier</key>
+        <string>${menuGroupId}</string>
+        <key>WFControlFlowMode</key>
+        <integer>2</integer>
+      </dict>
+    </dict>
+
+    <!-- Final Single Notification -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.notification</string>

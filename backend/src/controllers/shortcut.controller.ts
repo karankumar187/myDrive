@@ -403,9 +403,9 @@ export class ShortcutController {
 
     if (buffer.length >= 8) {
       const boxType = buffer.subarray(4, 8).toString('ascii');
-      if (boxType === 'ftyp') {
+      if (boxType === 'ftyp' || boxType === 'moov' || boxType === 'wide' || boxType === 'mdat') {
         const brand = buffer.length >= 12 ? buffer.subarray(8, 12).toString('ascii').toLowerCase() : '';
-        if (brand.startsWith('qt') || brand.startsWith('moov')) {
+        if (brand.startsWith('qt') || brand.startsWith('moov') || boxType === 'wide' || boxType === 'moov') {
           mimeType = 'video/quicktime';
           ext = '.mov';
         } else if (
