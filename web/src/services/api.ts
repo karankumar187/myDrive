@@ -128,8 +128,16 @@ export async function fetchWithLoading(input: RequestInfo | URL, init?: RequestI
   }
 }
 
+let cachedAuthToken: string | null = null;
+export function getAuthToken(): string | null {
+  if (cachedAuthToken === null && typeof localStorage !== 'undefined') {
+    cachedAuthToken = localStorage.getItem('drive_token') || '';
+  }
+  return cachedAuthToken || null;
+}
+
 function getHeaders(): HeadersInit {
-  const token = localStorage.getItem('drive_token');
+  const token = getAuthToken();
   return {
     'Content-Type': 'application/json',
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -213,7 +221,7 @@ export const api = {
   },
 
   getThumbnailUrl(fileId: string): string {
-    const token = localStorage.getItem('drive_token');
+    const token = getAuthToken();
     return `${API_BASE}/files/${fileId}/thumbnail${token ? `?token=${encodeURIComponent(token)}` : ''}`;
   },
 
