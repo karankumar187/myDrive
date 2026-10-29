@@ -198,18 +198,33 @@ export class ShortcutGeneratorService {
   }
 
   /**
-   * Builds a file form field (WFItemType 5) for WFFormValues — references "Repeat Item".
-   * In Apple Shortcuts, WFItemType 5 designates a native file attachment (multipart/form-data streaming)
-   * eliminating the need for any in-memory base64 encoding.
+   * Builds a native multipart file attachment form field (WFItemType 5) for WFFormValues.
+   * In Apple WorkflowKit, a file attachment parameter requires WFTokenAttachmentParameterState
+   * wrapping a WFTextTokenAttachment to stream binary photos and videos without base64.
    */
-  private static formFieldFile(key: string): string {
+  private static formFieldFile(key: string, variableName: string = 'Repeat Item'): string {
     return `<dict>
               <key>WFItemType</key>
-              <integer>0</integer>
+              <integer>5</integer>
               <key>WFKey</key>
               ${this.text(key)}
               <key>WFValue</key>
-              ${this.magicVar('Repeat Item')}
+              <dict>
+                <key>Value</key>
+                <dict>
+                  <key>Value</key>
+                  <dict>
+                    <key>Type</key>
+                    <string>Variable</string>
+                    <key>VariableName</key>
+                    <string>${this.esc(variableName)}</string>
+                  </dict>
+                  <key>WFSerializationType</key>
+                  <string>WFTextTokenAttachment</string>
+                </dict>
+                <key>WFSerializationType</key>
+                <string>WFTokenAttachmentParameterState</string>
+              </dict>
             </dict>`;
   }
 
