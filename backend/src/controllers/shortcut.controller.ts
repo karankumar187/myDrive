@@ -408,7 +408,14 @@ export class ShortcutController {
         if (brand.startsWith('qt') || brand.startsWith('moov')) {
           mimeType = 'video/quicktime';
           ext = '.mov';
-        } else if (brand.startsWith('heic') || brand.startsWith('mif1')) {
+        } else if (
+          brand.startsWith('heic') ||
+          brand.startsWith('heix') ||
+          brand.startsWith('mif1') ||
+          brand.startsWith('msf1') ||
+          brand.startsWith('heim') ||
+          brand.startsWith('heis')
+        ) {
           mimeType = 'image/heic';
           ext = '.heic';
         } else {
