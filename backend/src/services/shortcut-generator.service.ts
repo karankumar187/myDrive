@@ -1,13 +1,21 @@
 import crypto from 'crypto';
 
 /**
- * Generates fully pre-configured Apple Shortcuts .shortcut plist files.
+ * Generates Apple Shortcuts .shortcut plist files for myDrive photo/video upload.
  *
- * VIDEO FIX: Videos from the Photos library (PHAsset) cannot produce file representations
- * via the normal path — "WFPhotoMediaContentItem produced no file representation for type
- * com.apple.quicktime-movie". Fix: detect videos by filename extension (case-insensitive),
- * then use `is.workflow.actions.encodemedia` to materialize the PHAsset to a real file.
- * Photos are uploaded directly (Encode Media fails on images).
+ * VIDEO FIX STRATEGY: Instead of conditionals (which are unreliable in plist generation),
+ * we use SEPARATE LOOPS for photos and videos:
+ *
+ *   - Photos: uploaded DIRECTLY via multipart form (Repeat Item → formFieldFile).
+ *     This works because PHAsset CAN produce file representations for images.
+ *
+ *   - Videos: Encode Media action first (materializes PHAsset video via AVAssetExportSession),
+ *     then upload the encoded output via formFieldFileFromOutput.
+ *     This bypasses the broken retrieveFileWithImageManager path that causes
+ *     "WFPhotoMediaContentItem produced no file representation for type public.mpeg-4".
+ *
+ *   - Auto Sync: Two Find Photos queries (filtered by Media Type = Photo / Video).
+ *   - Upload: Choose from Menu → Photos or Videos → dedicated select + upload path.
  */
 export class ShortcutGeneratorService {
   private static uuid(): string {
@@ -23,7 +31,8 @@ export class ShortcutGeneratorService {
       .replace(/'/g, '&apos;');
   }
 
-  /** Static text token (WFTextTokenString with empty attachmentsByRange) */
+  // ─── Plist building blocks ───────────────────────────────────
+
   private static text(value: string): string {
     return `<dict>
               <key>Value</key>
@@ -38,8 +47,7 @@ export class ShortcutGeneratorService {
             </dict>`;
   }
 
-  /** Variable reference token (WFTextTokenString with \uFFFC placeholder) */
-  private static varRef(outputUUID: string, outputName: string, type: string = 'ActionOutput'): string {
+  private static varRef(outputUUID: string, outputName: string): string {
     return `<dict>
               <key>Value</key>
               <dict>
@@ -52,7 +60,7 @@ export class ShortcutGeneratorService {
                     <key>OutputUUID</key>
                     <string>${outputUUID}</string>
                     <key>Type</key>
-                    <string>${type}</string>
+                    <string>ActionOutput</string>
                   </dict>
                 </dict>
                 <key>string</key>
@@ -63,24 +71,10 @@ export class ShortcutGeneratorService {
             </dict>`;
   }
 
-  /** Action input attachment (WFTextTokenAttachment referencing action output by UUID) */
-  private static actionInput(outputUUID: string, outputName: string, coercionClass?: string): string {
-    const aggrandizements = coercionClass
-      ? `
-                <key>Aggrandizements</key>
-                <array>
-                  <dict>
-                    <key>CoercionItemClass</key>
-                    <string>${this.esc(coercionClass)}</string>
-                    <key>Type</key>
-                    <string>WFCoercionVariableAggrandizement</string>
-                  </dict>
-                </array>`
-      : '';
-
+  private static actionInput(outputUUID: string, outputName: string): string {
     return `<dict>
               <key>Value</key>
-              <dict>${aggrandizements}
+              <dict>
                 <key>OutputName</key>
                 <string>${this.esc(outputName)}</string>
                 <key>OutputUUID</key>
@@ -93,7 +87,6 @@ export class ShortcutGeneratorService {
             </dict>`;
   }
 
-  /** Variable input attachment (references a magic variable like "Repeat Item") */
   private static varInput(variableName: string): string {
     return `<dict>
               <key>Value</key>
@@ -108,30 +101,6 @@ export class ShortcutGeneratorService {
             </dict>`;
   }
 
-  /** Magic variable reference (WFTextTokenString for use in string interpolation contexts) */
-  private static magicVar(variableName: string): string {
-    return `<dict>
-              <key>Value</key>
-              <dict>
-                <key>attachmentsByRange</key>
-                <dict>
-                  <key>{0, 1}</key>
-                  <dict>
-                    <key>Type</key>
-                    <string>Variable</string>
-                    <key>VariableName</key>
-                    <string>${this.esc(variableName)}</string>
-                  </dict>
-                </dict>
-                <key>string</key>
-                <string>\uFFFC</string>
-              </dict>
-              <key>WFSerializationType</key>
-              <string>WFTextTokenString</string>
-            </dict>`;
-  }
-
-  /** HTTP header key-value pair */
   private static headerItem(key: string, value: string): string {
     return `<dict>
               <key>WFItemType</key>
@@ -143,19 +112,17 @@ export class ShortcutGeneratorService {
             </dict>`;
   }
 
-  /** Text form field referencing an action output */
-  private static formFieldText(key: string, valueOutputUUID: string, valueOutputName: string): string {
+  private static formFieldText(key: string, uuid: string, name: string): string {
     return `<dict>
               <key>WFItemType</key>
               <integer>0</integer>
               <key>WFKey</key>
               ${this.text(key)}
               <key>WFValue</key>
-              ${this.varRef(valueOutputUUID, valueOutputName)}
+              ${this.varRef(uuid, name)}
             </dict>`;
   }
 
-  /** Static text form field */
   private static formFieldStaticText(key: string, value: string): string {
     return `<dict>
               <key>WFItemType</key>
@@ -167,8 +134,8 @@ export class ShortcutGeneratorService {
             </dict>`;
   }
 
-  /** File attachment form field (WFItemType 5) referencing a named variable */
-  private static formFieldFile(key: string, variableName: string = 'Repeat Item'): string {
+  /** File attachment referencing a magic variable (e.g. "Repeat Item") */
+  private static formFieldFile(key: string, variableName: string): string {
     return `<dict>
               <key>WFItemType</key>
               <integer>5</integer>
@@ -194,8 +161,8 @@ export class ShortcutGeneratorService {
             </dict>`;
   }
 
-  /** File attachment form field (WFItemType 5) referencing an action output */
-  private static formFieldFileFromOutput(key: string, outputUUID: string, outputName: string): string {
+  /** File attachment referencing an action output (e.g. Encode Media output) */
+  private static formFieldFileFromOutput(key: string, uuid: string, name: string): string {
     return `<dict>
               <key>WFItemType</key>
               <integer>5</integer>
@@ -208,9 +175,9 @@ export class ShortcutGeneratorService {
                   <key>Value</key>
                   <dict>
                     <key>OutputName</key>
-                    <string>${this.esc(outputName)}</string>
+                    <string>${this.esc(name)}</string>
                     <key>OutputUUID</key>
-                    <string>${outputUUID}</string>
+                    <string>${uuid}</string>
                     <key>Type</key>
                     <string>ActionOutput</string>
                   </dict>
@@ -223,7 +190,6 @@ export class ShortcutGeneratorService {
             </dict>`;
   }
 
-  /** Dictionary field value container */
   private static headersDict(items: string[]): string {
     return `<dict>
               <key>Value</key>
@@ -238,134 +204,14 @@ export class ShortcutGeneratorService {
             </dict>`;
   }
 
-  // ─────────────────────────────────────────────────────────────
-  //  VIDEO EXTENSION CHECK BLOCK
-  // ─────────────────────────────────────────────────────────────
+  // ─── Photo loop body (direct upload, NO encoding) ────────────
 
-  /**
-   * Generates a flat If/End If block that checks if the lowercased filename
-   * contains a given video extension. If matched, runs Encode Media to
-   * materialize the PHAsset video, then sets "MediaFile" to the encoded output.
-   *
-   * Each block is independent (no nesting). For a photo, none match →
-   * MediaFile stays as Repeat Item. For a video, exactly one matches →
-   * MediaFile gets overwritten with the encoded output.
-   */
-  private static videoExtCheck(ext: string, lowerCaseUUID: string): string {
-    const ifGroup = this.uuid();
-    const encodeId = this.uuid();
-
-    return `
-    <!-- If video: .${ext} -->
-    <dict>
-      <key>WFWorkflowActionIdentifier</key>
-      <string>is.workflow.actions.conditional</string>
-      <key>WFWorkflowActionParameters</key>
-      <dict>
-        <key>GroupingIdentifier</key>
-        <string>${ifGroup}</string>
-        <key>WFControlFlowMode</key>
-        <integer>0</integer>
-        <key>WFInput</key>
-        <dict>
-          <key>Type</key>
-          <string>Variable</string>
-          <key>Variable</key>
-          ${this.actionInput(lowerCaseUUID, 'LowerName')}
-        </dict>
-        <key>WFCondition</key>
-        <integer>4</integer>
-        <key>WFConditionalActionString</key>
-        <string>.${ext}</string>
-      </dict>
-    </dict>
-
-    <!-- Encode Media: materialize video PHAsset via AVAssetExportSession -->
-    <dict>
-      <key>WFWorkflowActionIdentifier</key>
-      <string>is.workflow.actions.encodemedia</string>
-      <key>WFWorkflowActionParameters</key>
-      <dict>
-        <key>UUID</key>
-        <string>${encodeId}</string>
-        <key>CustomOutputName</key>
-        <string>Encoded_${ext}</string>
-        <key>WFInput</key>
-        ${this.varInput('Repeat Item')}
-        <key>WFMediaAudioOnly</key>
-        <false/>
-      </dict>
-    </dict>
-
-    <!-- Set MediaFile = encoded video output -->
-    <dict>
-      <key>WFWorkflowActionIdentifier</key>
-      <string>is.workflow.actions.setvariable</string>
-      <key>WFWorkflowActionParameters</key>
-      <dict>
-        <key>WFInput</key>
-        ${this.actionInput(encodeId, 'Encoded_' + ext)}
-        <key>WFVariableName</key>
-        <string>MediaFile</string>
-      </dict>
-    </dict>
-
-    <!-- End If (.${ext}) -->
-    <dict>
-      <key>WFWorkflowActionIdentifier</key>
-      <string>is.workflow.actions.conditional</string>
-      <key>WFWorkflowActionParameters</key>
-      <dict>
-        <key>GroupingIdentifier</key>
-        <string>${ifGroup}</string>
-        <key>WFControlFlowMode</key>
-        <integer>2</integer>
-      </dict>
-    </dict>`;
-  }
-
-  // ─────────────────────────────────────────────────────────────
-  //  SHARED LOOP BODY
-  // ─────────────────────────────────────────────────────────────
-
-  /**
-   * Generates the complete loop body that handles BOTH photos and videos:
-   *
-   *   1. Get Name of Repeat Item → FileName
-   *   2. Change Case to lowercase → LowerName
-   *   3. Set Variable "MediaFile" = Repeat Item (default: photo, direct upload)
-   *   4. For each video extension (.mov .mp4 .m4v .3gp .avi .mkv .webm .hevc):
-   *        If LowerName contains ".ext":
-   *          Encode Media → set MediaFile = encoded output
-   *        End If
-   *   5. Upload "MediaFile" with filename "FileName"
-   *
-   * Each extension check is a FLAT independent If/End If block (no nesting).
-   * Photos: none match → MediaFile stays as Repeat Item → direct upload.
-   * Videos: one matches → MediaFile becomes encoded file → upload works.
-   */
-  private static generateLoopBody(
-    serverUrl: string,
-    deviceId: string,
-    deviceKey: string,
-  ): string {
+  private static photoLoopBody(serverUrl: string, deviceId: string, deviceKey: string): string {
     const nameUUID = this.uuid();
-    const lowerCaseUUID = this.uuid();
     const uploadUUID = this.uuid();
 
-    // All video container formats that can hold HEVC + other common codecs
-    const videoExtensions = [
-      'mov',   // iPhone camera (HEVC H.265, H.264), QuickTime
-      'mp4',   // MPEG-4 (HEVC, H.264, AV1)
-      'm4v',   // Apple video (HEVC, H.264, iTunes)
-      '3gp',   // Mobile video (H.264, H.263)
-      'avi',   // AVI container
-      'mkv',   // Matroska (HEVC, H.264, VP9, AV1)
-      'webm',  // WebM (VP8, VP9, AV1)
-    ];
-
     return `
-    <!-- LOOP: Get filename (works for both photos & videos — no file bytes needed) -->
+    <!-- Get filename -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.getitemname</string>
@@ -380,43 +226,7 @@ export class ShortcutGeneratorService {
       </dict>
     </dict>
 
-    <!-- LOOP: Lowercase filename for case-insensitive extension matching -->
-    <dict>
-      <key>WFWorkflowActionIdentifier</key>
-      <string>is.workflow.actions.text.changecase</string>
-      <key>WFWorkflowActionParameters</key>
-      <dict>
-        <key>UUID</key>
-        <string>${lowerCaseUUID}</string>
-        <key>CustomOutputName</key>
-        <string>LowerName</string>
-        <key>WFCaseType</key>
-        <string>lowercase</string>
-        <key>text</key>
-        ${this.actionInput(nameUUID, 'FileName')}
-      </dict>
-    </dict>
-
-    <!-- DEFAULT: Set MediaFile = Repeat Item (photo: direct upload, no encoding) -->
-    <dict>
-      <key>WFWorkflowActionIdentifier</key>
-      <string>is.workflow.actions.setvariable</string>
-      <key>WFWorkflowActionParameters</key>
-      <dict>
-        <key>WFInput</key>
-        ${this.varInput('Repeat Item')}
-        <key>WFVariableName</key>
-        <string>MediaFile</string>
-      </dict>
-    </dict>
-
-    <!-- VIDEO DETECTION: Check each video extension independently (flat, no nesting).
-         If matched, Encode Media materializes the PHAsset video to a real file,
-         then overwrites MediaFile with the encoded output.
-         Photos: no match → MediaFile stays as Repeat Item → direct upload. -->
-    ${videoExtensions.map(ext => this.videoExtCheck(ext, lowerCaseUUID)).join('')}
-
-    <!-- LOOP: Upload MediaFile (photos direct, videos via Encode Media) -->
+    <!-- Upload photo directly (Repeat Item → multipart file) -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.downloadurl</string>
@@ -439,7 +249,7 @@ export class ShortcutGeneratorService {
         <string>Form</string>
         <key>WFFormValues</key>
         ${this.headersDict([
-          this.formFieldFile('media', 'MediaFile'),
+          this.formFieldFile('media', 'Repeat Item'),
           this.formFieldText('filename', nameUUID, 'FileName'),
           this.formFieldText('deviceAssetId', nameUUID, 'FileName'),
           this.formFieldStaticText('deviceId', deviceId),
@@ -449,14 +259,131 @@ export class ShortcutGeneratorService {
     </dict>`;
   }
 
-  // ═══════════════════════════════════════════════════════════════════
+  // ─── Video loop body (Encode Media THEN upload) ──────────────
+
+  private static videoLoopBody(serverUrl: string, deviceId: string, deviceKey: string): string {
+    const encodeUUID = this.uuid();
+    const nameUUID = this.uuid();
+    const uploadUUID = this.uuid();
+
+    return `
+    <!-- Encode Media: materializes video PHAsset to a real file on disk.
+         Uses AVAssetExportSession internally (requestAVAsset path) which
+         CAN extract video data from PHAsset, unlike the normal file
+         representation path that fails with public.mpeg-4 error. -->
+    <dict>
+      <key>WFWorkflowActionIdentifier</key>
+      <string>is.workflow.actions.encodemedia</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict>
+        <key>UUID</key>
+        <string>${encodeUUID}</string>
+        <key>CustomOutputName</key>
+        <string>EncodedVideo</string>
+        <key>WFInput</key>
+        ${this.varInput('Repeat Item')}
+        <key>WFMediaAudioOnly</key>
+        <false/>
+      </dict>
+    </dict>
+
+    <!-- Get filename from encoded output -->
+    <dict>
+      <key>WFWorkflowActionIdentifier</key>
+      <string>is.workflow.actions.getitemname</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict>
+        <key>UUID</key>
+        <string>${nameUUID}</string>
+        <key>CustomOutputName</key>
+        <string>FileName</string>
+        <key>WFInput</key>
+        ${this.actionInput(encodeUUID, 'EncodedVideo')}
+      </dict>
+    </dict>
+
+    <!-- Upload encoded video -->
+    <dict>
+      <key>WFWorkflowActionIdentifier</key>
+      <string>is.workflow.actions.downloadurl</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict>
+        <key>UUID</key>
+        <string>${uploadUUID}</string>
+        <key>CustomOutputName</key>
+        <string>UploadResult</string>
+        <key>WFURL</key>
+        <string>${this.esc(serverUrl)}/api/v1/shortcuts/upload?deviceId=${this.esc(deviceId)}&amp;deviceKey=${this.esc(deviceKey)}</string>
+        <key>WFHTTPMethod</key>
+        <string>POST</string>
+        <key>WFHTTPHeaders</key>
+        ${this.headersDict([
+          this.headerItem('X-Device-Id', deviceId),
+          this.headerItem('X-Device-Key', deviceKey),
+        ])}
+        <key>WFHTTPBodyType</key>
+        <string>Form</string>
+        <key>WFFormValues</key>
+        ${this.headersDict([
+          this.formFieldFileFromOutput('media', encodeUUID, 'EncodedVideo'),
+          this.formFieldText('filename', nameUUID, 'FileName'),
+          this.formFieldText('deviceAssetId', nameUUID, 'FileName'),
+          this.formFieldStaticText('deviceId', deviceId),
+          this.formFieldStaticText('deviceKey', deviceKey),
+        ])}
+      </dict>
+    </dict>`;
+  }
+
+  // ─── Media type filter predicate for Find Photos ─────────────
+
+  private static mediaTypeFilter(mediaType: 'Photo' | 'Video'): string {
+    return `
+        <key>WFContentItemFilter</key>
+        <dict>
+          <key>Value</key>
+          <dict>
+            <key>WFActionParameterFilterPrefix</key>
+            <integer>1</integer>
+            <key>WFActionParameterFilterTemplates</key>
+            <array>
+              <dict>
+                <key>Operator</key>
+                <integer>4</integer>
+                <key>Property</key>
+                <string>Media Type</string>
+                <key>Removable</key>
+                <true/>
+                <key>Values</key>
+                <dict>
+                  <key>Unit</key>
+                  <integer>4</integer>
+                  <key>Value</key>
+                  <dict>
+                    <key>attachmentsByRange</key>
+                    <dict/>
+                    <key>string</key>
+                    <string>${mediaType}</string>
+                  </dict>
+                </dict>
+              </dict>
+            </array>
+          </dict>
+          <key>WFSerializationType</key>
+          <string>WFContentPredicateTableTemplate</string>
+        </dict>`;
+  }
+
+  // ═══════════════════════════════════════════════════════════════
   //  AUTO-SYNC SHORTCUT
-  // ═══════════════════════════════════════════════════════════════════
+  //  Two separate phases: Photos (direct) + Videos (Encode Media)
+  // ═══════════════════════════════════════════════════════════════
 
   static generateAutoSyncShortcut(serverUrl: string, deviceId: string, deviceKey: string): string {
     const findPhotosUUID = this.uuid();
-    const countUUID = this.uuid();
-    const loopGroupId = this.uuid();
+    const findVideosUUID = this.uuid();
+    const photoLoopGroup = this.uuid();
+    const videoLoopGroup = this.uuid();
 
     return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -465,7 +392,9 @@ export class ShortcutGeneratorService {
   <key>WFWorkflowActions</key>
   <array>
 
-    <!-- Find 25 Latest Photos & Videos -->
+    <!-- ═══ PHASE 1: PHOTOS (direct upload, no encoding needed) ═══ -->
+
+    <!-- Find 25 Latest Photos (Images only) -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.filter.photos</string>
@@ -474,7 +403,7 @@ export class ShortcutGeneratorService {
         <key>UUID</key>
         <string>${findPhotosUUID}</string>
         <key>CustomOutputName</key>
-        <string>NewPhotos</string>
+        <string>RecentPhotos</string>
         <key>WFContentItemLimitEnabled</key>
         <true/>
         <key>WFContentItemLimit</key>
@@ -483,49 +412,89 @@ export class ShortcutGeneratorService {
         <string>Date Taken</string>
         <key>WFContentItemSortOrder</key>
         <string>Latest First</string>
+        ${this.mediaTypeFilter('Photo')}
       </dict>
     </dict>
 
-    <!-- Count -->
-    <dict>
-      <key>WFWorkflowActionIdentifier</key>
-      <string>is.workflow.actions.count</string>
-      <key>WFWorkflowActionParameters</key>
-      <dict>
-        <key>UUID</key>
-        <string>${countUUID}</string>
-        <key>CustomOutputName</key>
-        <string>TotalCount</string>
-        <key>Input</key>
-        ${this.actionInput(findPhotosUUID, 'NewPhotos')}
-      </dict>
-    </dict>
-
-    <!-- Repeat with Each -->
+    <!-- Repeat with Each Photo -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.repeat.each</string>
       <key>WFWorkflowActionParameters</key>
       <dict>
         <key>GroupingIdentifier</key>
-        <string>${loopGroupId}</string>
+        <string>${photoLoopGroup}</string>
         <key>WFControlFlowMode</key>
         <integer>0</integer>
         <key>WFInput</key>
-        ${this.actionInput(findPhotosUUID, 'NewPhotos')}
+        ${this.actionInput(findPhotosUUID, 'RecentPhotos')}
       </dict>
     </dict>
 
-    ${this.generateLoopBody(serverUrl, deviceId, deviceKey)}
+    ${this.photoLoopBody(serverUrl, deviceId, deviceKey)}
 
-    <!-- End Repeat -->
+    <!-- End Photo Repeat -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.repeat.each</string>
       <key>WFWorkflowActionParameters</key>
       <dict>
         <key>GroupingIdentifier</key>
-        <string>${loopGroupId}</string>
+        <string>${photoLoopGroup}</string>
+        <key>WFControlFlowMode</key>
+        <integer>2</integer>
+      </dict>
+    </dict>
+
+    <!-- ═══ PHASE 2: VIDEOS (Encode Media first, then upload) ═══ -->
+
+    <!-- Find 25 Latest Videos -->
+    <dict>
+      <key>WFWorkflowActionIdentifier</key>
+      <string>is.workflow.actions.filter.photos</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict>
+        <key>UUID</key>
+        <string>${findVideosUUID}</string>
+        <key>CustomOutputName</key>
+        <string>RecentVideos</string>
+        <key>WFContentItemLimitEnabled</key>
+        <true/>
+        <key>WFContentItemLimit</key>
+        <integer>25</integer>
+        <key>WFContentItemSortProperty</key>
+        <string>Date Taken</string>
+        <key>WFContentItemSortOrder</key>
+        <string>Latest First</string>
+        ${this.mediaTypeFilter('Video')}
+      </dict>
+    </dict>
+
+    <!-- Repeat with Each Video -->
+    <dict>
+      <key>WFWorkflowActionIdentifier</key>
+      <string>is.workflow.actions.repeat.each</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict>
+        <key>GroupingIdentifier</key>
+        <string>${videoLoopGroup}</string>
+        <key>WFControlFlowMode</key>
+        <integer>0</integer>
+        <key>WFInput</key>
+        ${this.actionInput(findVideosUUID, 'RecentVideos')}
+      </dict>
+    </dict>
+
+    ${this.videoLoopBody(serverUrl, deviceId, deviceKey)}
+
+    <!-- End Video Repeat -->
+    <dict>
+      <key>WFWorkflowActionIdentifier</key>
+      <string>is.workflow.actions.repeat.each</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict>
+        <key>GroupingIdentifier</key>
+        <string>${videoLoopGroup}</string>
         <key>WFControlFlowMode</key>
         <integer>2</integer>
       </dict>
@@ -582,14 +551,17 @@ export class ShortcutGeneratorService {
 </plist>`;
   }
 
-  // ═══════════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════
   //  MANUAL UPLOAD SHORTCUT
-  // ═══════════════════════════════════════════════════════════════════
+  //  Choose from Menu: Photos or Videos → dedicated path each
+  // ═══════════════════════════════════════════════════════════════
 
   static generateUploadShortcut(serverUrl: string, deviceId: string, deviceKey: string): string {
+    const menuGroupId = this.uuid();
     const selectPhotosUUID = this.uuid();
-    const countUUID = this.uuid();
-    const loopGroupId = this.uuid();
+    const selectVideosUUID = this.uuid();
+    const photoLoopGroup = this.uuid();
+    const videoLoopGroup = this.uuid();
 
     return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -598,7 +570,42 @@ export class ShortcutGeneratorService {
   <key>WFWorkflowActions</key>
   <array>
 
-    <!-- Select Photos & Videos -->
+    <!-- Choose from Menu: Photos or Videos -->
+    <dict>
+      <key>WFWorkflowActionIdentifier</key>
+      <string>is.workflow.actions.choosefrommenu</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict>
+        <key>GroupingIdentifier</key>
+        <string>${menuGroupId}</string>
+        <key>WFControlFlowMode</key>
+        <integer>0</integer>
+        <key>WFMenuItems</key>
+        <array>
+          <string>📷 Upload Photos</string>
+          <string>🎬 Upload Videos</string>
+        </array>
+        <key>WFMenuPrompt</key>
+        <string>What would you like to upload?</string>
+      </dict>
+    </dict>
+
+    <!-- ═══ MENU ITEM 1: PHOTOS ═══ -->
+    <dict>
+      <key>WFWorkflowActionIdentifier</key>
+      <string>is.workflow.actions.choosefrommenu</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict>
+        <key>GroupingIdentifier</key>
+        <string>${menuGroupId}</string>
+        <key>WFControlFlowMode</key>
+        <integer>1</integer>
+        <key>WFMenuItemTitle</key>
+        <string>📷 Upload Photos</string>
+      </dict>
+    </dict>
+
+    <!-- Select Photos (Images + Live Photos only) -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.selectphoto</string>
@@ -613,35 +620,19 @@ export class ShortcutGeneratorService {
         <key>WFPhotoPickerTypes</key>
         <array>
           <string>Images</string>
-          <string>Videos</string>
           <string>Live Photos</string>
         </array>
       </dict>
     </dict>
 
-    <!-- Count -->
-    <dict>
-      <key>WFWorkflowActionIdentifier</key>
-      <string>is.workflow.actions.count</string>
-      <key>WFWorkflowActionParameters</key>
-      <dict>
-        <key>UUID</key>
-        <string>${countUUID}</string>
-        <key>CustomOutputName</key>
-        <string>TotalCount</string>
-        <key>Input</key>
-        ${this.actionInput(selectPhotosUUID, 'SelectedPhotos')}
-      </dict>
-    </dict>
-
-    <!-- Repeat with Each -->
+    <!-- Repeat with Each Photo -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.repeat.each</string>
       <key>WFWorkflowActionParameters</key>
       <dict>
         <key>GroupingIdentifier</key>
-        <string>${loopGroupId}</string>
+        <string>${photoLoopGroup}</string>
         <key>WFControlFlowMode</key>
         <integer>0</integer>
         <key>WFInput</key>
@@ -649,16 +640,93 @@ export class ShortcutGeneratorService {
       </dict>
     </dict>
 
-    ${this.generateLoopBody(serverUrl, deviceId, deviceKey)}
+    ${this.photoLoopBody(serverUrl, deviceId, deviceKey)}
 
-    <!-- End Repeat -->
+    <!-- End Photo Repeat -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.repeat.each</string>
       <key>WFWorkflowActionParameters</key>
       <dict>
         <key>GroupingIdentifier</key>
-        <string>${loopGroupId}</string>
+        <string>${photoLoopGroup}</string>
+        <key>WFControlFlowMode</key>
+        <integer>2</integer>
+      </dict>
+    </dict>
+
+    <!-- ═══ MENU ITEM 2: VIDEOS ═══ -->
+    <dict>
+      <key>WFWorkflowActionIdentifier</key>
+      <string>is.workflow.actions.choosefrommenu</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict>
+        <key>GroupingIdentifier</key>
+        <string>${menuGroupId}</string>
+        <key>WFControlFlowMode</key>
+        <integer>1</integer>
+        <key>WFMenuItemTitle</key>
+        <string>🎬 Upload Videos</string>
+      </dict>
+    </dict>
+
+    <!-- Select Videos only -->
+    <dict>
+      <key>WFWorkflowActionIdentifier</key>
+      <string>is.workflow.actions.selectphoto</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict>
+        <key>UUID</key>
+        <string>${selectVideosUUID}</string>
+        <key>CustomOutputName</key>
+        <string>SelectedVideos</string>
+        <key>WFSelectMultiplePhotos</key>
+        <true/>
+        <key>WFPhotoPickerTypes</key>
+        <array>
+          <string>Videos</string>
+        </array>
+      </dict>
+    </dict>
+
+    <!-- Repeat with Each Video -->
+    <dict>
+      <key>WFWorkflowActionIdentifier</key>
+      <string>is.workflow.actions.repeat.each</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict>
+        <key>GroupingIdentifier</key>
+        <string>${videoLoopGroup}</string>
+        <key>WFControlFlowMode</key>
+        <integer>0</integer>
+        <key>WFInput</key>
+        ${this.actionInput(selectVideosUUID, 'SelectedVideos')}
+      </dict>
+    </dict>
+
+    ${this.videoLoopBody(serverUrl, deviceId, deviceKey)}
+
+    <!-- End Video Repeat -->
+    <dict>
+      <key>WFWorkflowActionIdentifier</key>
+      <string>is.workflow.actions.repeat.each</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict>
+        <key>GroupingIdentifier</key>
+        <string>${videoLoopGroup}</string>
+        <key>WFControlFlowMode</key>
+        <integer>2</integer>
+      </dict>
+    </dict>
+
+    <!-- End Menu -->
+    <dict>
+      <key>WFWorkflowActionIdentifier</key>
+      <string>is.workflow.actions.choosefrommenu</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict>
+        <key>GroupingIdentifier</key>
+        <string>${menuGroupId}</string>
         <key>WFControlFlowMode</key>
         <integer>2</integer>
       </dict>
