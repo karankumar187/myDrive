@@ -334,152 +334,54 @@ export class ShortcutGeneratorService {
   }
 
   /**
-   * Universal Smart Media Loop Body:
-   * Dynamically inspects each item at runtime:
-   * 1. Uses `is.workflow.actions.detect.images` on `Repeat Item`.
-   * 2. Counts detected images (1 for photos, 0 for videos).
-   * 3. IF ImageCount == 1:
-   *      Runs `image.convert` (JPEG 1.0, EXIF preserved) -> uploads photo
-   *    OTHERWISE:
-   *      Runs `encodemedia` (Passthrough, preserves 4K/1080p HEVC) -> uploads video
-   *
-   * Zero crashes, zero coercion errors, 100% compatible with all iOS and macOS versions.
+   * Media type filter predicate for Find Photos action.
+   * Uses Enumeration type in WFActionParameterFilterTemplates (verified with Apple Shortcuts engine).
    */
-  private static generateMediaLoopBody(serverUrl: string, deviceId: string, deviceKey: string): string {
-    const detectImageUUID = this.uuid();
-    const countUUID = this.uuid();
-    const ifGroupId = this.uuid();
-
+  private static mediaTypeFilter(mediaType: 'Image' | 'Video'): string {
     return `
-    <!-- Detect images from this single item -->
-    <dict>
-      <key>WFWorkflowActionIdentifier</key>
-      <string>is.workflow.actions.detect.images</string>
-      <key>WFWorkflowActionParameters</key>
-      <dict>
-        <key>UUID</key>
-        <string>${detectImageUUID}</string>
-        <key>CustomOutputName</key>
-        <string>DetectedImage</string>
-        <key>WFInput</key>
+        <key>WFContentItemFilter</key>
         <dict>
           <key>Value</key>
           <dict>
-            <key>Type</key>
-            <string>Variable</string>
-            <key>VariableName</key>
-            <string>Repeat Item</string>
+            <key>WFActionParameterFilterPrefix</key>
+            <integer>1</integer>
+            <key>WFActionParameterFilterTemplates</key>
+            <array>
+              <dict>
+                <key>Operator</key>
+                <integer>4</integer>
+                <key>Property</key>
+                <string>Media Type</string>
+                <key>Removable</key>
+                <true/>
+                <key>Values</key>
+                <dict>
+                  <key>Enumeration</key>
+                  <string>${mediaType}</string>
+                </dict>
+              </dict>
+            </array>
+            <key>WFContentPredicateBoundedDate</key>
+            <false/>
           </dict>
           <key>WFSerializationType</key>
-          <string>WFTextTokenAttachment</string>
-        </dict>
-      </dict>
-    </dict>
-
-    <!-- Count detected images (1 for photo, 0 for video) -->
-    <dict>
-      <key>WFWorkflowActionIdentifier</key>
-      <string>is.workflow.actions.count</string>
-      <key>WFWorkflowActionParameters</key>
-      <dict>
-        <key>UUID</key>
-        <string>${countUUID}</string>
-        <key>CustomOutputName</key>
-        <string>ImageCount</string>
-        <key>Input</key>
-        <dict>
-          <key>Value</key>
-          <dict>
-            <key>OutputName</key>
-            <string>DetectedImage</string>
-            <key>OutputUUID</key>
-            <string>${detectImageUUID}</string>
-            <key>Type</key>
-            <string>ActionOutput</string>
-          </dict>
-          <key>WFSerializationType</key>
-          <string>WFTextTokenAttachment</string>
-        </dict>
-      </dict>
-    </dict>
-
-    <!-- IF ImageCount == 1 (PHOTO PATH) -->
-    <dict>
-      <key>WFWorkflowActionIdentifier</key>
-      <string>is.workflow.actions.conditional</string>
-      <key>WFWorkflowActionParameters</key>
-      <dict>
-        <key>GroupingIdentifier</key>
-        <string>${ifGroupId}</string>
-        <key>WFControlFlowMode</key>
-        <integer>0</integer>
-        <key>WFCondition</key>
-        <integer>4</integer>
-        <key>WFNumberValue</key>
-        <real>1</real>
-        <key>WFInput</key>
-        <dict>
-          <key>Type</key>
-          <string>Variable</string>
-          <key>Variable</key>
-          <dict>
-            <key>Value</key>
-            <dict>
-              <key>OutputName</key>
-              <string>ImageCount</string>
-              <key>OutputUUID</key>
-              <string>${countUUID}</string>
-              <key>Type</key>
-              <string>ActionOutput</string>
-            </dict>
-            <key>WFSerializationType</key>
-            <string>WFTextTokenAttachment</string>
-          </dict>
-        </dict>
-      </dict>
-    </dict>
-
-    ${this.photoLoopBody(serverUrl, deviceId, deviceKey)}
-
-    <!-- OTHERWISE (VIDEO PATH) -->
-    <dict>
-      <key>WFWorkflowActionIdentifier</key>
-      <string>is.workflow.actions.conditional</string>
-      <key>WFWorkflowActionParameters</key>
-      <dict>
-        <key>GroupingIdentifier</key>
-        <string>${ifGroupId}</string>
-        <key>WFControlFlowMode</key>
-        <integer>1</integer>
-      </dict>
-    </dict>
-
-    ${this.videoLoopBody(serverUrl, deviceId, deviceKey)}
-
-    <!-- END IF -->
-    <dict>
-      <key>WFWorkflowActionIdentifier</key>
-      <string>is.workflow.actions.conditional</string>
-      <key>WFWorkflowActionParameters</key>
-      <dict>
-        <key>GroupingIdentifier</key>
-        <string>${ifGroupId}</string>
-        <key>WFControlFlowMode</key>
-        <integer>2</integer>
-      </dict>
-    </dict>`;
+          <string>WFContentPredicateTableTemplate</string>
+        </dict>`;
   }
 
   /**
    * Generates the automated background sync shortcut:
-   * 1. Finds 25 latest media items (photos & videos) from Recents.
-   * 2. Loops with smart auto-detection (photos converted to JPEG, videos encoded with Passthrough).
-   * 3. Uploads via multipart form.
-   * 4. Single final notification.
+   * 1. Finds 25 latest photos (Image) -> converts to JPEG (100% + EXIF) -> uploads
+   * 2. Finds 10 latest videos (Video) -> encodes with Passthrough (preserves HEVC/4K/1080p) -> uploads
+   * 3. Single final notification
+   *
+   * Completely eliminates WFPhotoMediaContentItem coercion errors and ensures videos are never uploaded as photos!
    */
   static generateAutoSyncShortcut(serverUrl: string, deviceId: string, deviceKey: string): string {
     const findPhotosUUID = this.uuid();
-    const loopGroupId = this.uuid();
+    const photoLoopGroup = this.uuid();
+    const findVideosUUID = this.uuid();
+    const videoLoopGroup = this.uuid();
 
     return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -488,7 +390,7 @@ export class ShortcutGeneratorService {
   <key>WFWorkflowActions</key>
   <array>
 
-    <!-- Find Recent Media (photos & videos) -->
+    <!-- ═══ SECTION 1: LATEST PHOTOS (JPEG, HEIC, PNG, Live Photos) ═══ -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.filter.photos</string>
@@ -497,7 +399,7 @@ export class ShortcutGeneratorService {
         <key>UUID</key>
         <string>${findPhotosUUID}</string>
         <key>CustomOutputName</key>
-        <string>RecentMedia</string>
+        <string>RecentPhotos</string>
         <key>WFContentItemLimitEnabled</key>
         <true/>
         <key>WFContentItemLimit</key>
@@ -506,46 +408,87 @@ export class ShortcutGeneratorService {
         <string>Date Taken</string>
         <key>WFContentItemSortOrder</key>
         <string>Latest First</string>
+        ${this.mediaTypeFilter('Image')}
       </dict>
     </dict>
 
-    <!-- Repeat with Each Item -->
+    <!-- Repeat with Each Photo -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.repeat.each</string>
       <key>WFWorkflowActionParameters</key>
       <dict>
         <key>GroupingIdentifier</key>
-        <string>${loopGroupId}</string>
+        <string>${photoLoopGroup}</string>
         <key>WFControlFlowMode</key>
         <integer>0</integer>
         <key>WFInput</key>
-        <dict>
-          <key>Value</key>
-          <dict>
-            <key>OutputName</key>
-            <string>RecentMedia</string>
-            <key>OutputUUID</key>
-            <string>${findPhotosUUID}</string>
-            <key>Type</key>
-            <string>ActionOutput</string>
-          </dict>
-          <key>WFSerializationType</key>
-          <string>WFTextTokenAttachment</string>
-        </dict>
+        ${this.actionInput(findPhotosUUID, 'RecentPhotos')}
       </dict>
     </dict>
 
-    ${this.generateMediaLoopBody(serverUrl, deviceId, deviceKey)}
+    ${this.photoLoopBody(serverUrl, deviceId, deviceKey)}
 
-    <!-- End Repeat -->
+    <!-- End Photo Repeat -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.repeat.each</string>
       <key>WFWorkflowActionParameters</key>
       <dict>
         <key>GroupingIdentifier</key>
-        <string>${loopGroupId}</string>
+        <string>${photoLoopGroup}</string>
+        <key>WFControlFlowMode</key>
+        <integer>2</integer>
+      </dict>
+    </dict>
+
+    <!-- ═══ SECTION 2: LATEST VIDEOS (MOV, MP4, HEVC, 4K, 1080p) ═══ -->
+    <dict>
+      <key>WFWorkflowActionIdentifier</key>
+      <string>is.workflow.actions.filter.photos</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict>
+        <key>UUID</key>
+        <string>${findVideosUUID}</string>
+        <key>CustomOutputName</key>
+        <string>RecentVideos</string>
+        <key>WFContentItemLimitEnabled</key>
+        <true/>
+        <key>WFContentItemLimit</key>
+        <integer>10</integer>
+        <key>WFContentItemSortProperty</key>
+        <string>Date Taken</string>
+        <key>WFContentItemSortOrder</key>
+        <string>Latest First</string>
+        ${this.mediaTypeFilter('Video')}
+      </dict>
+    </dict>
+
+    <!-- Repeat with Each Video -->
+    <dict>
+      <key>WFWorkflowActionIdentifier</key>
+      <string>is.workflow.actions.repeat.each</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict>
+        <key>GroupingIdentifier</key>
+        <string>${videoLoopGroup}</string>
+        <key>WFControlFlowMode</key>
+        <integer>0</integer>
+        <key>WFInput</key>
+        ${this.actionInput(findVideosUUID, 'RecentVideos')}
+      </dict>
+    </dict>
+
+    ${this.videoLoopBody(serverUrl, deviceId, deviceKey)}
+
+    <!-- End Video Repeat -->
+    <dict>
+      <key>WFWorkflowActionIdentifier</key>
+      <string>is.workflow.actions.repeat.each</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict>
+        <key>GroupingIdentifier</key>
+        <string>${videoLoopGroup}</string>
         <key>WFControlFlowMode</key>
         <integer>2</integer>
       </dict>
@@ -603,14 +546,17 @@ export class ShortcutGeneratorService {
 
   /**
    * Generates the interactive upload shortcut:
-   * 1. Prompts user to select photos and/or videos (multiple selection enabled).
-   * 2. Loops with smart auto-detection (photos converted to JPEG, videos encoded with Passthrough).
-   * 3. Uploads via multipart form.
-   * 4. Single final notification.
+   * 1. Clean menu: 📷 Upload Photos or 🎬 Upload Videos
+   * 2. Dedicated picker for photos (Images + Live Photos) -> converts to JPEG (100% + EXIF) -> uploads
+   * 3. Dedicated picker for videos (Videos) -> encodes with Passthrough (preserves HEVC/4K/1080p) -> uploads
+   * 4. Single final notification
    */
   static generateUploadShortcut(serverUrl: string, deviceId: string, deviceKey: string): string {
+    const menuGroupId = this.uuid();
     const selectPhotosUUID = this.uuid();
-    const loopGroupId = this.uuid();
+    const photoLoopGroup = this.uuid();
+    const selectVideosUUID = this.uuid();
+    const videoLoopGroup = this.uuid();
 
     return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -619,7 +565,42 @@ export class ShortcutGeneratorService {
   <key>WFWorkflowActions</key>
   <array>
 
-    <!-- Select Photos & Videos (Images, Live Photos, Videos) -->
+    <!-- ═══ MENU: Choose Photo or Video Upload ═══ -->
+    <dict>
+      <key>WFWorkflowActionIdentifier</key>
+      <string>is.workflow.actions.choosefrommenu</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict>
+        <key>GroupingIdentifier</key>
+        <string>${menuGroupId}</string>
+        <key>WFControlFlowMode</key>
+        <integer>0</integer>
+        <key>WFMenuPrompt</key>
+        <string>What would you like to back up?</string>
+        <key>WFMenuItems</key>
+        <array>
+          <string>📷 Upload Photos</string>
+          <string>🎬 Upload Videos</string>
+        </array>
+      </dict>
+    </dict>
+
+    <!-- ═══ MENU ITEM 1: PHOTOS ═══ -->
+    <dict>
+      <key>WFWorkflowActionIdentifier</key>
+      <string>is.workflow.actions.choosefrommenu</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict>
+        <key>GroupingIdentifier</key>
+        <string>${menuGroupId}</string>
+        <key>WFControlFlowMode</key>
+        <integer>1</integer>
+        <key>WFMenuItemTitle</key>
+        <string>📷 Upload Photos</string>
+      </dict>
+    </dict>
+
+    <!-- Select Photos Only -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.selectphoto</string>
@@ -628,49 +609,119 @@ export class ShortcutGeneratorService {
         <key>UUID</key>
         <string>${selectPhotosUUID}</string>
         <key>CustomOutputName</key>
-        <string>SelectedMedia</string>
+        <string>SelectedPhotos</string>
         <key>WFSelectMultiplePhotos</key>
         <true/>
+        <key>WFPhotoPickerTypes</key>
+        <array>
+          <string>Images</string>
+          <string>Live Photos</string>
+        </array>
       </dict>
     </dict>
 
-    <!-- Repeat with Each Selected Media -->
+    <!-- Repeat with Each Photo -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.repeat.each</string>
       <key>WFWorkflowActionParameters</key>
       <dict>
         <key>GroupingIdentifier</key>
-        <string>${loopGroupId}</string>
+        <string>${photoLoopGroup}</string>
         <key>WFControlFlowMode</key>
         <integer>0</integer>
         <key>WFInput</key>
-        <dict>
-          <key>Value</key>
-          <dict>
-            <key>OutputName</key>
-            <string>SelectedMedia</string>
-            <key>OutputUUID</key>
-            <string>${selectPhotosUUID}</string>
-            <key>Type</key>
-            <string>ActionOutput</string>
-          </dict>
-          <key>WFSerializationType</key>
-          <string>WFTextTokenAttachment</string>
-        </dict>
+        ${this.actionInput(selectPhotosUUID, 'SelectedPhotos')}
       </dict>
     </dict>
 
-    ${this.generateMediaLoopBody(serverUrl, deviceId, deviceKey)}
+    ${this.photoLoopBody(serverUrl, deviceId, deviceKey)}
 
-    <!-- End Repeat -->
+    <!-- End Photo Repeat -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
       <string>is.workflow.actions.repeat.each</string>
       <key>WFWorkflowActionParameters</key>
       <dict>
         <key>GroupingIdentifier</key>
-        <string>${loopGroupId}</string>
+        <string>${photoLoopGroup}</string>
+        <key>WFControlFlowMode</key>
+        <integer>2</integer>
+      </dict>
+    </dict>
+
+    <!-- ═══ MENU ITEM 2: VIDEOS ═══ -->
+    <dict>
+      <key>WFWorkflowActionIdentifier</key>
+      <string>is.workflow.actions.choosefrommenu</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict>
+        <key>GroupingIdentifier</key>
+        <string>${menuGroupId}</string>
+        <key>WFControlFlowMode</key>
+        <integer>1</integer>
+        <key>WFMenuItemTitle</key>
+        <string>🎬 Upload Videos</string>
+      </dict>
+    </dict>
+
+    <!-- Select Videos Only -->
+    <dict>
+      <key>WFWorkflowActionIdentifier</key>
+      <string>is.workflow.actions.selectphoto</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict>
+        <key>UUID</key>
+        <string>${selectVideosUUID}</string>
+        <key>CustomOutputName</key>
+        <string>SelectedVideos</string>
+        <key>WFSelectMultiplePhotos</key>
+        <true/>
+        <key>WFPhotoPickerTypes</key>
+        <array>
+          <string>Videos</string>
+        </array>
+      </dict>
+    </dict>
+
+    <!-- Repeat with Each Video -->
+    <dict>
+      <key>WFWorkflowActionIdentifier</key>
+      <string>is.workflow.actions.repeat.each</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict>
+        <key>GroupingIdentifier</key>
+        <string>${videoLoopGroup}</string>
+        <key>WFControlFlowMode</key>
+        <integer>0</integer>
+        <key>WFInput</key>
+        ${this.actionInput(selectVideosUUID, 'SelectedVideos')}
+      </dict>
+    </dict>
+
+    ${this.videoLoopBody(serverUrl, deviceId, deviceKey)}
+
+    <!-- End Video Repeat -->
+    <dict>
+      <key>WFWorkflowActionIdentifier</key>
+      <string>is.workflow.actions.repeat.each</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict>
+        <key>GroupingIdentifier</key>
+        <string>${videoLoopGroup}</string>
+        <key>WFControlFlowMode</key>
+        <integer>2</integer>
+      </dict>
+    </dict>
+
+    <!-- End Menu -->
+    <dict>
+      <key>WFWorkflowActionIdentifier</key>
+      <string>is.workflow.actions.choosefrommenu</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict>
+        <key>GroupingIdentifier</key>
+        <string>${menuGroupId}</string>
         <key>WFControlFlowMode</key>
         <integer>2</integer>
       </dict>
