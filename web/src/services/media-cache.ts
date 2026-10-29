@@ -182,19 +182,20 @@ export async function generateThumbnailFromVideoFile(file: File): Promise<string
             if (ctx) {
               ctx.drawImage(video, 0, 0, w, h);
               // Reject solid black frames captured before video rendering
+              let hasColor = true;
               try {
                 const imgData = ctx.getImageData(0, 0, Math.min(w, 30), Math.min(h, 30)).data;
-                let hasColor = false;
+                hasColor = false;
                 for (let i = 0; i < imgData.length; i += 4) {
                   if (imgData[i] > 15 || imgData[i + 1] > 15 || imgData[i + 2] > 15) {
                     hasColor = true;
                     break;
                   }
                 }
-                if (!hasColor) return false;
               } catch {}
+              if (!hasColor) return false;
               const thumbData = canvas.toDataURL('image/jpeg', 0.8);
-              if (thumbData.length < 12000) return false;
+              if (!thumbData || thumbData.length < 1000) return false;
               cleanup();
               resolve(thumbData);
               return true;
@@ -296,19 +297,20 @@ export async function extractVideoThumbnailFromUrl(streamUrl: string): Promise<s
           if (ctx) {
             ctx.drawImage(video, 0, 0, w, h);
             // Reject solid black frames captured before video decoding completes
+            let hasColor = true;
             try {
               const imgData = ctx.getImageData(0, 0, Math.min(w, 30), Math.min(h, 30)).data;
-              let hasColor = false;
+              hasColor = false;
               for (let i = 0; i < imgData.length; i += 4) {
                 if (imgData[i] > 15 || imgData[i + 1] > 15 || imgData[i + 2] > 15) {
                   hasColor = true;
                   break;
                 }
               }
-              if (!hasColor) return false;
             } catch {}
+            if (!hasColor) return false;
             const thumb = canvas.toDataURL('image/jpeg', 0.8);
-            if (thumb.length < 12000) return false;
+            if (!thumb || thumb.length < 1000) return false;
             cleanup();
             resolve(thumb);
             return true;

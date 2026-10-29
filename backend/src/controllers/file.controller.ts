@@ -669,25 +669,6 @@ export class FileController {
         return;
       }
 
-      const etag = `"${file._id.toString()}_${new Date(file.updatedAt || 0).getTime()}"`;
-      res.setHeader('ETag', etag);
-      res.setHeader('Cache-Control', 'public, max-age=604800, stale-while-revalidate=86400');
-
-      if (req.headers['if-none-match'] === etag) {
-        res.status(304).end();
-        return;
-      }
-
-      const saveAndSend = (buffer: Buffer, contentType: string) => {
-        if (memoryThumbnailCache.size >= MAX_MEMORY_THUMBNAILS) {
-          const oldestKey = memoryThumbnailCache.keys().next().value;
-          if (oldestKey) memoryThumbnailCache.delete(oldestKey);
-        }
-        memoryThumbnailCache.set(fileId, { buffer, contentType, etag });
-        res.setHeader('Content-Type', contentType);
-        res.send(buffer);
-      };
-
       // If previously stored as application/octet-stream, auto-correct based on filename extension
       if (file.mimeType === 'application/octet-stream') {
         const effMime = getEffectiveMimeType(file.filename, file.mimeType);
@@ -697,8 +678,30 @@ export class FileController {
         }
       }
 
+      const etag = `"${file._id.toString()}_${new Date(file.updatedAt || 0).getTime()}"`;
+
+      const saveAndSend = (buffer: Buffer, contentType: string) => {
+        if (memoryThumbnailCache.size >= MAX_MEMORY_THUMBNAILS) {
+          const oldestKey = memoryThumbnailCache.keys().next().value;
+          if (oldestKey) memoryThumbnailCache.delete(oldestKey);
+        }
+        memoryThumbnailCache.set(fileId, { buffer, contentType, etag });
+        res.setHeader('ETag', etag);
+        res.setHeader('Cache-Control', 'public, max-age=604800, stale-while-revalidate=86400');
+        res.setHeader('Content-Type', contentType);
+        res.send(buffer);
+      };
+
       // If file has a direct thumbnail link stored (URL or base64 data URI)
       if (file.metadata?.thumbnail) {
+        // Only return 304 if a real thumbnail has already been verified and stored!
+        if (req.headers['if-none-match'] === etag) {
+          res.setHeader('ETag', etag);
+          res.setHeader('Cache-Control', 'public, max-age=604800, stale-while-revalidate=86400');
+          res.status(304).end();
+          return;
+        }
+
         if (file.metadata.thumbnail.startsWith('data:image/')) {
           const matches = file.metadata.thumbnail.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
           if (matches && matches.length === 3) {
@@ -734,15 +737,19 @@ export class FileController {
 
         const meta = await drive.files.get({
           fileId: actualFileId,
-          fields: 'thumbnailLink, imageMediaMetadata',
+          fields: 'id, name, mimeType, thumbnailLink, hasThumbnail, videoMediaMetadata, imageMediaMetadata',
         });
 
-        if (meta.data.thumbnailLink) {
-          let thumbRes = await fetch(meta.data.thumbnailLink);
+        const targetThumbLink = meta.data.thumbnailLink
+          ? meta.data.thumbnailLink.replace(/=s\d+$/, '=s480')
+          : null;
+
+        if (targetThumbLink) {
+          let thumbRes = await fetch(targetThumbLink);
           if (!thumbRes.ok) {
             const tokenRes = await oauth2Client.getAccessToken();
             if (tokenRes.token) {
-              thumbRes = await fetch(meta.data.thumbnailLink, {
+              thumbRes = await fetch(targetThumbLink, {
                 headers: { Authorization: `Bearer ${tokenRes.token}` },
               });
             }
@@ -771,8 +778,10 @@ export class FileController {
         // Fallback below
       }
 
-      // If it is a video and no thumbnail image exists, return a crisp SVG video poster
+      // If it is a video and no thumbnail image exists, return a temporary SVG video poster
+      // NEVER set long-term cache on placeholder SVGs so the client can refresh when the real thumbnail arrives
       if (file.mimeType.startsWith('video/')) {
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
         const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="320" height="320" viewBox="0 0 320 320">
   <defs>
     <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">

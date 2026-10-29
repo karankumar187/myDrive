@@ -1154,22 +1154,51 @@ const GalleryGridTile: React.FC<{
   const isVideo = isVideoFile(item.mimeType) || isVideoFile(item.filename);
   const [loadError, setLoadError] = useState(false);
   const [streamFallback, setStreamFallback] = useState<string | null>(null);
+  const [extractedThumb, setExtractedThumb] = useState<string | null>(null);
 
   const hasRealThumb = Boolean(
-    item.metadata?.thumbnail &&
-    item.metadata.thumbnail.startsWith('data:image/') &&
-    item.metadata.thumbnail.length > 500
+    (item.metadata?.thumbnail &&
+      item.metadata.thumbnail.startsWith('data:image/') &&
+      item.metadata.thumbnail.length > 500) ||
+      mediaCache.getThumbnail(item._id)
   );
 
   // Synchronously compute thumbnail without extra render cycles
   const thumbUrl = useMemo(() => {
-    if (hasRealThumb && item.metadata?.thumbnail) {
+    if (item.metadata?.thumbnail && item.metadata.thumbnail.startsWith('data:image/')) {
       return item.metadata.thumbnail;
     }
     return mediaCache.getThumbnail(item._id) || mediaCache.get(item._id) || api.getThumbnailUrl(item._id);
-  }, [item._id, hasRealThumb, item.metadata?.thumbnail]);
+  }, [item._id, item.metadata?.thumbnail]);
 
-  const activeSrc = streamFallback || thumbUrl;
+  // If a video has no real thumbnail stored, automatically extract it in the background queue
+  useEffect(() => {
+    if (!isVideo || hasRealThumb || extractedThumb) return;
+
+    let active = true;
+    mediaQueue.enqueue(async () => {
+      if (!active) return;
+      if (mediaCache.getThumbnail(item._id)) return;
+      try {
+        const streamUrl = getStreamUrl(item._id);
+        const captured = await extractVideoThumbnailFromUrl(streamUrl);
+        if (captured && active) {
+          mediaCache.saveThumbnail(item._id, captured);
+          setExtractedThumb(captured);
+          // Persist to backend database asynchronously so it's permanently stored for all devices!
+          api.updateThumbnail(item._id, captured).catch(() => {});
+        }
+      } catch (err) {
+        // Silently continue if video stream cannot be decoded
+      }
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [item._id, isVideo, hasRealThumb, extractedThumb]);
+
+  const activeSrc = extractedThumb || streamFallback || thumbUrl;
 
   const handleClick = useCallback(() => {
     onClick(item._id);
@@ -1758,6 +1787,10 @@ const FullScreenViewer: React.FC<{
                 autoPlay
                 className="w-full max-h-[80vh] shadow-2xl"
                 onDownload={() => {}}
+                onThumbnailExtracted={(thumb) => {
+                  mediaCache.saveThumbnail(item._id, thumb);
+                  api.updateThumbnail(item._id, thumb).catch(() => {});
+                }}
               />
             </div>
           ) : (

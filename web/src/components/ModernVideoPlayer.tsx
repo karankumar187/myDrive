@@ -23,6 +23,7 @@ interface ModernVideoPlayerProps {
   className?: string;
   onDownload?: () => void;
   onError?: () => void;
+  onThumbnailExtracted?: (thumb: string) => void;
 }
 
 const PLAYBACK_RATES = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
@@ -48,11 +49,47 @@ export const ModernVideoPlayer: React.FC<ModernVideoPlayerProps> = ({
   className = '',
   onDownload,
   onError,
+  onThumbnailExtracted,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const scrubberRef = useRef<HTMLDivElement>(null);
   const hideControlsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hasExtractedThumbRef = useRef(false);
+
+  const handleLoadedData = () => {
+    if (hasExtractedThumbRef.current || !onThumbnailExtracted) return;
+    try {
+      const v = videoRef.current;
+      if (!v || !v.videoWidth || !v.videoHeight) return;
+      const canvas = document.createElement('canvas');
+      const maxDim = 480;
+      let w = v.videoWidth;
+      let h = v.videoHeight;
+      if (w > maxDim || h > maxDim) {
+        if (w > h) {
+          h = Math.round((h * maxDim) / w);
+          w = maxDim;
+        } else {
+          w = Math.round((w * maxDim) / h);
+          h = maxDim;
+        }
+      }
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.drawImage(v, 0, 0, w, h);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+        if (dataUrl && dataUrl.length > 5000) {
+          hasExtractedThumbRef.current = true;
+          onThumbnailExtracted(dataUrl);
+        }
+      }
+    } catch {
+      // ignore
+    }
+  };
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -332,6 +369,7 @@ export const ModernVideoPlayer: React.FC<ModernVideoPlayerProps> = ({
         preload="metadata"
         onTimeUpdate={handleTimeUpdate}
         onLoadedMetadata={handleLoadedMetadata}
+        onLoadedData={handleLoadedData}
         onWaiting={() => setIsBuffering(true)}
         onPlaying={() => {
           setIsBuffering(false);
