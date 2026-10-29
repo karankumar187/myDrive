@@ -107,6 +107,23 @@ export class ShortcutController {
         ? new Types.ObjectId(req.device.policy.targetFolderId)
         : null;
 
+      // Generate auto-rotated thumbnail for image uploads
+      let thumbnailBase64: string | undefined;
+      if (mimeType.startsWith('image/')) {
+        try {
+          const sharp = (await import('sharp')).default;
+          const thumbBuffer = await sharp(fileBuffer)
+            .rotate() // Automatically rotates based on EXIF Orientation!
+            .resize(360, 360, { fit: 'cover' })
+            .jpeg({ quality: 80 })
+            .toBuffer();
+          thumbnailBase64 = `data:image/jpeg;base64,${thumbBuffer.toString('base64')}`;
+          console.log(`[Shortcut Upload] Generated auto-rotated thumbnail (${thumbBuffer.length} bytes) for ${originalName}`);
+        } catch (err) {
+          console.warn('[Shortcut Upload] Sharp thumbnail generation failed:', err);
+        }
+      }
+
       // Check if duplicate already exists
       const existingDuplicate = await StorageEngineService.findExistingDuplicate(req.user._id, contentHash);
       if (existingDuplicate) {
@@ -122,6 +139,7 @@ export class ShortcutController {
           providerFileId: existingDuplicate.versions[0].providerFileId,
           deviceId: req.device.deviceId,
           deviceAssetId,
+          metadata: thumbnailBase64 ? { thumbnail: thumbnailBase64 } : undefined,
         });
 
         // Invalidate user cache & broadcast real-time Socket.IO notification
@@ -133,6 +151,7 @@ export class ShortcutController {
             filename: originalName,
             sizeBytes,
             isDuplicate: true,
+            thumbnail: thumbnailBase64,
           });
           io.to(`user:${req.user._id}`).emit('device:sync_status', {
             deviceId: req.device.deviceId,
@@ -186,6 +205,7 @@ export class ShortcutController {
         providerFileId,
         deviceId: req.device.deviceId,
         deviceAssetId,
+        metadata: thumbnailBase64 ? { thumbnail: thumbnailBase64 } : undefined,
       });
 
       // Invalidate user cache & broadcast real-time Socket.IO notification

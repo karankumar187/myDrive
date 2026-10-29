@@ -705,17 +705,6 @@ export class FileController {
             saveAndSend(Buffer.from(matches[2], 'base64'), matches[1]);
             return;
           }
-        } else if (file.metadata.thumbnail.startsWith('http')) {
-          try {
-            const thumbRes = await fetch(file.metadata.thumbnail);
-            if (thumbRes.ok) {
-              const buffer = Buffer.from(await thumbRes.arrayBuffer());
-              saveAndSend(buffer, thumbRes.headers.get('content-type') || 'image/jpeg');
-              return;
-            }
-          } catch (_e) {
-            // Stored Google URL expired, fall through to refresh via Google Drive API below
-          }
         }
       }
 
@@ -745,7 +734,7 @@ export class FileController {
 
         const meta = await drive.files.get({
           fileId: actualFileId,
-          fields: 'thumbnailLink',
+          fields: 'thumbnailLink, imageMediaMetadata',
         });
 
         if (meta.data.thumbnailLink) {
@@ -759,9 +748,22 @@ export class FileController {
             }
           }
           if (thumbRes.ok) {
-            File.updateOne({ _id: file._id }, { $set: { 'metadata.thumbnail': meta.data.thumbnailLink } }).exec();
-            const buffer = Buffer.from(await thumbRes.arrayBuffer());
-            saveAndSend(buffer, thumbRes.headers.get('content-type') || 'image/jpeg');
+            let buffer = Buffer.from(await thumbRes.arrayBuffer());
+            const rotation = (meta.data as any).imageMediaMetadata?.rotation;
+            try {
+              const sharp = (await import('sharp')).default;
+              let s = sharp(buffer);
+              if (typeof rotation === 'number' && rotation !== 0) {
+                s = s.rotate(rotation);
+              } else {
+                s = s.rotate(); // auto-rotate based on EXIF if present
+              }
+              buffer = await s.jpeg({ quality: 85 }).toBuffer();
+            } catch (_err) {}
+
+            const dataUri = `data:image/jpeg;base64,${buffer.toString('base64')}`;
+            File.updateOne({ _id: file._id }, { $set: { 'metadata.thumbnail': dataUri } }).exec();
+            saveAndSend(buffer, 'image/jpeg');
             return;
           }
         }

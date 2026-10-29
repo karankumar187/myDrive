@@ -352,48 +352,6 @@ export class ShortcutGeneratorService {
       </dict>
     </dict>
 
-    <!-- LOOP 4: Notification per uploaded file with progress -->
-    <dict>
-      <key>WFWorkflowActionIdentifier</key>
-      <string>is.workflow.actions.notification</string>
-      <key>WFWorkflowActionParameters</key>
-      <dict>
-        <key>WFNotificationActionTitle</key>
-        <string>myDrive Auto Sync</string>
-        <key>WFNotificationActionSound</key>
-        <false/>
-        <key>WFNotificationActionBody</key>
-        <dict>
-          <key>Value</key>
-          <dict>
-            <key>attachmentsByRange</key>
-            <dict>
-              <key>{13, 1}</key>
-              <dict>
-                <key>Type</key>
-                <string>Variable</string>
-                <key>VariableName</key>
-                <string>Repeat Index</string>
-              </dict>
-              <key>{18, 1}</key>
-              <dict>
-                <key>OutputName</key>
-                <string>TotalCount</string>
-                <key>OutputUUID</key>
-                <string>${countUUID}</string>
-                <key>Type</key>
-                <string>ActionOutput</string>
-              </dict>
-            </dict>
-            <key>string</key>
-            <string>Syncing item \uFFFC of \uFFFC…</string>
-          </dict>
-          <key>WFSerializationType</key>
-          <string>WFTextTokenString</string>
-        </dict>
-      </dict>
-    </dict>
-
     <!-- End Repeat -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
@@ -591,48 +549,6 @@ export class ShortcutGeneratorService {
           this.headerItem('deviceId', deviceId),
           this.headerItem('deviceKey', deviceKey),
         ])}
-      </dict>
-    </dict>
-
-    <!-- LOOP: Per-file progress notification -->
-    <dict>
-      <key>WFWorkflowActionIdentifier</key>
-      <string>is.workflow.actions.notification</string>
-      <key>WFWorkflowActionParameters</key>
-      <dict>
-        <key>WFNotificationActionTitle</key>
-        <string>myDrive</string>
-        <key>WFNotificationActionSound</key>
-        <false/>
-        <key>WFNotificationActionBody</key>
-        <dict>
-          <key>Value</key>
-          <dict>
-            <key>attachmentsByRange</key>
-            <dict>
-              <key>{15, 1}</key>
-              <dict>
-                <key>Type</key>
-                <string>Variable</string>
-                <key>VariableName</key>
-                <string>Repeat Index</string>
-              </dict>
-              <key>{20, 1}</key>
-              <dict>
-                <key>OutputName</key>
-                <string>TotalCount</string>
-                <key>OutputUUID</key>
-                <string>${countUUID}</string>
-                <key>Type</key>
-                <string>ActionOutput</string>
-              </dict>
-            </dict>
-            <key>string</key>
-            <string>Uploading item \uFFFC of \uFFFC…</string>
-          </dict>
-          <key>WFSerializationType</key>
-          <string>WFTextTokenString</string>
-        </dict>
       </dict>
     </dict>
 

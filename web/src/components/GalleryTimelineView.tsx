@@ -1078,8 +1078,7 @@ const GalleryGridTile: React.FC<{
   const [loadError, setLoadError] = useState(false);
 
   const hasRealThumb = item.metadata?.thumbnail && (
-    (item.metadata.thumbnail.startsWith('data:image/') && item.metadata.thumbnail.length > 10000) ||
-    item.metadata.thumbnail.startsWith('http')
+    item.metadata.thumbnail.startsWith('data:image/') && item.metadata.thumbnail.length > 5000
   );
 
   // If authoritative thumbnail exists in metadata, use it first!
@@ -1103,7 +1102,7 @@ const GalleryGridTile: React.FC<{
 
     // 2. Client cache (localStorage or in-memory)
     const cached = mediaCache.getThumbnail(item._id) || mediaCache.get(item._id);
-    if (cached) {
+    if (cached && !cached.startsWith('http')) {
       setThumbUrl(cached);
       setLoading(false);
       return;
@@ -1147,6 +1146,7 @@ const GalleryGridTile: React.FC<{
         <img
           src={thumbUrl}
           alt={item.filename}
+          style={{ imageOrientation: 'from-image' }}
           className="w-full h-full object-cover"
           loading="lazy"
           decoding="async"
