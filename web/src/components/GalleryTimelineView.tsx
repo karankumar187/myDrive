@@ -497,9 +497,9 @@ export const GalleryTimelineView: React.FC<Props> = ({
   const currentMedia = selectedMediaIndex !== null ? filteredMedia[selectedMediaIndex] : null;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 w-full max-w-full min-w-0 overflow-x-hidden">
       {/* Top Header Bar — Clean, borderless, native app layout */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1 pb-1">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1 pb-1 w-full min-w-0 max-w-full">
         {/* Left: Filter Dropdowns */}
         <div className="flex items-center space-x-2">
           {/* Media Type Filter */}
@@ -849,7 +849,7 @@ export const GalleryTimelineView: React.FC<Props> = ({
         Object.entries(groupedMedia).map(([groupTitle, items]) => (
           <div key={groupTitle} className="space-y-3">
             {/* Date Group Header — Solid background avoids mobile GPU compositor stalls */}
-            <div className="sticky top-14 sm:top-16 bg-[#08080a] py-2 z-20 flex items-center justify-between border-b border-zinc-800/80">
+            <div className="sticky top-14 sm:top-16 bg-[#08080a] py-2 z-20 flex items-center justify-between border-b border-zinc-800/80 w-full min-w-0 max-w-full">
               <div className="flex items-center space-x-2">
                 <Calendar className="w-3.5 h-3.5 text-purple-400" />
                 <span className="text-xs font-bold text-zinc-200 tracking-wide uppercase">{groupTitle}</span>
@@ -877,7 +877,7 @@ export const GalleryTimelineView: React.FC<Props> = ({
             </div>
 
             {/* Grid: 3 columns mobile (iOS Photos standard), 4–8 columns desktop */}
-            <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-8 gap-1.5 sm:gap-2.5">
+            <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-8 gap-1.5 sm:gap-2.5 w-full min-w-0 max-w-full">
               {items.map((item) => (
                 <GalleryGridTile
                   key={item._id}

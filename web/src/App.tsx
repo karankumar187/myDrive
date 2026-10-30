@@ -496,12 +496,12 @@ export const App: React.FC = () => {
   const firstName = currentUser.name.split(' ')[0] || 'there';
 
   return (
-    <div className="min-h-screen bg-[#08080a] text-zinc-100 flex flex-col relative selection:bg-purple-600 selection:text-white pb-[max(5.5rem,calc(env(safe-area-inset-bottom,0px)+4.75rem))] md:pb-8">
+    <div className="min-h-screen bg-[#08080a] text-zinc-100 flex flex-col relative selection:bg-purple-600 selection:text-white pb-[max(5.5rem,calc(env(safe-area-inset-bottom,0px)+4.75rem))] md:pb-8 w-full max-w-full overflow-x-hidden">
       {/* Subtle top ambient purple glow */}
-      <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[300px] bg-purple-600/10 rounded-full blur-[160px] pointer-events-none" />
+      <div className="absolute top-0 left-1/2 -translate-x-1/2 w-full max-w-[800px] h-[300px] bg-purple-600/10 rounded-full blur-[160px] pointer-events-none overflow-hidden" />
 
       {/* TOP FLOATING NAVBAR */}
-      <header className="sticky top-0 z-40 w-full backdrop-blur-xl bg-[#08080a]/85 border-b border-[#1c1c22] relative pt-safe">
+      <header className="sticky top-0 z-40 w-full backdrop-blur-xl bg-[#08080a]/85 border-b border-[#1c1c22] relative pt-safe max-w-full overflow-hidden">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-14 sm:h-16 flex items-center justify-between">
           {/* Left Brand Logo (Clickable Home / Dashboard Navigation) */}
           <button
@@ -654,7 +654,7 @@ export const App: React.FC = () => {
       )}
 
       {/* MAIN CONTENT VIEWS */}
-      <main className="max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-4 flex-1">
+      <main className="max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-4 flex-1 min-w-0 max-w-full overflow-x-hidden">
         {activeTab === 'dashboard' && (
           <StorageSummaryView
             summary={summary}
