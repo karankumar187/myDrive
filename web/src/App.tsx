@@ -580,7 +580,7 @@ export const App: React.FC = () => {
       <div className="absolute top-0 left-1/2 -translate-x-1/2 w-full max-w-[800px] h-[300px] bg-purple-600/10 rounded-full blur-[160px] pointer-events-none overflow-hidden" />
 
       {/* TOP FLOATING NAVBAR */}
-      <header className="sticky top-0 z-40 w-full backdrop-blur-xl bg-[#08080a]/85 border-b border-[#1c1c22] pt-safe max-w-full">
+      <header className="sticky top-0 z-[60] w-full backdrop-blur-xl bg-[#08080a]/90 border-b border-[#1c1c22] pt-safe max-w-full">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-14 sm:h-16 flex items-center justify-between">
           {/* Left Brand Logo (Clickable Home / Dashboard Navigation) */}
           <button
@@ -665,10 +665,10 @@ export const App: React.FC = () => {
               {showProfileMenu && (
                 <>
                   <div
-                    className="fixed inset-0 z-40"
+                    className="fixed inset-0 z-[70]"
                     onClick={() => setShowProfileMenu(false)}
                   />
-                  <div className="absolute right-0 mt-2 w-56 bg-[#121216] border border-[#222229] rounded-2xl p-2 shadow-2xl z-50 space-y-1 animate-in fade-in zoom-in-95 duration-100">
+                  <div className="absolute right-0 mt-2 w-56 bg-[#121216] border border-[#272736] rounded-2xl p-2 shadow-2xl z-[80] space-y-1 animate-in fade-in zoom-in-95 duration-100">
                     <div className="px-3 py-2 border-b border-[#1c1c22]">
                       <p className="text-xs font-bold text-white truncate">{currentUser.name}</p>
                       <p className="text-[10px] text-zinc-400 truncate">{currentUser.email}</p>
