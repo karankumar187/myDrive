@@ -128,12 +128,11 @@ export async function fetchWithLoading(input: RequestInfo | URL, init?: RequestI
   }
 }
 
-let cachedAuthToken: string | null = null;
 export function getAuthToken(): string | null {
-  if (cachedAuthToken === null && typeof localStorage !== 'undefined') {
-    cachedAuthToken = localStorage.getItem('drive_token') || '';
+  if (typeof localStorage !== 'undefined') {
+    return localStorage.getItem('drive_token') || null;
   }
-  return cachedAuthToken || null;
+  return null;
 }
 
 function getHeaders(): HeadersInit {
@@ -223,6 +222,11 @@ export const api = {
   getThumbnailUrl(fileId: string): string {
     const token = getAuthToken();
     return `${API_BASE}/files/${fileId}/thumbnail${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+  },
+
+  getPreviewUrl(fileId: string): string {
+    const token = getAuthToken();
+    return `${API_BASE}/files/${fileId}/preview${token ? `?token=${encodeURIComponent(token)}` : ''}`;
   },
 
   async updateThumbnail(fileId: string, thumbnail: string): Promise<any> {

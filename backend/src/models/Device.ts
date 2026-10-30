@@ -155,6 +155,10 @@ const DeviceSchema = new Schema<IDeviceDocument>(
       type: Number,
       default: 0,
     },
+    lastSyncedPhotoDate: {
+      type: Date,
+      default: null,
+    },
     policy: {
       type: DevicePolicySchema,
       default: () => ({}),

@@ -80,7 +80,7 @@ class ShortcutUploadQueue {
                     details: `Selected storage account: ${targetAccount.accountEmail || targetAccount._id}`,
                   },
                 ],
-                $slice: -100,
+                $slice: -1000,
               },
             },
           }
@@ -141,7 +141,7 @@ class ShortcutUploadQueue {
                     details: `Stored in Google Drive (${targetAccount.accountEmail || targetAccount._id}) • Provider File ID: ${providerFileId}`,
                   },
                 ],
-                $slice: -100,
+                $slice: -1000,
               },
             },
           }
@@ -186,7 +186,7 @@ class ShortcutUploadQueue {
                     details: err.message || 'Unknown network error during Google Drive upload',
                   },
                 ],
-                $slice: -100,
+                $slice: -1000,
               },
             },
           }
@@ -271,7 +271,7 @@ export class ShortcutController {
                     details: 'Pre-flight check found copy already stored in cloud library. Skipped upload (0 MB transferred).',
                   },
                 ],
-                $slice: -100,
+                $slice: -1000,
               },
             },
           }
@@ -316,7 +316,7 @@ export class ShortcutController {
                   details: 'New photo not found in cloud. Converting and initiating upload from camera roll...',
                 },
               ],
-              $slice: -100,
+              $slice: -1000,
             },
           },
         }
@@ -423,13 +423,17 @@ export class ShortcutController {
         return;
       }
 
-      // Find the most recently backed up file for this device
+      // Find the most recently backed up file or date checkpoint for this device
       const latestState = await DeviceFileState.findOne({
         userId: req.user._id,
         deviceId: req.device.deviceId,
       }).sort({ createdAt: -1 });
 
-      const lastSyncedDate = latestState ? latestState.createdAt.toISOString() : '2000-01-01T00:00:00.000Z';
+      const lastSyncedDate = req.device.lastSyncedPhotoDate
+        ? req.device.lastSyncedPhotoDate.toISOString()
+        : latestState
+        ? latestState.createdAt.toISOString()
+        : '2000-01-01T00:00:00.000Z';
 
       // Record sync start in Device document
       await Device.findOneAndUpdate(
@@ -444,7 +448,7 @@ export class ShortcutController {
           $push: {
             syncLogs: {
               $each: [{ timestamp: new Date(), message: `🔄 Started sync check from ${req.device.deviceName}` }],
-              $slice: -100,
+              $slice: -1000,
             },
           },
         }
@@ -571,6 +575,32 @@ export class ShortcutController {
         }
       }
 
+      // Extract photo creation timestamp to continuously advance sync checkpoint
+      let photoTakenDate: Date | null = null;
+      if (req.body?.photoDate) {
+        const parsed = new Date(req.body.photoDate);
+        if (!isNaN(parsed.getTime())) photoTakenDate = parsed;
+      }
+      if (!photoTakenDate && mimeType.startsWith('image/')) {
+        try {
+          const sharp = (await import('sharp')).default;
+          const meta = await sharp(fileBuffer).metadata();
+          if (meta.exif) {
+            const exifStr = meta.exif.toString('binary');
+            const dateMatch = /(\d{4}):(\d{2}):(\d{2}) (\d{2}):(\d{2}):(\d{2})/.exec(exifStr);
+            if (dateMatch) {
+              const [, y, m, day, h, min, s] = dateMatch;
+              photoTakenDate = new Date(`${y}-${m}-${day}T${h}:${min}:${s}`);
+            }
+          }
+        } catch {
+          // ignore
+        }
+      }
+      if (!photoTakenDate || isNaN(photoTakenDate.getTime())) {
+        photoTakenDate = new Date();
+      }
+
       // Check if duplicate already exists (by cryptographic contentHash, or filename + sizeBytes)
       const existingDuplicate = await StorageEngineService.findExistingDuplicate(
         req.user._id,
@@ -617,7 +647,7 @@ export class ShortcutController {
                       details: 'Restored clean upright photo from phone to active library. Trashed copy replaced.',
                     },
                   ],
-                  $slice: -100,
+                  $slice: -1000,
                 },
               },
             }
@@ -673,6 +703,9 @@ export class ShortcutController {
                 currentSyncActivity: `Synced ${originalName} (linked duplicate)`,
                 lastSeenAt: new Date(),
               },
+              $max: {
+                lastSyncedPhotoDate: photoTakenDate,
+              },
               $push: {
                 syncLogs: {
                   $each: [
@@ -685,7 +718,7 @@ export class ShortcutController {
                       details: `SHA-256 hash match (${contentHash.substring(0, 10)}...). Linked device without re-uploading bytes to cloud.`,
                     },
                   ],
-                  $slice: -100,
+                  $slice: -1000,
                 },
               },
             }
@@ -751,6 +784,9 @@ export class ShortcutController {
             currentSyncActivity: `Uploaded ${originalName} (${(sizeBytes / (1024 * 1024)).toFixed(1)} MB)`,
             lastSeenAt: new Date(),
           },
+          $max: {
+            lastSyncedPhotoDate: photoTakenDate,
+          },
           $push: {
             syncLogs: {
               $each: [
@@ -763,7 +799,7 @@ export class ShortcutController {
                   details: `File received on server (${mimeType}) • Queued for async Google Drive streaming`,
                 },
               ],
-              $slice: -100,
+              $slice: -1000,
             },
           },
         }

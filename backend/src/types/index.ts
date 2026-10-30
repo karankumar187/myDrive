@@ -157,6 +157,7 @@ export interface IDevice {
   lastSyncCompletedAt?: Date;
   lastSeenAt: Date;
   lastCheckpoint: number;
+  lastSyncedPhotoDate?: Date;
   policy: IDevicePolicy;
   createdAt: Date;
   updatedAt: Date;

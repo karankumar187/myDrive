@@ -175,7 +175,7 @@ export class DeviceController {
               details: req.body.logEntry.details || null,
             },
           ],
-          $slice: -100,
+          $slice: -1000,
         };
       } else if (logMessage) {
         pushOps.syncLogs = {
@@ -189,7 +189,7 @@ export class DeviceController {
               details: req.body.details || null,
             },
           ],
-          $slice: -100,
+          $slice: -1000,
         };
       }
 
@@ -280,6 +280,15 @@ export class DeviceController {
         return;
       }
 
+      const io = getSocketIoInstance();
+      if (io) {
+        io.to(`user:${req.user!._id}`).emit('device:sync_status', {
+          deviceId: device.deviceId,
+          policy: device.policy,
+          status: device.status,
+        });
+      }
+
       res.json({ success: true, device });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -299,6 +308,11 @@ export class DeviceController {
       if (!device) {
         res.status(404).json({ error: 'Device not found or access denied' });
         return;
+      }
+
+      const io = getSocketIoInstance();
+      if (io) {
+        io.to(`user:${req.user!._id}`).emit('device:revoked', { deviceId: device.deviceId });
       }
 
       res.json({ success: true, message: `Device ${device.deviceName} access has been revoked.` });
@@ -321,6 +335,15 @@ export class DeviceController {
       if (!device) {
         res.status(404).json({ error: 'Device not found or access denied' });
         return;
+      }
+
+      const io = getSocketIoInstance();
+      if (io) {
+        io.to(`user:${req.user!._id}`).emit('device:sync_status', {
+          deviceId: device.deviceId,
+          syncLogs: [],
+          currentSyncActivity: '',
+        });
       }
 
       res.json({ success: true, message: 'Logs cleared successfully', device });
@@ -348,6 +371,14 @@ export class DeviceController {
       device.apiKeyHash = hash;
       device.apiKeyPrefix = prefix;
       await device.save();
+
+      const io = getSocketIoInstance();
+      if (io) {
+        io.to(`user:${req.user!._id}`).emit('device:sync_status', {
+          deviceId: device.deviceId,
+          apiKeyPrefix: prefix,
+        });
+      }
 
       res.json({
         success: true,

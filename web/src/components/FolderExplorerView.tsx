@@ -40,7 +40,7 @@ import { api, startGlobalLoading, subscribeToProgress, GlobalProgressState } fro
 import { uploadService, UploadTask } from '../services/UploadService.js';
 import { VaultCryptoService } from '../services/vault-crypto.js';
 import { mediaCache, generateThumbnailFromVideoFile } from '../services/media-cache.js';
-import { formatBytes, getStreamUrl } from '../utils/format.js';
+import { formatBytes, getStreamUrl, getPreviewUrl } from '../utils/format.js';
 import { ModernVideoPlayer } from './ModernVideoPlayer.js';
 
 interface Props {
@@ -379,6 +379,15 @@ export const FolderExplorerView: React.FC<Props> = ({
     const stopLoading = startGlobalLoading('decrypt');
 
     const isEncrypted = file.versions && file.versions.length > 0 && file.versions[0].isEncrypted;
+
+    // Fast Path: For standard images, load the lightweight 2048px WebP preview immediately
+    if (!isEncrypted && file.mimeType.startsWith('image/')) {
+      const previewUrl = getPreviewUrl(file._id);
+      setPreviewUrl(previewUrl);
+      setPreviewLoading(false);
+      stopLoading();
+      return;
+    }
 
     try {
       const response = await fetch(getStreamUrl(file._id));

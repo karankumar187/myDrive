@@ -75,17 +75,37 @@ app.use(passport.initialize());
 import { createAdapter } from '@socket.io/redis-adapter';
 import { redisConnection } from './config/redis.js';
 
-const pubClient = redisConnection.duplicate();
-const subClient = redisConnection.duplicate();
-
-io = new SocketIOServer(server, {
-  adapter: createAdapter(pubClient, subClient),
+const useRedisAdapter = process.env.USE_REDIS_SOCKET_ADAPTER === 'true';
+const socketServerOptions: any = {
   cors: {
-    origin: allowedOrigins,
+    origin: (_origin: any, callback: any) => {
+      // Allow any origin (Cloudflare workers, web PWA, localhost, iOS shortcuts, Android)
+      callback(null, true);
+    },
     methods: ['GET', 'POST'],
     credentials: true,
   },
-});
+  transports: ['websocket', 'polling'],
+  pingTimeout: 30000,
+  pingInterval: 15000,
+};
+
+if (useRedisAdapter) {
+  try {
+    const pubClient = redisConnection.duplicate();
+    const subClient = redisConnection.duplicate();
+    pubClient.on('error', (err) => console.warn('⚠️ Socket.io Redis PubClient notice:', err.message));
+    subClient.on('error', (err) => console.warn('⚠️ Socket.io Redis SubClient notice:', err.message));
+    socketServerOptions.adapter = createAdapter(pubClient, subClient);
+    console.log('✅ Socket.io initialized with Redis adapter');
+  } catch (err: any) {
+    console.warn('⚠️ Redis adapter initialization error, using in-memory adapter:', err.message);
+  }
+} else {
+  console.log('⚡ Socket.io running on high-reliability in-memory adapter for instant cross-device sync');
+}
+
+io = new SocketIOServer(server, socketServerOptions);
 
 // Socket Handshake Authentication & Room Isolation (prevents IDOR on WebSockets)
 io.use(async (socket, next) => {
@@ -97,10 +117,13 @@ io.use(async (socket, next) => {
     try {
       const secret = process.env.JWT_SECRET || 'fallback_secret_key_drive';
       const decoded = jwt.verify(token as string, secret) as any;
-      socket.data.userId = decoded.userId;
+      if (decoded?.userId) {
+        socket.data.userId = decoded.userId.toString();
+      }
       return next();
     } catch {
-      return next(new Error('Authentication failed: Invalid JWT'));
+      // Permit connection so client can send refreshed token via authenticate event
+      return next();
     }
   }
 
@@ -140,6 +163,25 @@ io.on('connection', (socket) => {
     // Join device-specific room for targeted remote triggers
     socket.join(`device:${socket.data.deviceId}`);
   }
+
+  // Handle runtime explicit authentication & re-join
+  socket.on('authenticate', async (payload: { token?: string }) => {
+    if (!payload?.token) return;
+    try {
+      const secret = process.env.JWT_SECRET || 'fallback_secret_key_drive';
+      const decoded = jwt.verify(payload.token, secret) as any;
+      if (decoded?.userId) {
+        const uId = decoded.userId.toString();
+        socket.data.userId = uId;
+        socket.join(`user:${uId}`);
+        console.log(`🔌 Socket joined room user:${uId} via authenticate event`);
+        socket.emit('authenticated', { success: true, userId: uId });
+      }
+    } catch (err: any) {
+      console.warn('Socket token authentication failed:', err.message);
+      socket.emit('authenticated', { success: false, error: 'Invalid token' });
+    }
+  });
 
   socket.on('disconnect', () => {
     // Connection closed

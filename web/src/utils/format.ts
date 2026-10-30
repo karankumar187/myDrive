@@ -29,5 +29,11 @@ export function formatDateTime(date: string | Date): string {
 export function getStreamUrl(fileId: string): string {
   const token = localStorage.getItem('drive_token') || '';
   const rawApiUrl = (import.meta.env.VITE_API_URL || '').replace(/\/+$/, '');
-  return `${rawApiUrl}/api/v1/files/${fileId}/stream?token=${encodeURIComponent(token)}`;
+  return `${rawApiUrl}/api/v1/files/${fileId}/stream${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+}
+
+export function getPreviewUrl(fileId: string): string {
+  const token = localStorage.getItem('drive_token') || '';
+  const rawApiUrl = (import.meta.env.VITE_API_URL || '').replace(/\/+$/, '');
+  return `${rawApiUrl}/api/v1/files/${fileId}/preview${token ? `?token=${encodeURIComponent(token)}` : ''}`;
 }

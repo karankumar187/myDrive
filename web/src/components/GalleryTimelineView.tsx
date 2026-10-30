@@ -37,7 +37,7 @@ import {
 import { uploadService } from '../services/UploadService.js';
 import { VaultCryptoService } from '../services/vault-crypto.js';
 import { mediaCache, mediaQueue, isVideoFile, extractVideoThumbnailFromUrl } from '../services/media-cache.js';
-import { getStreamUrl, formatBytes, formatDate, formatDateTime } from '../utils/format.js';
+import { getStreamUrl, getPreviewUrl, formatBytes, formatDate, formatDateTime } from '../utils/format.js';
 import { api, startGlobalLoading, subscribeToProgress, GlobalProgressState } from '../services/api.js';
 import { ModernVideoPlayer } from './ModernVideoPlayer.js';
 
@@ -1232,7 +1232,7 @@ const GalleryGridTile: React.FC<{
             if (isVideo) {
               setLoadError(true);
             } else if (!streamFallback) {
-              const fallbackUrl = getStreamUrl(item._id);
+              const fallbackUrl = getPreviewUrl(item._id);
               if (activeSrc !== fallbackUrl) {
                 setStreamFallback(fallbackUrl);
               } else {
@@ -1434,11 +1434,12 @@ const FullScreenViewer: React.FC<{
         tImg.src = thumbUrl;
       }
 
-      // 2. Preload full-resolution image if not a video
+      // 2. Preload web-optimized preview image if not a video (~250KB WebP)
       if (!isMVideo) {
+        const previewUrl = getPreviewUrl(m._id);
         const streamUrl = getStreamUrl(m._id);
         const fImg = new Image();
-        fImg.src = streamUrl;
+        fImg.src = previewUrl;
 
         // 3. Pre-decrypt into memory cache if vault key is active for immediate neighbors
         const distance = Math.abs(idx - currentIndex);
@@ -1480,6 +1481,7 @@ const FullScreenViewer: React.FC<{
     const version = item.versions?.[item.versions.length - 1];
     const isEncrypted = !!version?.isEncrypted;
     const streamUrl = getStreamUrl(item._id);
+    const previewUrl = isVideo ? streamUrl : getPreviewUrl(item._id);
 
     // Check memory cache first
     const mem = mediaCache.get(item._id);
@@ -1490,7 +1492,7 @@ const FullScreenViewer: React.FC<{
     }
 
     if (!isEncrypted || !vaultKey) {
-      setFullUrl(streamUrl);
+      setFullUrl(previewUrl);
       setLoading(false);
       return;
     }
@@ -1503,7 +1505,7 @@ const FullScreenViewer: React.FC<{
         const ciphertext = await res.arrayBuffer();
         if (!version?.iv) {
           if (active) {
-            setFullUrl(streamUrl);
+            setFullUrl(previewUrl);
             setLoading(false);
           }
           return;
@@ -1517,7 +1519,7 @@ const FullScreenViewer: React.FC<{
         }
       } catch (err) {
         if (active) {
-          setFullUrl(streamUrl);
+          setFullUrl(previewUrl);
           setLoading(false);
         }
       }
@@ -1527,7 +1529,20 @@ const FullScreenViewer: React.FC<{
     return () => {
       active = false;
     };
-  }, [item._id, item.mimeType, item.versions, vaultKey]);
+  }, [item._id, item.mimeType, item.versions, isVideo, vaultKey]);
+
+  // Dynamically upgrade to full uncompressed original stream when zooming in
+  useEffect(() => {
+    if (scale > 1.2 && !isVideo) {
+      const version = item.versions?.[item.versions.length - 1];
+      if (!version?.isEncrypted && !vaultKey) {
+        const streamUrl = getStreamUrl(item._id);
+        if (fullUrl && fullUrl !== streamUrl) {
+          setFullUrl(streamUrl);
+        }
+      }
+    }
+  }, [scale, item._id, isVideo, fullUrl, item.versions, vaultKey]);
 
   // Touch Swipe handlers
   const handleTouchStart = (e: React.TouchEvent) => {
@@ -1840,9 +1855,14 @@ const FullScreenViewer: React.FC<{
                   setLoading(false);
                 }}
                 onError={() => {
-                  setIsImageLoaded(false);
-                  setLoading(false);
-                  setImgError(true);
+                  const streamUrl = getStreamUrl(item._id);
+                  if (fullUrl && fullUrl !== streamUrl) {
+                    setFullUrl(streamUrl);
+                  } else {
+                    setIsImageLoaded(false);
+                    setLoading(false);
+                    setImgError(true);
+                  }
                 }}
                 onDoubleClick={(e) => {
                   e.stopPropagation();

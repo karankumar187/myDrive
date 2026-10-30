@@ -16,7 +16,7 @@ import {
   Key,
 } from 'lucide-react';
 import { api, subscribeToProgress, GlobalProgressState } from './services/api.js';
-import { getSocket, disconnectSocket } from './services/socket.js';
+import { getSocket, refreshSocketAuth } from './services/socket.js';
 import { StorageSummary, FileItem, FolderItem, DeviceItem, User, BreadcrumbItem } from './types.js';
 import { StorageSummaryView } from './components/StorageSummaryView.js';
 import { FolderExplorerView } from './components/FolderExplorerView.js';
@@ -202,43 +202,122 @@ export const App: React.FC = () => {
     window.location.href = `${authBase}/api/v1/auth/google?client_url=${currentOrigin}`;
   }, []);
 
-  // Socket.io Real-time connection
+  // Socket.io Real-time connection & cross-device instant sync
   useEffect(() => {
     if (!currentUser) return;
 
     const socket = getSocket();
+    refreshSocketAuth();
 
-    socket.on('connect', () => {
+    const handleConnect = () => {
       setIsSocketConnected(true);
-    });
+      refreshSocketAuth();
+    };
 
-    socket.on('disconnect', () => {
+    const handleDisconnect = () => {
       setIsSocketConnected(false);
-    });
+    };
 
-    socket.on('file:uploaded', () => {
+    // Reload all data when any change is performed on any connected client (iPhone, desktop, Android)
+    const handleRemoteChange = () => {
+      folderCache.current.clear();
       loadDashboardData();
-    });
+    };
 
-    socket.on('device:sync_status', (data: any) => {
+    // Live device sync status and streaming logs
+    const handleDeviceSyncStatus = (data: any) => {
       setDevices((prevDevices) =>
         prevDevices.map((d) => {
           if (d.deviceId === data.deviceId) {
-            return {
+            const updated = {
               ...d,
               status: data.status || d.status,
               currentSyncActivity: data.currentSyncActivity !== undefined ? data.currentSyncActivity : d.currentSyncActivity,
               syncLogs: data.syncLogs || d.syncLogs,
+              policy: data.policy ? { ...d.policy, ...data.policy } : d.policy,
+              apiKeyPrefix: data.apiKeyPrefix || d.apiKeyPrefix,
               lastSeenAt: new Date().toISOString(),
             };
+            // Also keep the active detail modal updated in real-time
+            setLogModalDevice((current) => (current && current.deviceId === d.deviceId ? updated : current));
+            return updated;
           }
           return d;
         })
       );
-    });
+    };
+
+    const handleDeviceRevoked = (data: any) => {
+      if (data?.deviceId) {
+        setDevices((prev) => prev.filter((d) => d.deviceId !== data.deviceId));
+      }
+    };
+
+    socket.on('connect', handleConnect);
+    socket.on('disconnect', handleDisconnect);
+
+    // Bind real-time file and folder events
+    socket.on('file:uploaded', handleRemoteChange);
+    socket.on('file:trashed', handleRemoteChange);
+    socket.on('file:restored', handleRemoteChange);
+    socket.on('file:deleted', handleRemoteChange);
+    socket.on('file:restored_all', handleRemoteChange);
+    socket.on('trash:emptied', handleRemoteChange);
+    socket.on('file:favorite_toggled', handleRemoteChange);
+    socket.on('file:renamed', handleRemoteChange);
+    socket.on('file:moved', handleRemoteChange);
+    socket.on('file:bulk_action', handleRemoteChange);
+    socket.on('folder:created', handleRemoteChange);
+    socket.on('folder:deleted', handleRemoteChange);
+    socket.on('folder:renamed', handleRemoteChange);
+    socket.on('device:sync_status', handleDeviceSyncStatus);
+    socket.on('device:revoked', handleDeviceRevoked);
+
+    if (socket.connected) {
+      setIsSocketConnected(true);
+      refreshSocketAuth();
+    }
 
     return () => {
-      disconnectSocket();
+      socket.off('connect', handleConnect);
+      socket.off('disconnect', handleDisconnect);
+      socket.off('file:uploaded', handleRemoteChange);
+      socket.off('file:trashed', handleRemoteChange);
+      socket.off('file:restored', handleRemoteChange);
+      socket.off('file:deleted', handleRemoteChange);
+      socket.off('file:restored_all', handleRemoteChange);
+      socket.off('trash:emptied', handleRemoteChange);
+      socket.off('file:favorite_toggled', handleRemoteChange);
+      socket.off('file:renamed', handleRemoteChange);
+      socket.off('file:moved', handleRemoteChange);
+      socket.off('file:bulk_action', handleRemoteChange);
+      socket.off('folder:created', handleRemoteChange);
+      socket.off('folder:deleted', handleRemoteChange);
+      socket.off('folder:renamed', handleRemoteChange);
+      socket.off('device:sync_status', handleDeviceSyncStatus);
+      socket.off('device:revoked', handleDeviceRevoked);
+    };
+  }, [currentUser]);
+
+  // Tab wake / window focus revalidation: instantly syncs without manual refresh when switching back to web tab
+  useEffect(() => {
+    if (!currentUser) return;
+    const handleWakeSync = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        refreshSocketAuth();
+        folderCache.current.clear();
+        loadDashboardData();
+      }
+    };
+
+    window.addEventListener('focus', handleWakeSync);
+    document.addEventListener('visibilitychange', handleWakeSync);
+    window.addEventListener('pageshow', handleWakeSync);
+
+    return () => {
+      window.removeEventListener('focus', handleWakeSync);
+      document.removeEventListener('visibilitychange', handleWakeSync);
+      window.removeEventListener('pageshow', handleWakeSync);
     };
   }, [currentUser]);
 

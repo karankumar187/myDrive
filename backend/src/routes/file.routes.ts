@@ -12,6 +12,7 @@ router.post('/upload/complete', requireAnyAuth, FileController.completeUpload);
 router.get('/', requireAnyAuth, FileController.listFiles);
 router.get('/gallery', requireAnyAuth, FileController.getGallery);
 router.get('/:id/stream', requireAnyAuth, FileController.streamFile);
+router.get('/:id/preview', requireAnyAuth, FileController.streamPreview);
 router.get('/:id/thumbnail', requireAnyAuth, FileController.streamThumbnail);
 router.post('/:id/thumbnail', requireAnyAuth, FileController.updateThumbnail);
 router.patch('/:id/thumbnail', requireAnyAuth, FileController.updateThumbnail);

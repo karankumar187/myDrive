@@ -18,7 +18,7 @@ import {
   File,
 } from 'lucide-react';
 import { api, subscribeToProgress, startGlobalLoading, GlobalProgressState } from '../services/api.js';
-import { formatBytes, getStreamUrl } from '../utils/format.js';
+import { formatBytes, getStreamUrl, getPreviewUrl } from '../utils/format.js';
 import { ModernVideoPlayer } from './ModernVideoPlayer.js';
 
 interface Props {
@@ -480,7 +480,7 @@ export const TrashBinView: React.FC<Props> = ({ trashedFiles, onRefresh }) => {
             ) : isImageFile(previewFile) ? (
               <div className="relative flex items-center justify-center max-h-[78vh] max-w-full">
                 <img
-                  src={getStreamUrl(previewFile._id)}
+                  src={getPreviewUrl(previewFile._id)}
                   alt={previewFile.filename}
                   style={{
                     transform: `rotate(${previewRotation}deg)`,

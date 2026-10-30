@@ -15,8 +15,53 @@ import { CacheService } from '../services/cache.service.js';
 import { google } from 'googleapis';
 
 const UPLOAD_DIR = path.resolve(process.cwd(), 'uploads');
+const CACHE_FILES_DIR = path.resolve(UPLOAD_DIR, 'cache', 'files');
+const CACHE_PREVIEWS_DIR = path.resolve(UPLOAD_DIR, 'cache', 'previews');
+
 if (!fs.existsSync(UPLOAD_DIR)) {
   fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+}
+if (!fs.existsSync(CACHE_FILES_DIR)) {
+  fs.mkdirSync(CACHE_FILES_DIR, { recursive: true });
+}
+if (!fs.existsSync(CACHE_PREVIEWS_DIR)) {
+  fs.mkdirSync(CACHE_PREVIEWS_DIR, { recursive: true });
+}
+
+function pruneDiskCache() {
+  try {
+    for (const dir of [CACHE_FILES_DIR, CACHE_PREVIEWS_DIR]) {
+      if (!fs.existsSync(dir)) continue;
+      const files = fs.readdirSync(dir);
+      let totalSize = 0;
+      const fileList: { path: string; size: number; mtime: number }[] = [];
+      for (const file of files) {
+        if (file.startsWith('.')) continue;
+        const fp = path.join(dir, file);
+        try {
+          const stat = fs.statSync(fp);
+          if (stat.isFile()) {
+            totalSize += stat.size;
+            fileList.push({ path: fp, size: stat.size, mtime: stat.mtimeMs });
+          }
+        } catch {}
+      }
+      // If a single cache directory exceeds 3GB, prune oldest accessed files down to 75%
+      const MAX_DIR_BYTES = 3 * 1024 * 1024 * 1024; // 3GB
+      if (totalSize > MAX_DIR_BYTES) {
+        fileList.sort((a, b) => a.mtime - b.mtime);
+        for (const item of fileList) {
+          try {
+            fs.unlinkSync(item.path);
+            totalSize -= item.size;
+            if (totalSize <= MAX_DIR_BYTES * 0.75) break;
+          } catch {}
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('pruneDiskCache error:', err);
+  }
 }
 
 import { getEffectiveMimeType } from '../utils/mime.js';
@@ -558,7 +603,8 @@ export class FileController {
   }
 
   /**
-   * Streams a file from Google Drive for client download or browser decryption.
+   * Streams a file from Google Drive (or local NVMe SSD cache) for client download or browser decryption.
+   * Leverages Cloudflare CDN edge caching and local NVMe disk caching for instant subsequent reads.
    */
   static async streamFile(req: Request, res: Response): Promise<void> {
     try {
@@ -598,12 +644,54 @@ export class FileController {
         responseMime = 'video/mp4';
       }
 
+      const etag = `"${file._id}_${latestVersion.versionNumber}_${latestVersion.sizeBytes || 0}"`;
+
       res.setHeader('Content-Type', responseMime);
       res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(file.filename)}"`);
       res.setHeader('Accept-Ranges', 'bytes');
-      res.setHeader('Cache-Control', 'private, max-age=86400, stale-while-revalidate=43200');
+      res.setHeader('ETag', etag);
+      res.setHeader('Cache-Control', 'public, max-age=2592000, s-maxage=2592000, stale-while-revalidate=86400, immutable');
 
+      if (req.headers['if-none-match'] === etag) {
+        res.status(304).end();
+        return;
+      }
+
+      const cachedFilePath = path.join(CACHE_FILES_DIR, file._id.toString());
       const range = req.headers.range;
+
+      // Fast Path 1: Check if full raw file is already cached locally on OCI NVMe SSD
+      if (fs.existsSync(cachedFilePath)) {
+        try {
+          const stat = fs.statSync(cachedFilePath);
+          if (stat.size === latestVersion.sizeBytes || (!latestVersion.sizeBytes && stat.size > 0)) {
+            const totalSize = stat.size;
+            if (range) {
+              const parts = range.replace(/bytes=/, '').split('-');
+              const start = parseInt(parts[0], 10);
+              const end = parts[1] ? parseInt(parts[1], 10) : totalSize - 1;
+              if (start >= totalSize || end >= totalSize) {
+                res.status(416).setHeader('Content-Range', `bytes */${totalSize}`).end();
+                return;
+              }
+              const chunkSize = end - start + 1;
+              res.status(206);
+              res.setHeader('Content-Range', `bytes ${start}-${end}/${totalSize}`);
+              res.setHeader('Content-Length', chunkSize.toString());
+              fs.createReadStream(cachedFilePath, { start, end }).pipe(res);
+              return;
+            } else {
+              res.setHeader('Content-Length', totalSize.toString());
+              fs.createReadStream(cachedFilePath).pipe(res);
+              return;
+            }
+          }
+        } catch (_cacheErr) {
+          // If reading cached file fails, fall back to Google Drive stream
+        }
+      }
+
+      // If not cached locally, stream from Google Drive
       const driveStream = await GoogleDriveService.getFileStream(account, latestVersion.providerFileId, range);
 
       if (driveStream.resolvedFileId && driveStream.resolvedFileId !== latestVersion.providerFileId) {
@@ -640,9 +728,231 @@ export class FileController {
         } catch {}
       });
 
+      // If it's a full stream (not range request) and file size <= 250MB, cache locally in background
+      const fileSize = latestVersion.sizeBytes || 0;
+      if (!range && fileSize > 0 && fileSize <= 250 * 1024 * 1024) {
+        const tmpPath = `${cachedFilePath}.tmp`;
+        const writeStream = fs.createWriteStream(tmpPath);
+        let writeError = false;
+
+        writeStream.on('error', () => {
+          writeError = true;
+          try { fs.unlinkSync(tmpPath); } catch {}
+        });
+
+        driveStream.data.on('data', (chunk: Buffer) => {
+          if (!writeError) {
+            writeStream.write(chunk);
+          }
+        });
+
+        driveStream.data.on('end', () => {
+          if (!writeError) {
+            writeStream.end(() => {
+              fs.rename(tmpPath, cachedFilePath, (err) => {
+                if (!err) {
+                  pruneDiskCache();
+                }
+              });
+            });
+          }
+        });
+
+        driveStream.data.on('error', () => {
+          writeError = true;
+          try { writeStream.destroy(); fs.unlinkSync(tmpPath); } catch {}
+        });
+      }
+
       driveStream.data.pipe(res);
     } catch (error: any) {
-      res.status(500).json({ error: error.message });
+      if (!res.headersSent) {
+        res.status(500).json({ error: error.message });
+      }
+    }
+  }
+
+  /**
+   * Serves a web-optimized 2048px WebP preview for instant lightbox rendering.
+   * Keeps payload down from 8MB to ~250KB while retaining brilliant display sharpness.
+   */
+  static async streamPreview(req: Request, res: Response): Promise<void> {
+    try {
+      const userId = req.user!._id;
+      const fileId = req.params.id;
+
+      const file: any = await File.findOne({
+        _id: fileId,
+        userId,
+      }).lean();
+
+      if (!file) {
+        res.status(404).json({ error: 'File not found or access denied' });
+        return;
+      }
+
+      const latestVersion = file.versions?.[file.versions.length - 1];
+      if (!latestVersion) {
+        res.status(404).json({ error: 'No file versions available' });
+        return;
+      }
+
+      let effMime = getEffectiveMimeType(file.filename, file.mimeType);
+      const isImage = effMime.startsWith('image/');
+
+      // If not an image (e.g. video, audio, pdf, raw document), fall back to standard streamFile
+      if (!isImage) {
+        return FileController.streamFile(req, res);
+      }
+
+      const previewEtag = `"${file._id}_${latestVersion.versionNumber}_p2048"`;
+      res.setHeader('ETag', previewEtag);
+      res.setHeader('Cache-Control', 'public, max-age=2592000, s-maxage=2592000, stale-while-revalidate=86400, immutable');
+
+      // 304 Not Modified check for instant browser & Cloudflare edge validation
+      if (req.headers['if-none-match'] === previewEtag) {
+        res.status(304).end();
+        return;
+      }
+
+      const previewFilePath = path.join(CACHE_PREVIEWS_DIR, `${fileId}.webp`);
+
+      // 1. Fast Path: If preview already exists on local SSD disk
+      if (fs.existsSync(previewFilePath)) {
+        try {
+          const stat = fs.statSync(previewFilePath);
+          if (stat.size > 0) {
+            res.setHeader('Content-Type', 'image/webp');
+            res.setHeader('Content-Length', stat.size.toString());
+            res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(path.parse(file.filename).name)}_preview.webp"`);
+            fs.createReadStream(previewFilePath).pipe(res);
+            return;
+          }
+        } catch {}
+      }
+
+      const account: any = await StorageAccount.findOne({
+        _id: latestVersion.storageAccountId,
+        userId,
+      }).lean();
+
+      if (!account) {
+        res.status(404).json({ error: 'Associated storage account not found' });
+        return;
+      }
+
+      const sharp = (await import('sharp')).default;
+
+      // 2. Second Fast Path: If raw file is already cached on local SSD, generate WebP preview directly from local disk
+      const rawCachedFilePath = path.join(CACHE_FILES_DIR, fileId);
+      if (fs.existsSync(rawCachedFilePath) && (!latestVersion.isEncrypted)) {
+        try {
+          const webpBuffer = await sharp(rawCachedFilePath)
+            .rotate()
+            .resize(2048, 2048, { fit: 'inside', withoutEnlargement: true })
+            .webp({ quality: 82, effort: 4 })
+            .toBuffer();
+
+          fs.writeFile(previewFilePath, webpBuffer, () => {
+            pruneDiskCache();
+          });
+
+          res.setHeader('Content-Type', 'image/webp');
+          res.setHeader('Content-Length', webpBuffer.length.toString());
+          res.send(webpBuffer);
+          return;
+        } catch (_localTransErr) {
+          // If local transform fails, continue below
+        }
+      }
+
+      // 3. Third Fast Path: Google Drive high-resolution preview link (=s2048)
+      if (!latestVersion.isEncrypted) {
+        try {
+          const oauth2Client = GoogleDriveService.getOAuth2Client(account);
+          const drive = google.drive({ version: 'v3', auth: oauth2Client });
+          const actualFileId = await GoogleDriveService.resolveDriveFileId(account, latestVersion.providerFileId);
+          if (actualFileId !== latestVersion.providerFileId) {
+            File.updateOne(
+              { _id: file._id, 'versions.versionNumber': latestVersion.versionNumber },
+              { $set: { 'versions.$.providerFileId': actualFileId } }
+            ).exec();
+          }
+
+          const meta = await drive.files.get({
+            fileId: actualFileId,
+            fields: 'id, name, thumbnailLink',
+          });
+
+          const highResThumbLink = meta.data.thumbnailLink
+            ? meta.data.thumbnailLink.replace(/=s\d+$/, '=s2048')
+            : null;
+
+          if (highResThumbLink) {
+            let thumbRes = await fetch(highResThumbLink);
+            if (!thumbRes.ok) {
+              const tokenRes = await oauth2Client.getAccessToken();
+              if (tokenRes.token) {
+                thumbRes = await fetch(highResThumbLink, {
+                  headers: { Authorization: `Bearer ${tokenRes.token}` },
+                });
+              }
+            }
+
+            if (thumbRes.ok) {
+              const driveImgBuf = Buffer.from(await thumbRes.arrayBuffer());
+              const webpBuffer = await sharp(driveImgBuf)
+                .rotate()
+                .webp({ quality: 82, effort: 4 })
+                .toBuffer();
+
+              fs.writeFile(previewFilePath, webpBuffer, () => {
+                pruneDiskCache();
+              });
+
+              res.setHeader('Content-Type', 'image/webp');
+              res.setHeader('Content-Length', webpBuffer.length.toString());
+              res.send(webpBuffer);
+              return;
+            }
+          }
+        } catch (_gdriveThumbErr) {
+          // Continue to fallback
+        }
+      }
+
+      // 4. Fallback: Stream raw file from Google Drive and transform into WebP stream
+      const driveStream = await GoogleDriveService.getFileStream(account, latestVersion.providerFileId);
+      const pipeline = sharp()
+        .rotate()
+        .resize(2048, 2048, { fit: 'inside', withoutEnlargement: true })
+        .webp({ quality: 82, effort: 4 });
+
+      res.setHeader('Content-Type', 'image/webp');
+
+      const tmpPreview = `${previewFilePath}.tmp`;
+      const fileOut = fs.createWriteStream(tmpPreview);
+
+      pipeline.on('error', (_err) => {
+        try { fs.unlinkSync(tmpPreview); } catch {}
+        if (!res.headersSent) {
+          res.status(500).json({ error: 'Failed to generate preview' });
+        }
+      });
+
+      fileOut.on('finish', () => {
+        fs.rename(tmpPreview, previewFilePath, () => {
+          pruneDiskCache();
+        });
+      });
+
+      driveStream.data.pipe(pipeline);
+      pipeline.pipe(fileOut);
+      pipeline.pipe(res);
+    } catch (error: any) {
+      if (!res.headersSent) {
+        res.status(500).json({ error: error.message });
+      }
     }
   }
 
@@ -957,6 +1267,11 @@ export class FileController {
       await File.findByIdAndDelete(file._id);
       await CacheService.invalidateUser(userId.toString());
 
+      const io = getSocketIoInstance();
+      if (io) {
+        io.to(`user:${userId}`).emit('file:deleted', { fileId: file._id });
+      }
+
       res.json({ success: true, message: 'Permanently purged from cloud storage' });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -989,6 +1304,15 @@ export class FileController {
       ]);
 
       await CacheService.invalidateUser(userId.toString());
+
+      const io = getSocketIoInstance();
+      if (io) {
+        io.to(`user:${userId}`).emit('file:restored_all', {
+          restoredFiles: fileResult.modifiedCount,
+          restoredFolders: folderResult.modifiedCount,
+        });
+      }
+
       res.json({
         success: true,
         restoredFiles: fileResult.modifiedCount,
@@ -1134,6 +1458,14 @@ export class FileController {
         { $set: { 'versions.$[].isEncrypted': false } }
       );
       await CacheService.invalidateUser(userId.toString());
+
+      const io = getSocketIoInstance();
+      if (io) {
+        io.to(`user:${userId}`).emit('vault:decrypted_all', {
+          modifiedCount: result.modifiedCount,
+        });
+      }
+
       res.json({ success: true, modifiedCount: result.modifiedCount });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -1371,6 +1703,12 @@ export class FileController {
       }
 
       await CacheService.invalidateUser(userId.toString());
+
+      const io = getSocketIoInstance();
+      if (io) {
+        io.to(`user:${userId}`).emit('folder:renamed', { folder });
+      }
+
       res.json({ success: true, folder });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
