@@ -3,6 +3,8 @@ import { Types } from 'mongoose';
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
+import { File } from '../models/File.js';
+import { Tombstone } from '../models/Tombstone.js';
 import { DeviceFileState } from '../models/DeviceFileState.js';
 import { Device } from '../models/Device.js';
 import { CryptoService } from '../services/crypto.service.js';
@@ -264,48 +266,94 @@ export class ShortcutController {
         sizeBytes
       );
       if (existingDuplicate) {
-        // Link existing file without re-uploading bytes to Google Drive!
-        await StorageEngineService.finalizeUpload({
-          userId: req.user._id,
-          folderId: targetFolderId,
-          filename: originalName,
-          mimeType,
-          sizeBytes,
-          contentHash,
-          storageAccountId: existingDuplicate.versions[0].storageAccountId,
-          providerFileId: existingDuplicate.versions[0].providerFileId,
-          deviceId: req.device.deviceId,
-          deviceAssetId,
-          metadata: thumbnailBase64 ? { thumbnail: thumbnailBase64 } : undefined,
-        });
+        if ((existingDuplicate as any).isTombstone) {
+          // User previously purged this file, but is now syncing it from camera roll — clear tombstone and proceed with fresh upload
+          await Tombstone.deleteOne({ _id: existingDuplicate._id });
+        } else if (existingDuplicate.isTrash) {
+          // File was in Trash (e.g. user deleted a bad/rotated upload), and is now syncing the clean original from phone!
+          // Revive from Trash, update with the phone's auto-rotated upright thumbnail, and restore to active library!
+          await File.updateOne(
+            { _id: existingDuplicate._id },
+            {
+              $set: {
+                isTrash: false,
+                deletedAt: null,
+                ...(thumbnailBase64 ? { 'metadata.thumbnail': thumbnailBase64 } : {}),
+              },
+              $addToSet: { sourceDeviceIds: req.device.deviceId },
+            }
+          );
 
-        // Invalidate user cache & broadcast real-time Socket.IO notification
-        await CacheService.invalidateUser(req.user._id.toString());
-        const io = getSocketIoInstance();
-        if (io) {
-          io.to(`user:${req.user._id}`).emit('file:uploaded', {
-            fileId: existingDuplicate._id,
+          await CacheService.invalidateUser(req.user._id.toString());
+          const io = getSocketIoInstance();
+          if (io) {
+            io.to(`user:${req.user._id}`).emit('file:uploaded', {
+              fileId: existingDuplicate._id,
+              filename: originalName,
+              sizeBytes,
+              isDuplicate: false,
+              thumbnail: thumbnailBase64,
+            });
+            io.to(`user:${req.user._id}`).emit('device:sync_status', {
+              deviceId: req.device.deviceId,
+              status: 'online',
+              currentSyncActivity: `Synced ${originalName}`,
+              lastSeenAt: new Date().toISOString(),
+            });
+          }
+
+          console.log(`[Shortcut Upload REVIVED] Revived trashed ${originalName} with clean phone copy.`);
+          res.json({
+            status: 'success',
+            isDuplicate: false,
+            message: 'Restored from trash with clean orientation',
             filename: originalName,
+          });
+          return;
+        } else {
+          // Active file: Link existing file without re-uploading bytes to Google Drive!
+          await StorageEngineService.finalizeUpload({
+            userId: req.user._id,
+            folderId: targetFolderId,
+            filename: originalName,
+            mimeType,
             sizeBytes,
-            isDuplicate: true,
-            thumbnail: thumbnailBase64,
-          });
-          io.to(`user:${req.user._id}`).emit('device:sync_status', {
+            contentHash,
+            storageAccountId: existingDuplicate.versions[0].storageAccountId,
+            providerFileId: existingDuplicate.versions[0].providerFileId,
             deviceId: req.device.deviceId,
-            status: 'online',
-            currentSyncActivity: `Synced ${originalName}`,
-            lastSeenAt: new Date().toISOString(),
+            deviceAssetId,
+            metadata: thumbnailBase64 ? { thumbnail: thumbnailBase64 } : undefined,
           });
-        }
 
-        console.log(`[Shortcut Upload DUPLICATE] ${originalName} (${contentHash.substring(0, 8)}) already in cloud. Skipped.`);
-        res.json({
-          status: 'success',
-          isDuplicate: true,
-          message: 'Exact duplicate already in cloud. Skipped upload.',
-          fileId: existingDuplicate._id,
-        });
-        return;
+          // Invalidate user cache & broadcast real-time Socket.IO notification
+          await CacheService.invalidateUser(req.user._id.toString());
+          const io = getSocketIoInstance();
+          if (io) {
+            io.to(`user:${req.user._id}`).emit('file:uploaded', {
+              fileId: existingDuplicate._id,
+              filename: originalName,
+              sizeBytes,
+              isDuplicate: true,
+              thumbnail: thumbnailBase64,
+            });
+            io.to(`user:${req.user._id}`).emit('device:sync_status', {
+              deviceId: req.device.deviceId,
+              status: 'online',
+              currentSyncActivity: `Synced ${originalName}`,
+              lastSeenAt: new Date().toISOString(),
+            });
+          }
+
+          console.log(`[Shortcut Upload DUPLICATE] ${originalName} (${contentHash.substring(0, 8)}) already in cloud. Skipped.`);
+          res.json({
+            status: 'success',
+            isDuplicate: true,
+            message: 'Exact duplicate already in cloud. Skipped upload.',
+            fileId: existingDuplicate._id,
+          });
+          return;
+        }
       }
 
       // Fast response for iOS Shortcuts:

@@ -53,17 +53,25 @@ export class FileController {
         sizeBytes
       );
       if (existingDuplicate) {
-        // Instant deduplication: No bytes need to be uploaded to Google Drive!
         const isDeleted = Boolean((existingDuplicate as any).isTrash || (existingDuplicate as any).isTombstone);
-        res.json({
-          isDuplicate: true,
-          isDeletedOnCloud: isDeleted,
-          message: isDeleted
-            ? 'File was deleted from cloud storage. Sync will permanently skip re-uploading!'
-            : 'Exact duplicate already exists in your cloud library. Byte upload skipped!',
-          fileId: existingDuplicate._id,
-        });
-        return;
+        if (!isDeleted) {
+          // File is active in the library! Instant deduplication.
+          res.json({
+            isDuplicate: true,
+            isDeletedOnCloud: false,
+            message: 'Exact duplicate already exists in your cloud library. Byte upload skipped!',
+            fileId: existingDuplicate._id,
+          });
+          return;
+        }
+
+        // If it was in Trash or Tombstone, the user is intentionally uploading it now!
+        // Clear the stale trashed record or tombstone so the fresh upload proceeds cleanly.
+        if ((existingDuplicate as any).isTombstone) {
+          await Tombstone.deleteOne({ _id: existingDuplicate._id });
+        } else if ((existingDuplicate as any).isTrash) {
+          await File.deleteOne({ _id: existingDuplicate._id });
+        }
       }
 
       // Select target Google Drive account with sufficient room
@@ -756,16 +764,10 @@ export class FileController {
           }
           if (thumbRes.ok) {
             let buffer = Buffer.from(await thumbRes.arrayBuffer());
-            const rotation = (meta.data as any).imageMediaMetadata?.rotation;
             try {
               const sharp = (await import('sharp')).default;
-              let s = sharp(buffer);
-              if (typeof rotation === 'number' && rotation !== 0) {
-                s = s.rotate(rotation);
-              } else {
-                s = s.rotate(); // auto-rotate based on EXIF if present
-              }
-              buffer = await s.jpeg({ quality: 85 }).toBuffer();
+              // Google Drive's thumbnail is already pre-oriented. Only auto-orient if EXIF is embedded:
+              buffer = await sharp(buffer).rotate().jpeg({ quality: 85 }).toBuffer();
             } catch (_err) {}
 
             const dataUri = `data:image/jpeg;base64,${buffer.toString('base64')}`;
