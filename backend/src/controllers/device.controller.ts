@@ -166,7 +166,7 @@ export class DeviceController {
       if (logMessage) {
         pushOps.syncLogs = {
           $each: [{ timestamp: new Date(), message: logMessage }],
-          $slice: -20, // Keep last 20 logs
+          $slice: -100, // Keep last 100 logs
         };
       }
 
@@ -279,6 +279,28 @@ export class DeviceController {
       }
 
       res.json({ success: true, message: `Device ${device.deviceName} access has been revoked.` });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+
+  /**
+   * Clears historical sync logs for a specific device.
+   */
+  static async clearDeviceLogs(req: Request, res: Response): Promise<void> {
+    try {
+      const device = await Device.findOneAndUpdate(
+        { _id: req.params.id, userId: req.user!._id },
+        { $set: { syncLogs: [], currentSyncActivity: '' } },
+        { new: true }
+      ).select('-apiKeyHash');
+
+      if (!device) {
+        res.status(404).json({ error: 'Device not found or access denied' });
+        return;
+      }
+
+      res.json({ success: true, message: 'Logs cleared successfully', device });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }

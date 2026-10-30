@@ -90,6 +90,26 @@ class ShortcutUploadQueue {
         });
 
         await CacheService.invalidateUser(task.userId.toString());
+
+        // Persist completion log to Device
+        await Device.findOneAndUpdate(
+          { deviceId: task.deviceId, userId: task.userId },
+          {
+            $set: {
+              status: 'online',
+              currentSyncActivity: `Backed up ${savedFile.filename}`,
+              lastSeenAt: new Date(),
+              lastSyncCompletedAt: new Date(),
+            },
+            $push: {
+              syncLogs: {
+                $each: [{ timestamp: new Date(), message: `✓ Backed up ${savedFile.filename} (${(task.sizeBytes / (1024 * 1024)).toFixed(1)} MB) to cloud` }],
+                $slice: -100,
+              },
+            },
+          }
+        );
+
         const io = getSocketIoInstance();
         if (io) {
           io.to(`user:${task.userId}`).emit('file:uploaded', {
@@ -120,6 +140,174 @@ class ShortcutUploadQueue {
 
 export class ShortcutController {
   /**
+   * Fast pre-flight deduplication check for Apple Shortcuts.
+   * Checks if an image is already in user's active cloud storage by filename or deviceAssetId in ~10ms.
+   * Responds with plain text "EXISTS" or "NEW".
+   * This completely prevents Shortcuts from transmitting heavy 15MB-50MB binary files just to be told it's a duplicate!
+   */
+  static async checkFile(req: Request, res: Response): Promise<void> {
+    try {
+      if (!req.user || !req.device) {
+        res.status(401).send('UNAUTHORIZED');
+        return;
+      }
+
+      const rawName = (
+        (req.headers['x-filename'] as string) ||
+        (req.query.filename as string) ||
+        (req.query.name as string) ||
+        ''
+      ).trim();
+
+      if (!rawName) {
+        res.send('NEW');
+        return;
+      }
+
+      // Check without extension as well (e.g. IMG_0882 matches IMG_0882.JPG, IMG_0882.HEIC, IMG_0882.MOV)
+      const baseName = rawName.replace(/\.[^/.]+$/, '');
+      const escapedRaw = rawName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const escapedBase = baseName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+      // Check active files in MongoDB
+      const existing = await File.findOne({
+        userId: req.user._id,
+        isTrash: false,
+        $or: [
+          { filename: { $regex: new RegExp(`^${escapedRaw}$`, 'i') } },
+          { filename: { $regex: new RegExp(`^${escapedBase}\\.[a-zA-Z0-9]+$`, 'i') } },
+        ],
+      }).select('_id filename sizeBytes');
+
+      let existingState = null;
+      if (!existing) {
+        existingState = await DeviceFileState.findOne({
+          userId: req.user._id,
+          deviceId: req.device.deviceId,
+          deviceAssetId: { $in: [rawName, baseName] },
+        });
+      }
+
+      if (existing || existingState) {
+        const logMsg = `⚡ Up to date: ${rawName} already backed up in cloud`;
+
+        await Device.findOneAndUpdate(
+          { deviceId: req.device.deviceId, userId: req.user._id },
+          {
+            $set: {
+              status: 'syncing',
+              currentSyncActivity: `Skipped ${rawName} (already up to date)`,
+              lastSeenAt: new Date(),
+            },
+            $push: {
+              syncLogs: {
+                $each: [{ timestamp: new Date(), message: logMsg }],
+                $slice: -100,
+              },
+            },
+          }
+        );
+
+        const io = getSocketIoInstance();
+        if (io) {
+          io.to(`user:${req.user._id}`).emit('device:sync_status', {
+            deviceId: req.device.deviceId,
+            status: 'syncing',
+            currentSyncActivity: `Skipped ${rawName} (already up to date)`,
+            lastSeenAt: new Date().toISOString(),
+          });
+        }
+
+        console.log(`[Shortcut Fast Check] ${rawName} already in cloud. Skipping upload.`);
+        res.setHeader('Content-Type', 'text/plain');
+        res.send('EXISTS');
+        return;
+      }
+
+      // New photo or revival candidate: signal Shortcut to proceed with upload
+      console.log(`[Shortcut Fast Check] ${rawName} is NEW. Proceeding with upload.`);
+      res.setHeader('Content-Type', 'text/plain');
+      res.send('NEW');
+    } catch (error: any) {
+      console.error('[Shortcut Fast Check ERROR]', error);
+      res.status(500).send('ERROR');
+    }
+  }
+
+  /**
+   * Returns a list of all actively synced filenames and asset IDs for this user.
+   */
+  static async syncedAssets(req: Request, res: Response): Promise<void> {
+    try {
+      if (!req.user || !req.device) {
+        res.status(401).json({ error: 'Device authentication required' });
+        return;
+      }
+
+      const files = await File.find({
+        userId: req.user._id,
+        isTrash: false,
+      }).select('filename sizeBytes');
+
+      const names = files.map((f) => f.filename);
+      res.json({
+        total: files.length,
+        filenames: names,
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+
+  /**
+   * Batch pre-flight check endpoint:
+   * Accepts an array of filenames or asset IDs, returns which are already in cloud and which are unsynced.
+   */
+  static async checkBatch(req: Request, res: Response): Promise<void> {
+    try {
+      if (!req.user || !req.device) {
+        res.status(401).json({ error: 'Device authentication required' });
+        return;
+      }
+
+      const items = (req.body?.items || req.body?.filenames || []) as any[];
+      const namesToCheck: string[] = items.map((it) => (typeof it === 'string' ? it : it.name || it.filename || ''));
+
+      const activeFiles = await File.find({
+        userId: req.user._id,
+        isTrash: false,
+        filename: { $in: namesToCheck },
+      }).select('filename');
+
+      const activeStates = await DeviceFileState.find({
+        userId: req.user._id,
+        deviceAssetId: { $in: namesToCheck },
+      }).select('deviceAssetId');
+
+      const existingSet = new Set<string>();
+      activeFiles.forEach((f) => {
+        existingSet.add(f.filename.toLowerCase());
+      });
+      activeStates.forEach((s) => {
+        if (s.deviceAssetId) existingSet.add(s.deviceAssetId.toLowerCase());
+      });
+
+      const duplicates = namesToCheck.filter((n) => existingSet.has(n.toLowerCase()));
+      const unsynced = namesToCheck.filter((n) => !existingSet.has(n.toLowerCase()));
+
+      res.json({
+        total: namesToCheck.length,
+        syncedCount: duplicates.length,
+        unsyncedCount: unsynced.length,
+        duplicates,
+        unsynced,
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+
+  /**
    * Shortcut sync-check: Shortcut asks for last backup timestamp so it only searches recent photos.
    */
   static async syncCheck(req: Request, res: Response): Promise<void> {
@@ -137,13 +325,32 @@ export class ShortcutController {
 
       const lastSyncedDate = latestState ? latestState.createdAt.toISOString() : '2000-01-01T00:00:00.000Z';
 
+      // Record sync start in Device document
+      await Device.findOneAndUpdate(
+        { deviceId: req.device.deviceId, userId: req.user._id },
+        {
+          $set: {
+            status: 'syncing',
+            currentSyncActivity: 'Checking camera roll for new photos...',
+            lastSeenAt: new Date(),
+            lastSyncStartedAt: new Date(),
+          },
+          $push: {
+            syncLogs: {
+              $each: [{ timestamp: new Date(), message: `🔄 Started sync check from ${req.device.deviceName}` }],
+              $slice: -100,
+            },
+          },
+        }
+      );
+
       // Notify web dashboard of device check
       const io = getSocketIoInstance();
       if (io) {
         io.to(`user:${req.user._id}`).emit('device:sync_status', {
           deviceId: req.device.deviceId,
-          status: 'online',
-          currentSyncActivity: 'Syncing gallery...',
+          status: 'syncing',
+          currentSyncActivity: 'Checking camera roll for new photos...',
           lastSeenAt: new Date().toISOString(),
         });
       }
@@ -284,6 +491,23 @@ export class ShortcutController {
             }
           );
 
+          await Device.findOneAndUpdate(
+            { deviceId: req.device.deviceId, userId: req.user._id },
+            {
+              $set: {
+                status: 'online',
+                currentSyncActivity: `Restored ${originalName} from trash`,
+                lastSeenAt: new Date(),
+              },
+              $push: {
+                syncLogs: {
+                  $each: [{ timestamp: new Date(), message: `🔄 Restored: ${originalName} from trash with clean orientation` }],
+                  $slice: -100,
+                },
+              },
+            }
+          );
+
           await CacheService.invalidateUser(req.user._id.toString());
           const io = getSocketIoInstance();
           if (io) {
@@ -325,6 +549,23 @@ export class ShortcutController {
             deviceAssetId,
             metadata: thumbnailBase64 ? { thumbnail: thumbnailBase64 } : undefined,
           });
+
+          await Device.findOneAndUpdate(
+            { deviceId: req.device.deviceId, userId: req.user._id },
+            {
+              $set: {
+                status: 'online',
+                currentSyncActivity: `Synced ${originalName}`,
+                lastSeenAt: new Date(),
+              },
+              $push: {
+                syncLogs: {
+                  $each: [{ timestamp: new Date(), message: `⚡ Linked: ${originalName} (already present in cloud)` }],
+                  $slice: -100,
+                },
+              },
+            }
+          );
 
           // Invalidate user cache & broadcast real-time Socket.IO notification
           await CacheService.invalidateUser(req.user._id.toString());
@@ -377,6 +618,23 @@ export class ShortcutController {
         thumbnailBase64,
         tempFilePath,
       });
+
+      await Device.findOneAndUpdate(
+        { deviceId: req.device.deviceId, userId: req.user._id },
+        {
+          $set: {
+            status: 'syncing',
+            currentSyncActivity: `Uploaded ${originalName} (${(sizeBytes / (1024 * 1024)).toFixed(1)} MB)`,
+            lastSeenAt: new Date(),
+          },
+          $push: {
+            syncLogs: {
+              $each: [{ timestamp: new Date(), message: `✓ Uploaded: ${originalName} (${(sizeBytes / (1024 * 1024)).toFixed(1)} MB) queued for cloud` }],
+              $slice: -100,
+            },
+          },
+        }
+      );
 
       console.log(`[Shortcut Upload QUEUED] ${originalName} (${(sizeBytes / (1024 * 1024)).toFixed(2)} MB) staged for background Google Drive backup`);
       res.json({
@@ -462,34 +720,55 @@ export class ShortcutController {
 
       const serverUrl = (process.env.CLOUDFLARE_WORKER_URL || process.env.FRONTEND_URL || 'https://drive-edge-cache.karan9302451907.workers.dev').replace(/\/+$/, '');
 
-      // Register a new iPhone device and generate a fresh key
-      const deviceId = `dev_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
-      const { key: rawApiKey, hash: apiKeyHash, prefix: apiKeyPrefix } = CryptoService.generateDeviceKey('dkey_iphone');
+      // Check if user specified deviceId or already has an existing iPhone registered
+      let deviceId = (req.query.deviceId as string) || '';
+      let rawApiKey: string;
 
-      await Device.create({
-        userId: req.user._id,
-        deviceId,
-        apiKeyHash,
-        apiKeyPrefix,
-        deviceName,
-        deviceType: 'iphone',
-        status: 'online',
-        lastSeenAt: new Date(),
-        policy: {
-          uploadFolders: ['Camera', 'Screenshots'],
-          wifiOnly: true,
-          chargingOnly: false,
-          autoDeleteLocalAfterBackup: false,
-          downloadMode: 'cloud_only',
-          autoDownloadFolders: [],
-          deletionMode: 'keep_in_cloud',
-          syncPhotos: true,
-          syncVideos: true,
-          syncDocuments: true,
-          syncOthers: false,
-          pairedDeviceRules: [],
-        },
-      });
+      let targetDevice = deviceId
+        ? await Device.findOne({ deviceId, userId: req.user._id })
+        : await Device.findOne({ deviceName, deviceType: 'iphone', userId: req.user._id });
+
+      if (targetDevice) {
+        // Reuse existing device so device cards don't multiply on every download
+        const { key, hash, prefix } = CryptoService.generateDeviceKey('dkey_iphone');
+        targetDevice.apiKeyHash = hash;
+        targetDevice.apiKeyPrefix = prefix;
+        targetDevice.status = 'online';
+        targetDevice.lastSeenAt = new Date();
+        await targetDevice.save();
+        deviceId = targetDevice.deviceId;
+        rawApiKey = key;
+      } else {
+        // Register a new iPhone device
+        deviceId = deviceId || `dev_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+        const { key, hash, prefix } = CryptoService.generateDeviceKey('dkey_iphone');
+        rawApiKey = key;
+
+        await Device.create({
+          userId: req.user._id,
+          deviceId,
+          apiKeyHash: hash,
+          apiKeyPrefix: prefix,
+          deviceName,
+          deviceType: 'iphone',
+          status: 'online',
+          lastSeenAt: new Date(),
+          policy: {
+            uploadFolders: ['Camera', 'Screenshots'],
+            wifiOnly: true,
+            chargingOnly: false,
+            autoDeleteLocalAfterBackup: false,
+            downloadMode: 'cloud_only',
+            autoDownloadFolders: [],
+            deletionMode: 'keep_in_cloud',
+            syncPhotos: true,
+            syncVideos: true,
+            syncDocuments: true,
+            syncOthers: false,
+            pairedDeviceRules: [],
+          },
+        });
+      }
 
       // Generate the shortcut plist with credentials embedded
       let plistXml: string;

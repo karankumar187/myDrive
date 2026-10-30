@@ -451,6 +451,15 @@ export const api = {
     return res.json();
   },
 
+  async clearDeviceLogs(id: string): Promise<any> {
+    const res = await fetchWithLoading(`${API_BASE}/devices/${id}/logs`, {
+      method: 'DELETE',
+      headers: getHeaders(),
+    });
+    if (!res.ok) throw new Error('Failed to clear device logs');
+    return res.json();
+  },
+
   /**
    * Returns a URL that, when opened on iPhone, auto-downloads and imports a
    * pre-configured .shortcut file into the iOS Shortcuts app.

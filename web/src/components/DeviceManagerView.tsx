@@ -20,6 +20,14 @@ import {
   Clock,
   ChevronDown,
   Zap,
+  CheckCircle2,
+  AlertCircle,
+  Key,
+  Copy,
+  Check,
+  Search,
+  ChevronRight,
+  ShieldCheck,
 } from 'lucide-react';
 import { api } from '../services/api.js';
 import { formatBytes } from '../utils/format.js';
@@ -46,6 +54,10 @@ export const DeviceManagerView: React.FC<Props> = ({
   const [viewingLogsDevice, setViewingLogsDevice] = useState<DeviceItem | null>(selectedLogDevice || null);
   const [folders, setFolders] = useState<FolderItem[]>([]);
   const [foldersLoading, setFoldersLoading] = useState<boolean>(false);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [logFilter, setLogFilter] = useState<'all' | 'uploaded' | 'dedup' | 'errors'>('all');
+  const [logSearch, setLogSearch] = useState<string>('');
+  const [isClearingLogs, setIsClearingLogs] = useState<boolean>(false);
 
   // Sync external log modal trigger
   useEffect(() => {
@@ -53,6 +65,56 @@ export const DeviceManagerView: React.FC<Props> = ({
       setViewingLogsDevice(selectedLogDevice);
     }
   }, [selectedLogDevice]);
+
+  // Keep viewingLogsDevice synced with live devices state
+  useEffect(() => {
+    if (viewingLogsDevice) {
+      const updated = devices.find((d) => d._id === viewingLogsDevice._id);
+      if (updated) {
+        setViewingLogsDevice(updated);
+      }
+    }
+  }, [devices]);
+
+  const handleCopyText = (text: string, id: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedKey(id);
+    setTimeout(() => setCopiedKey(null), 2000);
+  };
+
+  const handleClearLogs = async (deviceDocId: string) => {
+    if (!confirm('Are you sure you want to clear sync logs for this device?')) return;
+    try {
+      setIsClearingLogs(true);
+      await api.clearDeviceLogs(deviceDocId);
+      onRefresh();
+    } catch (err: any) {
+      alert(`Failed to clear logs: ${err.message}`);
+    } finally {
+      setIsClearingLogs(false);
+    }
+  };
+
+  const getLogIcon = (msg: string) => {
+    const lower = msg.toLowerCase();
+    if (lower.includes('✓') || lower.includes('backed up') || lower.includes('uploaded') || lower.includes('saved')) {
+      return <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />;
+    }
+    if (lower.includes('⚡') || lower.includes('up to date') || lower.includes('duplicate') || lower.includes('skipped') || lower.includes('linked')) {
+      return <Zap className="w-3.5 h-3.5 text-purple-400 flex-shrink-0" />;
+    }
+    if (lower.includes('🔄') || lower.includes('restored') || lower.includes('revived')) {
+      return <RefreshCw className="w-3.5 h-3.5 text-sky-400 flex-shrink-0" />;
+    }
+    if (lower.includes('error') || lower.includes('failed') || lower.includes('interrupted')) {
+      return <AlertCircle className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />;
+    }
+    return <Clock className="w-3.5 h-3.5 text-zinc-400 flex-shrink-0" />;
+  };
+
+  const cleanLogMessage = (msg: string) => {
+    return msg.replace(/^[\s\u200B]*[✓⚡🔄⚠️☁️📸]\s*/, '').trim();
+  };
 
   // Load all user folders for destination folder selection
   useEffect(() => {
@@ -221,12 +283,41 @@ export const DeviceManagerView: React.FC<Props> = ({
                   <div className="p-3 bg-[#181820] border border-[#272733] rounded-2xl group-hover:border-purple-500/40 transition">
                     {getDeviceIcon(device.deviceType)}
                   </div>
-                  <div className="space-y-0.5">
-                    <h3 className="font-bold text-white text-sm">{device.deviceName}</h3>
-                    <p className="text-[11px] text-zinc-500">
-                      ID: <code className="text-zinc-400">{device.deviceId}</code> • Last seen:{' '}
-                      {new Date(device.lastSeenAt).toLocaleTimeString()}
-                    </p>
+                  <div className="space-y-1">
+                    <h3 className="font-bold text-white text-sm flex items-center space-x-2">
+                      <span>{device.deviceName}</span>
+                      {device.osVersion && (
+                        <span className="text-[10px] text-zinc-500 font-normal">({device.osVersion})</span>
+                      )}
+                    </h3>
+                    <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-zinc-400">
+                      <div className="flex items-center space-x-1 bg-[#171722] px-2 py-0.5 rounded-md border border-[#272738]">
+                        <span className="text-zinc-500 text-[10px]">ID:</span>
+                        <code className="text-zinc-300 font-mono text-[10px]">{device.deviceId}</code>
+                        <button
+                          onClick={() => handleCopyText(device.deviceId, `dev_${device._id}`)}
+                          title="Copy Device ID"
+                          className="ml-1 text-zinc-500 hover:text-white transition"
+                        >
+                          {copiedKey === `dev_${device._id}` ? (
+                            <Check className="w-3 h-3 text-emerald-400" />
+                          ) : (
+                            <Copy className="w-3 h-3" />
+                          )}
+                        </button>
+                      </div>
+
+                      {device.apiKeyPrefix && (
+                        <div className="flex items-center space-x-1 bg-[#171722] px-2 py-0.5 rounded-md border border-[#272738]" title="Device Pairing Key Prefix">
+                          <Key className="w-3 h-3 text-amber-400/80 flex-shrink-0" />
+                          <code className="text-amber-300/80 font-mono text-[10px]">{device.apiKeyPrefix}••••</code>
+                        </div>
+                      )}
+
+                      <span className="text-[10px] text-zinc-500 ml-0.5">
+                        • Last seen: {new Date(device.lastSeenAt).toLocaleTimeString()}
+                      </span>
+                    </div>
                   </div>
                 </div>
 
@@ -252,13 +343,68 @@ export const DeviceManagerView: React.FC<Props> = ({
                 </span>
               </div>
 
-              {/* Live Sync Activity Pill if Active */}
-              {device.currentSyncActivity && (
-                <div className="flex items-center space-x-2 text-xs text-purple-300 font-medium bg-purple-950/30 px-3 py-1.5 rounded-xl border border-purple-800/40 shadow-sm">
-                  <RefreshCw className="w-3.5 h-3.5 animate-spin text-purple-400 flex-shrink-0" />
-                  <span className="truncate">{device.currentSyncActivity}</span>
+              {/* Real-time Activity & Sync Logs Console directly on Device Card */}
+              <div className="bg-[#14141c] border border-[#22222d] rounded-2xl p-3.5 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2">
+                    <Activity className="w-3.5 h-3.5 text-purple-400" />
+                    <span className="text-xs font-bold text-zinc-200">Sync Activity &amp; Logs</span>
+                    {device.syncLogs && device.syncLogs.length > 0 && (
+                      <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-purple-950/60 text-purple-300 border border-purple-800/40 font-mono">
+                        {device.syncLogs.length}
+                      </span>
+                    )}
+                  </div>
+
+                  <button
+                    onClick={() => setViewingLogsDevice(device)}
+                    className="text-[11px] text-purple-400 hover:text-purple-300 font-semibold transition flex items-center space-x-0.5"
+                  >
+                    <span>View All Logs</span>
+                    <ChevronRight className="w-3 h-3" />
+                  </button>
                 </div>
-              )}
+
+                {/* Live Activity Status Banner */}
+                <div
+                  className={`flex items-center space-x-2 px-3 py-1.5 rounded-xl border text-xs font-medium ${
+                    device.status === 'syncing'
+                      ? 'bg-purple-950/40 text-purple-200 border-purple-700/50 shadow-glow-purple'
+                      : 'bg-[#181824] text-zinc-300 border-[#252538]'
+                  }`}
+                >
+                  {device.status === 'syncing' ? (
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin text-purple-400 flex-shrink-0" />
+                  ) : (
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
+                  )}
+                  <span className="truncate">
+                    {device.currentSyncActivity || 'Idle (Camera roll synced and up to date)'}
+                  </span>
+                </div>
+
+                {/* Inline 3-4 Recent Logs */}
+                {device.syncLogs && device.syncLogs.length > 0 ? (
+                  <div className="space-y-1.5 font-mono text-[11px]">
+                    {[...device.syncLogs].slice(-3).reverse().map((log, idx) => (
+                      <div
+                        key={idx}
+                        className="flex items-center space-x-2 px-2.5 py-1.5 rounded-lg bg-[#191924]/80 border border-[#232333] text-zinc-300 min-w-0"
+                      >
+                        <span className="text-[9px] text-zinc-500 font-sans flex-shrink-0">
+                          {new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                        </span>
+                        {getLogIcon(log.message)}
+                        <span className="truncate text-zinc-200 font-sans text-xs">{cleanLogMessage(log.message)}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-[11px] text-zinc-500 italic px-1">
+                    No sync logs recorded yet. Events will stream here live.
+                  </p>
+                )}
+              </div>
 
               {/* Policy Controls */}
               <div className="bg-[#16161d] border border-[#22222c] rounded-2xl p-4 space-y-3 text-xs">
@@ -620,11 +766,104 @@ export const DeviceManagerView: React.FC<Props> = ({
                 </div>
               </div>
 
-              {/* Live Logs List */}
-              <div className="space-y-2">
-                <div className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider px-1">
-                  Device Sync Log History
+              {/* Live Logs List with Search, Filter Tabs & Actions */}
+              <div className="space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 px-1">
+                  <div className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider flex items-center space-x-1.5">
+                    <span>Full Activity &amp; Deduplication History</span>
+                    <span className="text-zinc-500 font-mono">({(viewingLogsDevice.syncLogs || []).length})</span>
+                  </div>
+
+                  <div className="flex items-center space-x-2">
+                    {viewingLogsDevice.syncLogs && viewingLogsDevice.syncLogs.length > 0 && (
+                      <>
+                        <button
+                          onClick={() => {
+                            const text = viewingLogsDevice.syncLogs?.map((l) => `[${new Date(l.timestamp).toISOString()}] ${l.message}`).join('\n') || '';
+                            handleCopyText(text, 'all_logs');
+                          }}
+                          className="flex items-center space-x-1 text-[11px] text-zinc-400 hover:text-white px-2.5 py-1 rounded-lg bg-[#181824] border border-[#262638] transition"
+                        >
+                          {copiedKey === 'all_logs' ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                          <span>{copiedKey === 'all_logs' ? 'Copied' : 'Copy All'}</span>
+                        </button>
+
+                        <button
+                          onClick={() => handleClearLogs(viewingLogsDevice._id)}
+                          disabled={isClearingLogs}
+                          className="flex items-center space-x-1 text-[11px] text-red-400/80 hover:text-red-300 px-2.5 py-1 rounded-lg bg-red-950/20 border border-red-900/40 transition disabled:opacity-50"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                          <span>Clear Logs</span>
+                        </button>
+                      </>
+                    )}
+                  </div>
                 </div>
+
+                {/* Filter Tabs & Search Bar */}
+                {viewingLogsDevice.syncLogs && viewingLogsDevice.syncLogs.length > 0 && (
+                  <div className="space-y-2">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <button
+                        onClick={() => setLogFilter('all')}
+                        className={`px-3 py-1 rounded-lg text-xs font-semibold transition ${
+                          logFilter === 'all'
+                            ? 'bg-purple-600 text-white shadow-glow-purple'
+                            : 'bg-[#151520] text-zinc-400 hover:text-white border border-[#232332]'
+                        }`}
+                      >
+                        All ({(viewingLogsDevice.syncLogs || []).length})
+                      </button>
+                      <button
+                        onClick={() => setLogFilter('uploaded')}
+                        className={`flex items-center space-x-1 px-3 py-1 rounded-lg text-xs font-semibold transition ${
+                          logFilter === 'uploaded'
+                            ? 'bg-emerald-600 text-white shadow-[0_0_10px_#10b981]'
+                            : 'bg-[#151520] text-zinc-400 hover:text-emerald-300 border border-[#232332]'
+                        }`}
+                      >
+                        <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                        <span>Uploaded</span>
+                      </button>
+                      <button
+                        onClick={() => setLogFilter('dedup')}
+                        className={`flex items-center space-x-1 px-3 py-1 rounded-lg text-xs font-semibold transition ${
+                          logFilter === 'dedup'
+                            ? 'bg-purple-700 text-white shadow-glow-purple'
+                            : 'bg-[#151520] text-zinc-400 hover:text-purple-300 border border-[#232332]'
+                        }`}
+                      >
+                        <Zap className="w-3 h-3 text-purple-400" />
+                        <span>Up-to-Date (Dedup)</span>
+                      </button>
+                      <button
+                        onClick={() => setLogFilter('errors')}
+                        className={`flex items-center space-x-1 px-3 py-1 rounded-lg text-xs font-semibold transition ${
+                          logFilter === 'errors'
+                            ? 'bg-red-600 text-white shadow-[0_0_10px_#ef4444]'
+                            : 'bg-[#151520] text-zinc-400 hover:text-red-300 border border-[#232332]'
+                        }`}
+                      >
+                        <AlertCircle className="w-3 h-3 text-red-400" />
+                        <span>Issues</span>
+                      </button>
+                    </div>
+
+                    <div className="relative">
+                      <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" />
+                      <input
+                        type="text"
+                        value={logSearch}
+                        onChange={(e) => setLogSearch(e.target.value)}
+                        placeholder="Search logs by filename or keyword..."
+                        className="w-full bg-[#111118] border border-[#232334] focus:border-purple-500 rounded-xl pl-9 pr-3 py-1.5 text-xs text-white placeholder-zinc-500 outline-none transition"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* Log entries */}
                 {(!viewingLogsDevice.syncLogs || viewingLogsDevice.syncLogs.length === 0) ? (
                   <div className="p-8 text-center text-zinc-500 bg-[#14141d] rounded-2xl border border-[#22222e]">
                     <Activity className="w-8 h-8 mx-auto text-zinc-600 mb-2" />
@@ -632,18 +871,31 @@ export const DeviceManagerView: React.FC<Props> = ({
                     <p className="text-[11px] text-zinc-600 mt-0.5">Logs will stream here in real time as the device syncs.</p>
                   </div>
                 ) : (
-                  <div className="space-y-1.5 font-mono text-xs max-h-64 overflow-y-auto pr-1">
-                    {[...viewingLogsDevice.syncLogs].reverse().map((entry, i) => (
-                      <div
-                        key={i}
-                        className="bg-[#14141e] border border-[#232332] p-2.5 rounded-xl flex items-start space-x-2.5 text-zinc-300"
-                      >
-                        <span className="text-purple-400 text-[10px] flex-shrink-0 mt-0.5">
-                          {new Date(entry.timestamp).toLocaleTimeString()}
-                        </span>
-                        <span className="text-xs text-zinc-200 break-words">{entry.message}</span>
-                      </div>
-                    ))}
+                  <div className="space-y-1.5 font-mono text-xs max-h-72 overflow-y-auto pr-1">
+                    {[...viewingLogsDevice.syncLogs]
+                      .reverse()
+                      .filter((entry) => {
+                        const m = entry.message.toLowerCase();
+                        if (logFilter === 'uploaded' && !(m.includes('✓') || m.includes('backed up') || m.includes('uploaded') || m.includes('saved'))) return false;
+                        if (logFilter === 'dedup' && !(m.includes('⚡') || m.includes('up to date') || m.includes('duplicate') || m.includes('skipped') || m.includes('linked'))) return false;
+                        if (logFilter === 'errors' && !(m.includes('error') || m.includes('failed') || m.includes('interrupted'))) return false;
+                        if (logSearch.trim()) {
+                          return m.includes(logSearch.toLowerCase().trim());
+                        }
+                        return true;
+                      })
+                      .map((entry, i) => (
+                        <div
+                          key={i}
+                          className="bg-[#14141e] border border-[#232332] p-2.5 rounded-xl flex items-start space-x-2.5 text-zinc-300 hover:border-purple-500/30 transition"
+                        >
+                          <span className="text-purple-400 text-[10px] font-sans flex-shrink-0 mt-0.5">
+                            {new Date(entry.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                          </span>
+                          {getLogIcon(entry.message)}
+                          <span className="text-xs text-zinc-200 break-words flex-1 font-sans">{cleanLogMessage(entry.message)}</span>
+                        </div>
+                      ))}
                   </div>
                 )}
               </div>

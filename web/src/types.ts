@@ -96,8 +96,11 @@ export interface PairedDeviceRule {
 export interface DeviceItem {
   _id: string;
   deviceId: string;
+  apiKeyPrefix?: string;
   deviceName: string;
   deviceType: 'android' | 'iphone' | 'web' | 'desktop';
+  osVersion?: string;
+  appVersion?: string;
   status: 'online' | 'offline' | 'syncing';
   lastSeenAt: string;
   currentSyncActivity?: string;
