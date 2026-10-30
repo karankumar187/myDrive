@@ -256,8 +256,13 @@ export class ShortcutController {
         }
       }
 
-      // Check if duplicate already exists
-      const existingDuplicate = await StorageEngineService.findExistingDuplicate(req.user._id, contentHash);
+      // Check if duplicate already exists (by cryptographic contentHash, or filename + sizeBytes)
+      const existingDuplicate = await StorageEngineService.findExistingDuplicate(
+        req.user._id,
+        contentHash,
+        originalName,
+        sizeBytes
+      );
       if (existingDuplicate) {
         // Link existing file without re-uploading bytes to Google Drive!
         await StorageEngineService.finalizeUpload({

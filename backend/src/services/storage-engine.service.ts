@@ -163,12 +163,13 @@ export class StorageEngineService {
       if (trashedByHash) return trashedByHash;
     }
 
-    // 3. Robust fallback: filename + sizeBytes matching!
+    // 3. Robust fallback: case-insensitive filename + sizeBytes matching!
     if (filename && typeof sizeBytes === 'number' && sizeBytes > 0) {
       const cleanName = filename.trim();
+      const escapedName = cleanName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const byNameAndSize = await File.findOne({
         userId,
-        filename: cleanName,
+        filename: { $regex: new RegExp(`^${escapedName}$`, 'i') },
         sizeBytes,
         isTrash: false,
       });
@@ -176,7 +177,7 @@ export class StorageEngineService {
 
       const trashedByNameAndSize = await File.findOne({
         userId,
-        filename: cleanName,
+        filename: { $regex: new RegExp(`^${escapedName}$`, 'i') },
         sizeBytes,
         isTrash: true,
       });
