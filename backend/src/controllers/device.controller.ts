@@ -163,10 +163,33 @@ export class DeviceController {
       }
 
       const pushOps: any = {};
-      if (logMessage) {
+      if (req.body.logEntry) {
         pushOps.syncLogs = {
-          $each: [{ timestamp: new Date(), message: logMessage }],
-          $slice: -100, // Keep last 100 logs
+          $each: [
+            {
+              timestamp: new Date(),
+              message: req.body.logEntry.message,
+              level: req.body.logEntry.level || 'info',
+              filename: req.body.logEntry.filename || null,
+              sizeBytes: req.body.logEntry.sizeBytes || null,
+              details: req.body.logEntry.details || null,
+            },
+          ],
+          $slice: -100,
+        };
+      } else if (logMessage) {
+        pushOps.syncLogs = {
+          $each: [
+            {
+              timestamp: new Date(),
+              message: logMessage,
+              level: req.body.level || 'info',
+              filename: req.body.filename || null,
+              sizeBytes: req.body.sizeBytes || null,
+              details: req.body.details || null,
+            },
+          ],
+          $slice: -100,
         };
       }
 

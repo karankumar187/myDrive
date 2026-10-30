@@ -93,6 +93,15 @@ export interface PairedDeviceRule {
   autoDownloadToGallery: boolean;
 }
 
+export interface SyncLogEntry {
+  timestamp: string;
+  message: string;
+  level?: 'info' | 'processing' | 'uploaded' | 'duplicate' | 'revived' | 'error';
+  filename?: string | null;
+  sizeBytes?: number | null;
+  details?: string | null;
+}
+
 export interface DeviceItem {
   _id: string;
   deviceId: string;
@@ -104,7 +113,7 @@ export interface DeviceItem {
   status: 'online' | 'offline' | 'syncing';
   lastSeenAt: string;
   currentSyncActivity?: string;
-  syncLogs?: { timestamp: string; message: string }[];
+  syncLogs?: SyncLogEntry[];
   lastSyncStartedAt?: string;
   lastSyncCompletedAt?: string;
   policy: {

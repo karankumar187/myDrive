@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { DeviceItem, FileItem, FolderItem } from '../types.js';
+import { DeviceItem, FileItem, FolderItem, SyncLogEntry } from '../types.js';
 import {
   Smartphone,
   Apple,
@@ -55,7 +55,7 @@ export const DeviceManagerView: React.FC<Props> = ({
   const [folders, setFolders] = useState<FolderItem[]>([]);
   const [foldersLoading, setFoldersLoading] = useState<boolean>(false);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
-  const [logFilter, setLogFilter] = useState<'all' | 'uploaded' | 'dedup' | 'errors'>('all');
+  const [logFilter, setLogFilter] = useState<'all' | 'processing' | 'dedup' | 'uploaded' | 'revived' | 'errors'>('all');
   const [logSearch, setLogSearch] = useState<string>('');
   const [isClearingLogs, setIsClearingLogs] = useState<boolean>(false);
 
@@ -114,6 +114,58 @@ export const DeviceManagerView: React.FC<Props> = ({
 
   const cleanLogMessage = (msg: string) => {
     return msg.replace(/^[\s\u200B]*[✓⚡🔄⚠️☁️📸]\s*/, '').trim();
+  };
+
+  const getInferredLevel = (msg: string): 'info' | 'processing' | 'uploaded' | 'duplicate' | 'revived' | 'error' => {
+    const lower = msg.toLowerCase();
+    if (lower.includes('processing') || lower.includes('checking') || lower.includes('streaming')) return 'processing';
+    if (lower.includes('⚡') || lower.includes('duplicate') || lower.includes('up to date') || lower.includes('skipped') || lower.includes('linked')) return 'duplicate';
+    if (lower.includes('✓') || lower.includes('backed up') || lower.includes('uploaded') || lower.includes('saved')) return 'uploaded';
+    if (lower.includes('🔄') || lower.includes('restored') || lower.includes('revived')) return 'revived';
+    if (lower.includes('error') || lower.includes('failed') || lower.includes('interrupted')) return 'error';
+    return 'info';
+  };
+
+  const getLogLevelBadge = (log: SyncLogEntry) => {
+    const level = log.level || getInferredLevel(log.message);
+    switch (level) {
+      case 'processing':
+        return (
+          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-950/60 text-amber-300 border border-amber-800/40 animate-pulse flex-shrink-0">
+            PROCESSING
+          </span>
+        );
+      case 'duplicate':
+        return (
+          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold bg-purple-950/60 text-purple-300 border border-purple-800/40 flex-shrink-0">
+            DUPLICATE DETECTED
+          </span>
+        );
+      case 'uploaded':
+        return (
+          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-950/60 text-emerald-300 border border-emerald-800/40 flex-shrink-0">
+            BACKED UP
+          </span>
+        );
+      case 'revived':
+        return (
+          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold bg-sky-950/60 text-sky-300 border border-sky-800/40 flex-shrink-0">
+            RESTORED
+          </span>
+        );
+      case 'error':
+        return (
+          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold bg-red-950/60 text-red-300 border border-red-800/40 flex-shrink-0">
+            ERROR
+          </span>
+        );
+      default:
+        return (
+          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold bg-zinc-900 text-zinc-400 border border-zinc-800 flex-shrink-0">
+            INFO
+          </span>
+        );
+    }
   };
 
   // Load all user folders for destination folder selection
@@ -383,19 +435,39 @@ export const DeviceManagerView: React.FC<Props> = ({
                   </span>
                 </div>
 
-                {/* Inline 3-4 Recent Logs */}
+                {/* Inline 3-4 Recent Logs with Filename, Status Badge & Details */}
                 {device.syncLogs && device.syncLogs.length > 0 ? (
                   <div className="space-y-1.5 font-mono text-[11px]">
-                    {[...device.syncLogs].slice(-3).reverse().map((log, idx) => (
+                    {[...device.syncLogs].slice(-4).reverse().map((log, idx) => (
                       <div
                         key={idx}
-                        className="flex items-center space-x-2 px-2.5 py-1.5 rounded-lg bg-[#191924]/80 border border-[#232333] text-zinc-300 min-w-0"
+                        className="p-2 rounded-xl bg-[#181824]/90 border border-[#232334] text-zinc-300 space-y-1 hover:border-purple-500/30 transition"
                       >
-                        <span className="text-[9px] text-zinc-500 font-sans flex-shrink-0">
-                          {new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-                        </span>
-                        {getLogIcon(log.message)}
-                        <span className="truncate text-zinc-200 font-sans text-xs">{cleanLogMessage(log.message)}</span>
+                        <div className="flex items-center justify-between gap-1 text-[10px]">
+                          <div className="flex items-center space-x-1.5 min-w-0">
+                            {getLogIcon(log.message)}
+                            {getLogLevelBadge(log)}
+                            <span className="font-bold text-white truncate font-sans text-xs">
+                              {log.filename || cleanLogMessage(log.message)}
+                            </span>
+                          </div>
+                          <div className="flex items-center space-x-1.5 flex-shrink-0 text-zinc-500 font-sans text-[10px]">
+                            {log.sizeBytes && (
+                              <span className="px-1.5 py-0.2 rounded bg-[#20202e] text-zinc-300 font-mono text-[9px] border border-[#28283a]">
+                                {formatBytes(log.sizeBytes)}
+                              </span>
+                            )}
+                            <span>
+                              {new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                            </span>
+                          </div>
+                        </div>
+
+                        {log.details && (
+                          <p className="text-[10px] text-zinc-400 font-sans pl-5 leading-relaxed line-clamp-2">
+                            {log.details}
+                          </p>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -816,15 +888,15 @@ export const DeviceManagerView: React.FC<Props> = ({
                         All ({(viewingLogsDevice.syncLogs || []).length})
                       </button>
                       <button
-                        onClick={() => setLogFilter('uploaded')}
+                        onClick={() => setLogFilter('processing')}
                         className={`flex items-center space-x-1 px-3 py-1 rounded-lg text-xs font-semibold transition ${
-                          logFilter === 'uploaded'
-                            ? 'bg-emerald-600 text-white shadow-[0_0_10px_#10b981]'
-                            : 'bg-[#151520] text-zinc-400 hover:text-emerald-300 border border-[#232332]'
+                          logFilter === 'processing'
+                            ? 'bg-amber-600 text-white shadow-[0_0_10px_#f59e0b]'
+                            : 'bg-[#151520] text-zinc-400 hover:text-amber-300 border border-[#232332]'
                         }`}
                       >
-                        <CheckCircle2 className="w-3 h-3 text-emerald-400" />
-                        <span>Uploaded</span>
+                        <RefreshCw className="w-3 h-3 text-amber-400" />
+                        <span>Processing</span>
                       </button>
                       <button
                         onClick={() => setLogFilter('dedup')}
@@ -835,7 +907,29 @@ export const DeviceManagerView: React.FC<Props> = ({
                         }`}
                       >
                         <Zap className="w-3 h-3 text-purple-400" />
-                        <span>Up-to-Date (Dedup)</span>
+                        <span>Duplicates</span>
+                      </button>
+                      <button
+                        onClick={() => setLogFilter('uploaded')}
+                        className={`flex items-center space-x-1 px-3 py-1 rounded-lg text-xs font-semibold transition ${
+                          logFilter === 'uploaded'
+                            ? 'bg-emerald-600 text-white shadow-[0_0_10px_#10b981]'
+                            : 'bg-[#151520] text-zinc-400 hover:text-emerald-300 border border-[#232332]'
+                        }`}
+                      >
+                        <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                        <span>Backed Up</span>
+                      </button>
+                      <button
+                        onClick={() => setLogFilter('revived')}
+                        className={`flex items-center space-x-1 px-3 py-1 rounded-lg text-xs font-semibold transition ${
+                          logFilter === 'revived'
+                            ? 'bg-sky-600 text-white shadow-[0_0_10px_#0284c7]'
+                            : 'bg-[#151520] text-zinc-400 hover:text-sky-300 border border-[#232332]'
+                        }`}
+                      >
+                        <RefreshCw className="w-3 h-3 text-sky-400" />
+                        <span>Restored</span>
                       </button>
                       <button
                         onClick={() => setLogFilter('errors')}
@@ -871,29 +965,56 @@ export const DeviceManagerView: React.FC<Props> = ({
                     <p className="text-[11px] text-zinc-600 mt-0.5">Logs will stream here in real time as the device syncs.</p>
                   </div>
                 ) : (
-                  <div className="space-y-1.5 font-mono text-xs max-h-72 overflow-y-auto pr-1">
+                  <div className="space-y-2 font-mono text-xs max-h-72 overflow-y-auto pr-1">
                     {[...viewingLogsDevice.syncLogs]
                       .reverse()
                       .filter((entry) => {
-                        const m = entry.message.toLowerCase();
-                        if (logFilter === 'uploaded' && !(m.includes('✓') || m.includes('backed up') || m.includes('uploaded') || m.includes('saved'))) return false;
-                        if (logFilter === 'dedup' && !(m.includes('⚡') || m.includes('up to date') || m.includes('duplicate') || m.includes('skipped') || m.includes('linked'))) return false;
-                        if (logFilter === 'errors' && !(m.includes('error') || m.includes('failed') || m.includes('interrupted'))) return false;
+                        const level = entry.level || getInferredLevel(entry.message);
+                        if (logFilter === 'processing' && level !== 'processing') return false;
+                        if (logFilter === 'dedup' && level !== 'duplicate') return false;
+                        if (logFilter === 'uploaded' && level !== 'uploaded') return false;
+                        if (logFilter === 'revived' && level !== 'revived') return false;
+                        if (logFilter === 'errors' && level !== 'error') return false;
                         if (logSearch.trim()) {
-                          return m.includes(logSearch.toLowerCase().trim());
+                          const query = logSearch.toLowerCase().trim();
+                          const inMsg = entry.message.toLowerCase().includes(query);
+                          const inName = entry.filename?.toLowerCase().includes(query) || false;
+                          const inDetails = entry.details?.toLowerCase().includes(query) || false;
+                          return inMsg || inName || inDetails;
                         }
                         return true;
                       })
                       .map((entry, i) => (
                         <div
                           key={i}
-                          className="bg-[#14141e] border border-[#232332] p-2.5 rounded-xl flex items-start space-x-2.5 text-zinc-300 hover:border-purple-500/30 transition"
+                          className="bg-[#14141e] border border-[#232332] p-3 rounded-2xl space-y-1.5 text-zinc-300 hover:border-purple-500/30 transition"
                         >
-                          <span className="text-purple-400 text-[10px] font-sans flex-shrink-0 mt-0.5">
-                            {new Date(entry.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-                          </span>
-                          {getLogIcon(entry.message)}
-                          <span className="text-xs text-zinc-200 break-words flex-1 font-sans">{cleanLogMessage(entry.message)}</span>
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="flex items-center space-x-2 min-w-0">
+                              {getLogIcon(entry.message)}
+                              {getLogLevelBadge(entry)}
+                              <span className="font-bold text-white text-xs truncate">
+                                {entry.filename || cleanLogMessage(entry.message)}
+                              </span>
+                            </div>
+
+                            <div className="flex items-center space-x-2 text-zinc-500 text-[10px] font-sans flex-shrink-0">
+                              {entry.sizeBytes && (
+                                <span className="px-1.5 py-0.5 rounded bg-[#1e1e2d] text-zinc-300 font-mono text-[9px] border border-[#2b2b3d]">
+                                  {formatBytes(entry.sizeBytes)}
+                                </span>
+                              )}
+                              <span className="text-purple-400 font-mono">
+                                {new Date(entry.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                              </span>
+                            </div>
+                          </div>
+
+                          {entry.details && (
+                            <div className="text-[11px] text-zinc-400 font-sans pl-5 leading-relaxed bg-[#101016]/60 p-2 rounded-xl border border-[#1d1d29]">
+                              {entry.details}
+                            </div>
+                          )}
                         </div>
                       ))}
                   </div>

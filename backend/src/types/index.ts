@@ -135,6 +135,10 @@ export interface IDevicePolicy {
 export interface ISyncLogEntry {
   timestamp: Date;
   message: string;
+  level?: 'info' | 'processing' | 'uploaded' | 'duplicate' | 'revived' | 'error';
+  filename?: string | null;
+  sizeBytes?: number | null;
+  details?: string | null;
 }
 
 export interface IDevice {

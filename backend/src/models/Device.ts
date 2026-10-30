@@ -127,6 +127,14 @@ const DeviceSchema = new Schema<IDeviceDocument>(
         {
           timestamp: { type: Date, default: Date.now },
           message: { type: String, required: true },
+          level: {
+            type: String,
+            enum: ['info', 'processing', 'uploaded', 'duplicate', 'revived', 'error'],
+            default: 'info',
+          },
+          filename: { type: String, default: null },
+          sizeBytes: { type: Number, default: null },
+          details: { type: String, default: null },
         },
       ],
       default: [],

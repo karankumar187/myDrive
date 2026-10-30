@@ -58,6 +58,34 @@ class ShortcutUploadQueue {
         console.log(`[Shortcut Queue] Starting background Google Drive upload for ${task.originalName} (${(task.sizeBytes / (1024 * 1024)).toFixed(2)} MB)...`);
 
         const targetAccount = await StorageEngineService.selectTargetAccount(task.userId, task.sizeBytes);
+
+        // Log that Google Drive upload is in progress
+        await Device.findOneAndUpdate(
+          { deviceId: task.deviceId, userId: task.userId },
+          {
+            $set: {
+              status: 'syncing',
+              currentSyncActivity: `Streaming ${task.originalName} (${(task.sizeBytes / (1024 * 1024)).toFixed(1)} MB) to Google Drive...`,
+              lastSeenAt: new Date(),
+            },
+            $push: {
+              syncLogs: {
+                $each: [
+                  {
+                    timestamp: new Date(),
+                    message: `Streaming ${task.originalName} to Google Drive`,
+                    level: 'processing',
+                    filename: task.originalName,
+                    sizeBytes: task.sizeBytes,
+                    details: `Selected storage account: ${targetAccount.accountEmail || targetAccount._id}`,
+                  },
+                ],
+                $slice: -100,
+              },
+            },
+          }
+        );
+
         const oauth2Client = GoogleDriveService.getOAuth2Client(targetAccount);
         const { google } = await import('googleapis');
         const drive = google.drive({ version: 'v3', auth: oauth2Client });
@@ -103,7 +131,16 @@ class ShortcutUploadQueue {
             },
             $push: {
               syncLogs: {
-                $each: [{ timestamp: new Date(), message: `✓ Backed up ${savedFile.filename} (${(task.sizeBytes / (1024 * 1024)).toFixed(1)} MB) to cloud` }],
+                $each: [
+                  {
+                    timestamp: new Date(),
+                    message: `✓ Backed up ${savedFile.filename} to cloud`,
+                    level: 'uploaded',
+                    filename: savedFile.filename,
+                    sizeBytes: task.sizeBytes,
+                    details: `Stored in Google Drive (${targetAccount.accountEmail || targetAccount._id}) • Provider File ID: ${providerFileId}`,
+                  },
+                ],
                 $slice: -100,
               },
             },
@@ -129,6 +166,31 @@ class ShortcutUploadQueue {
         console.log(`[Shortcut Queue SUCCESS] ${task.originalName} (${savedFile._id}) saved to Google Drive (${targetAccount.accountEmail || targetAccount._id})`);
       } catch (err: any) {
         console.error(`[Shortcut Queue ERROR] Failed background upload for ${task.originalName}:`, err);
+        await Device.findOneAndUpdate(
+          { deviceId: task.deviceId, userId: task.userId },
+          {
+            $set: {
+              status: 'online',
+              currentSyncActivity: `Error uploading ${task.originalName}: ${err.message}`,
+              lastSeenAt: new Date(),
+            },
+            $push: {
+              syncLogs: {
+                $each: [
+                  {
+                    timestamp: new Date(),
+                    message: `⚠️ Cloud backup failed: ${task.originalName}`,
+                    level: 'error',
+                    filename: task.originalName,
+                    sizeBytes: task.sizeBytes,
+                    details: err.message || 'Unknown network error during Google Drive upload',
+                  },
+                ],
+                $slice: -100,
+              },
+            },
+          }
+        );
       } finally {
         fs.promises.unlink(task.tempFilePath).catch(() => {});
       }
@@ -189,19 +251,26 @@ export class ShortcutController {
       }
 
       if (existing || existingState) {
-        const logMsg = `⚡ Up to date: ${rawName} already backed up in cloud`;
-
         await Device.findOneAndUpdate(
           { deviceId: req.device.deviceId, userId: req.user._id },
           {
             $set: {
               status: 'syncing',
-              currentSyncActivity: `Skipped ${rawName} (already up to date)`,
+              currentSyncActivity: `Skipped ${rawName} (duplicate detected)`,
               lastSeenAt: new Date(),
             },
             $push: {
               syncLogs: {
-                $each: [{ timestamp: new Date(), message: logMsg }],
+                $each: [
+                  {
+                    timestamp: new Date(),
+                    message: `⚡ Duplicate detected: ${rawName}`,
+                    level: 'duplicate',
+                    filename: rawName,
+                    sizeBytes: existing?.sizeBytes || null,
+                    details: 'Pre-flight check found copy already stored in cloud library. Skipped upload (0 MB transferred).',
+                  },
+                ],
                 $slice: -100,
               },
             },
@@ -213,7 +282,7 @@ export class ShortcutController {
           io.to(`user:${req.user._id}`).emit('device:sync_status', {
             deviceId: req.device.deviceId,
             status: 'syncing',
-            currentSyncActivity: `Skipped ${rawName} (already up to date)`,
+            currentSyncActivity: `Skipped ${rawName} (duplicate detected)`,
             lastSeenAt: new Date().toISOString(),
           });
         }
@@ -226,6 +295,43 @@ export class ShortcutController {
 
       // New photo or revival candidate: signal Shortcut to proceed with upload
       console.log(`[Shortcut Fast Check] ${rawName} is NEW. Proceeding with upload.`);
+
+      await Device.findOneAndUpdate(
+        { deviceId: req.device.deviceId, userId: req.user._id },
+        {
+          $set: {
+            status: 'syncing',
+            currentSyncActivity: `Processing ${rawName}...`,
+            lastSeenAt: new Date(),
+          },
+          $push: {
+            syncLogs: {
+              $each: [
+                {
+                  timestamp: new Date(),
+                  message: `Processing: ${rawName} (preparing upload)`,
+                  level: 'processing',
+                  filename: rawName,
+                  sizeBytes: null,
+                  details: 'New photo not found in cloud. Converting and initiating upload from camera roll...',
+                },
+              ],
+              $slice: -100,
+            },
+          },
+        }
+      );
+
+      const io = getSocketIoInstance();
+      if (io) {
+        io.to(`user:${req.user._id}`).emit('device:sync_status', {
+          deviceId: req.device.deviceId,
+          status: 'syncing',
+          currentSyncActivity: `Processing ${rawName}...`,
+          lastSeenAt: new Date().toISOString(),
+        });
+      }
+
       res.setHeader('Content-Type', 'text/plain');
       res.send('NEW');
     } catch (error: any) {
@@ -501,7 +607,16 @@ export class ShortcutController {
               },
               $push: {
                 syncLogs: {
-                  $each: [{ timestamp: new Date(), message: `🔄 Restored: ${originalName} from trash with clean orientation` }],
+                  $each: [
+                    {
+                      timestamp: new Date(),
+                      message: `🔄 Revived from trash: ${originalName}`,
+                      level: 'revived',
+                      filename: originalName,
+                      sizeBytes,
+                      details: 'Restored clean upright photo from phone to active library. Trashed copy replaced.',
+                    },
+                  ],
                   $slice: -100,
                 },
               },
@@ -555,12 +670,21 @@ export class ShortcutController {
             {
               $set: {
                 status: 'online',
-                currentSyncActivity: `Synced ${originalName}`,
+                currentSyncActivity: `Synced ${originalName} (linked duplicate)`,
                 lastSeenAt: new Date(),
               },
               $push: {
                 syncLogs: {
-                  $each: [{ timestamp: new Date(), message: `⚡ Linked: ${originalName} (already present in cloud)` }],
+                  $each: [
+                    {
+                      timestamp: new Date(),
+                      message: `⚡ Duplicate detected: ${originalName}`,
+                      level: 'duplicate',
+                      filename: originalName,
+                      sizeBytes,
+                      details: `SHA-256 hash match (${contentHash.substring(0, 10)}...). Linked device without re-uploading bytes to cloud.`,
+                    },
+                  ],
                   $slice: -100,
                 },
               },
@@ -629,7 +753,16 @@ export class ShortcutController {
           },
           $push: {
             syncLogs: {
-              $each: [{ timestamp: new Date(), message: `✓ Uploaded: ${originalName} (${(sizeBytes / (1024 * 1024)).toFixed(1)} MB) queued for cloud` }],
+              $each: [
+                {
+                  timestamp: new Date(),
+                  message: `✓ Uploaded: ${originalName} (${(sizeBytes / (1024 * 1024)).toFixed(1)} MB)`,
+                  level: 'uploaded',
+                  filename: originalName,
+                  sizeBytes,
+                  details: `File received on server (${mimeType}) • Queued for async Google Drive streaming`,
+                },
+              ],
               $slice: -100,
             },
           },
