@@ -1459,6 +1459,13 @@ const FullScreenViewer: React.FC<{
               .catch(() => {});
           }
         }
+      } else {
+        // Pre-warm video cache on server for immediate neighbor videos (distance <= 2)
+        const distance = Math.abs(idx - currentIndex);
+        if (distance <= 2) {
+          const vUrl = getStreamUrl(m._id);
+          fetch(vUrl, { headers: { Range: 'bytes=0-1023' } }).catch(() => {});
+        }
       }
     });
 

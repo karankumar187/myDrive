@@ -64,6 +64,66 @@ function pruneDiskCache() {
   }
 }
 
+// Active background file downloads tracker to prevent duplicate concurrent fetches
+const activeFileDownloads = new Map<string, Promise<void>>();
+
+/**
+ * Initiates an asynchronous background download of a full video/file from Google Drive
+ * directly into the local NVMe SSD cache. Once complete, all subsequent range requests,
+ * video timeline seeks, and replays stream directly from SSD in ~1-3ms.
+ */
+function startBackgroundCache(fileId: string, account: any, providerFileId: string, expectedSize: number) {
+  if (activeFileDownloads.has(fileId)) return;
+
+  const cachedFilePath = path.join(CACHE_FILES_DIR, fileId);
+  if (fs.existsSync(cachedFilePath)) {
+    try {
+      const stat = fs.statSync(cachedFilePath);
+      if (stat.size === expectedSize || (!expectedSize && stat.size > 0)) {
+        return;
+      }
+    } catch {}
+  }
+
+  const downloadPromise = (async () => {
+    const tmpPath = `${cachedFilePath}.cache_${Date.now()}.tmp`;
+    try {
+      const fullDriveStream = await GoogleDriveService.getFileStream(account, providerFileId);
+      const writeStream = fs.createWriteStream(tmpPath);
+      let streamError = false;
+
+      await new Promise<void>((resolve, reject) => {
+        fullDriveStream.data.pipe(writeStream);
+        writeStream.on('finish', resolve);
+        writeStream.on('error', (err: any) => {
+          streamError = true;
+          reject(err);
+        });
+        fullDriveStream.data.on('error', (err: any) => {
+          streamError = true;
+          reject(err);
+        });
+      });
+
+      if (!streamError && fs.existsSync(tmpPath)) {
+        const stat = fs.statSync(tmpPath);
+        if (stat.size === expectedSize || (!expectedSize && stat.size > 0)) {
+          fs.renameSync(tmpPath, cachedFilePath);
+          pruneDiskCache();
+        } else {
+          try { fs.unlinkSync(tmpPath); } catch {}
+        }
+      }
+    } catch (_err) {
+      try { if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath); } catch {}
+    } finally {
+      activeFileDownloads.delete(fileId);
+    }
+  })();
+
+  activeFileDownloads.set(fileId, downloadPromise);
+}
+
 import { getEffectiveMimeType } from '../utils/mime.js';
 export { getEffectiveMimeType };
 
@@ -659,12 +719,14 @@ export class FileController {
 
       const cachedFilePath = path.join(CACHE_FILES_DIR, file._id.toString());
       const range = req.headers.range;
+      const fileSize = latestVersion.sizeBytes || 0;
+      const MAX_AUTO_CACHE_SIZE = 400 * 1024 * 1024; // 400MB
 
       // Fast Path 1: Check if full raw file is already cached locally on OCI NVMe SSD
       if (fs.existsSync(cachedFilePath)) {
         try {
           const stat = fs.statSync(cachedFilePath);
-          if (stat.size === latestVersion.sizeBytes || (!latestVersion.sizeBytes && stat.size > 0)) {
+          if (stat.size === fileSize || (!fileSize && stat.size > 0)) {
             const totalSize = stat.size;
             if (range) {
               const parts = range.replace(/bytes=/, '').split('-');
@@ -689,6 +751,12 @@ export class FileController {
         } catch (_cacheErr) {
           // If reading cached file fails, fall back to Google Drive stream
         }
+      }
+
+      // Automatically trigger background NVMe SSD caching for videos and files <= 400MB
+      // so all future range seeks, scrubs, and replays stream directly from SSD in ~1ms!
+      if (fileSize > 0 && fileSize <= MAX_AUTO_CACHE_SIZE) {
+        startBackgroundCache(file._id.toString(), account, latestVersion.providerFileId, fileSize);
       }
 
       // If not cached locally, stream from Google Drive
@@ -727,42 +795,6 @@ export class FileController {
           }
         } catch {}
       });
-
-      // If it's a full stream (not range request) and file size <= 250MB, cache locally in background
-      const fileSize = latestVersion.sizeBytes || 0;
-      if (!range && fileSize > 0 && fileSize <= 250 * 1024 * 1024) {
-        const tmpPath = `${cachedFilePath}.tmp`;
-        const writeStream = fs.createWriteStream(tmpPath);
-        let writeError = false;
-
-        writeStream.on('error', () => {
-          writeError = true;
-          try { fs.unlinkSync(tmpPath); } catch {}
-        });
-
-        driveStream.data.on('data', (chunk: Buffer) => {
-          if (!writeError) {
-            writeStream.write(chunk);
-          }
-        });
-
-        driveStream.data.on('end', () => {
-          if (!writeError) {
-            writeStream.end(() => {
-              fs.rename(tmpPath, cachedFilePath, (err) => {
-                if (!err) {
-                  pruneDiskCache();
-                }
-              });
-            });
-          }
-        });
-
-        driveStream.data.on('error', () => {
-          writeError = true;
-          try { writeStream.destroy(); fs.unlinkSync(tmpPath); } catch {}
-        });
-      }
 
       driveStream.data.pipe(res);
     } catch (error: any) {

@@ -423,16 +423,9 @@ export class ShortcutController {
         return;
       }
 
-      // Find the most recently backed up file or date checkpoint for this device
-      const latestState = await DeviceFileState.findOne({
-        userId: req.user._id,
-        deviceId: req.device.deviceId,
-      }).sort({ createdAt: -1 });
-
+      // Checkpoint date: strictly uses device.lastSyncedPhotoDate checkpoint (defaults to 2000-01-01 if null/reset)
       const lastSyncedDate = req.device.lastSyncedPhotoDate
         ? req.device.lastSyncedPhotoDate.toISOString()
-        : latestState
-        ? latestState.createdAt.toISOString()
         : '2000-01-01T00:00:00.000Z';
 
       // Record sync start in Device document

@@ -366,7 +366,7 @@ export const ModernVideoPlayer: React.FC<ModernVideoPlayerProps> = ({
         src={src}
         poster={poster}
         playsInline
-        preload="metadata"
+        preload="auto"
         onTimeUpdate={handleTimeUpdate}
         onLoadedMetadata={handleLoadedMetadata}
         onLoadedData={handleLoadedData}
