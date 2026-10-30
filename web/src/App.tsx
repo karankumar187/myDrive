@@ -580,7 +580,7 @@ export const App: React.FC = () => {
       <div className="absolute top-0 left-1/2 -translate-x-1/2 w-full max-w-[800px] h-[300px] bg-purple-600/10 rounded-full blur-[160px] pointer-events-none overflow-hidden" />
 
       {/* TOP FLOATING NAVBAR */}
-      <header className="sticky top-0 z-40 w-full backdrop-blur-xl bg-[#08080a]/85 border-b border-[#1c1c22] relative pt-safe max-w-full overflow-hidden">
+      <header className="sticky top-0 z-40 w-full backdrop-blur-xl bg-[#08080a]/85 border-b border-[#1c1c22] pt-safe max-w-full">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-14 sm:h-16 flex items-center justify-between">
           {/* Left Brand Logo (Clickable Home / Dashboard Navigation) */}
           <button
@@ -663,37 +663,43 @@ export const App: React.FC = () => {
               </button>
 
               {showProfileMenu && (
-                <div className="absolute right-0 mt-2 w-56 bg-[#121216] border border-[#222229] rounded-2xl p-2 shadow-2xl z-50 space-y-1">
-                  <div className="px-3 py-2 border-b border-[#1c1c22]">
-                    <p className="text-xs font-bold text-white truncate">{currentUser.name}</p>
-                    <p className="text-[10px] text-zinc-400 truncate">{currentUser.email}</p>
+                <>
+                  <div
+                    className="fixed inset-0 z-40"
+                    onClick={() => setShowProfileMenu(false)}
+                  />
+                  <div className="absolute right-0 mt-2 w-56 bg-[#121216] border border-[#222229] rounded-2xl p-2 shadow-2xl z-50 space-y-1 animate-in fade-in zoom-in-95 duration-100">
+                    <div className="px-3 py-2 border-b border-[#1c1c22]">
+                      <p className="text-xs font-bold text-white truncate">{currentUser.name}</p>
+                      <p className="text-[10px] text-zinc-400 truncate">{currentUser.email}</p>
+                    </div>
+                    <button
+                      onClick={() => { setShowSecuritySettings(true); setShowProfileMenu(false); }}
+                      className="w-full flex items-center space-x-2 px-3 py-2 text-xs text-zinc-300 hover:bg-purple-600/10 rounded-xl transition"
+                    >
+                      <Shield className="w-3.5 h-3.5 text-purple-400" />
+                      <span>Security</span>
+                      {LockSecurityService.isPinSet() && (
+                        <span className="ml-auto text-[9px] font-semibold text-green-400 bg-green-400/10 px-1.5 py-0.5 rounded-full">ON</span>
+                      )}
+                    </button>
+                    <button
+                      onClick={() => { setActiveTab('media-api'); setShowProfileMenu(false); }}
+                      className="w-full flex items-center space-x-2 px-3 py-2 text-xs text-zinc-300 hover:bg-purple-600/10 hover:text-purple-300 rounded-xl transition"
+                    >
+                      <Key className="w-3.5 h-3.5 text-purple-400" />
+                      <span>Developer & API Keys</span>
+                      <span className="ml-auto text-[9px] font-semibold text-indigo-400 bg-indigo-500/15 px-1.5 py-0.5 rounded-full border border-indigo-500/20">NEW</span>
+                    </button>
+                    <button
+                      onClick={api.logout}
+                      className="w-full flex items-center space-x-2 px-3 py-2 text-xs text-red-400 hover:bg-red-500/10 rounded-xl transition"
+                    >
+                      <LogOut className="w-3.5 h-3.5" />
+                      <span>Sign Out</span>
+                    </button>
                   </div>
-                  <button
-                    onClick={() => { setShowSecuritySettings(true); setShowProfileMenu(false); }}
-                    className="w-full flex items-center space-x-2 px-3 py-2 text-xs text-zinc-300 hover:bg-purple-600/10 rounded-xl transition"
-                  >
-                    <Shield className="w-3.5 h-3.5 text-purple-400" />
-                    <span>Security</span>
-                    {LockSecurityService.isPinSet() && (
-                      <span className="ml-auto text-[9px] font-semibold text-green-400 bg-green-400/10 px-1.5 py-0.5 rounded-full">ON</span>
-                    )}
-                  </button>
-                  <button
-                    onClick={() => { setActiveTab('media-api'); setShowProfileMenu(false); }}
-                    className="w-full flex items-center space-x-2 px-3 py-2 text-xs text-zinc-300 hover:bg-purple-600/10 hover:text-purple-300 rounded-xl transition"
-                  >
-                    <Key className="w-3.5 h-3.5 text-purple-400" />
-                    <span>Developer & API Keys</span>
-                    <span className="ml-auto text-[9px] font-semibold text-indigo-400 bg-indigo-500/15 px-1.5 py-0.5 rounded-full border border-indigo-500/20">NEW</span>
-                  </button>
-                  <button
-                    onClick={api.logout}
-                    className="w-full flex items-center space-x-2 px-3 py-2 text-xs text-red-400 hover:bg-red-500/10 rounded-xl transition"
-                  >
-                    <LogOut className="w-3.5 h-3.5" />
-                    <span>Sign Out</span>
-                  </button>
-                </div>
+                </>
               )}
             </div>
           </div>

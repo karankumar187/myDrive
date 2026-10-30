@@ -499,7 +499,7 @@ export const GalleryTimelineView: React.FC<Props> = ({
   return (
     <div className="space-y-6 w-full max-w-full min-w-0 overflow-x-hidden">
       {/* Top Header Bar — Clean, borderless, native app layout */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1 pb-1 w-full min-w-0 max-w-full">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pt-2 pb-1 w-full min-w-0 max-w-full">
         {/* Left: Filter Dropdowns */}
         <div className="flex items-center space-x-2">
           {/* Media Type Filter */}
@@ -683,7 +683,7 @@ export const GalleryTimelineView: React.FC<Props> = ({
         </div>
 
         {/* Center: Live Search Bar */}
-        <div className="relative flex-1 max-w-lg">
+        <div className="relative flex-1 w-full md:max-w-lg">
           <Search className="w-4 h-4 text-zinc-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
           <input
             type="text"
@@ -703,7 +703,7 @@ export const GalleryTimelineView: React.FC<Props> = ({
         </div>
 
         {/* Right Actions: Select Mode, Upload Photos/Videos */}
-        <div className="flex items-center space-x-2 shrink-0">
+        <div className="flex items-center space-x-2 shrink-0 self-end md:self-auto">
           {/* Direct Photo & Video Upload (Optimized for iPhone & Web) */}
           <label className="inline-flex items-center space-x-1.5 px-4 py-2 rounded-full text-xs font-bold text-white bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 shadow-md shadow-purple-900/20 cursor-pointer transition active:scale-95" title="Upload Photos or Videos">
             <Upload className="w-3.5 h-3.5" />
