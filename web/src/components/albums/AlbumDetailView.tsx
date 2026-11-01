@@ -281,7 +281,8 @@ export const AlbumDetailView: React.FC<AlbumDetailViewProps> = ({
           <img
             src={coverUrl}
             alt={album.title}
-            className="absolute inset-0 w-full h-full object-cover object-center filter blur-[1px] brightness-75 scale-105"
+            style={{ transform: 'translateZ(0)' }}
+            className="absolute inset-0 w-full h-full object-cover object-center brightness-75"
           />
         ) : (
           <div className="absolute inset-0 bg-gradient-to-br from-purple-900/50 via-neutral-900 to-indigo-950" />

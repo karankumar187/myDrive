@@ -39,8 +39,8 @@ export const AlbumCard: React.FC<AlbumCardProps> = ({
   onDelete,
 }) => {
   const [menuOpen, setMenuOpen] = useState(false);
-  const [highResLoaded, setHighResLoaded] = useState(false);
   const [imageError, setImageError] = useState(false);
+  const [fallbackUrl, setFallbackUrl] = useState<string | null>(null);
 
   // Instant 0ms thumbnail from metadata or cache
   const thumbUrl = useMemo(() => {
@@ -53,10 +53,7 @@ export const AlbumCard: React.FC<AlbumCardProps> = ({
     return null;
   }, [album.coverFile]);
 
-  // High-res preview for crisp presentation
-  const previewUrl = useMemo(() => {
-    return album.coverFile?._id ? getPreviewUrl(album.coverFile._id) : null;
-  }, [album.coverFile]);
+  const activeSrc = fallbackUrl || thumbUrl;
 
   // Format dates
   const formatAlbumDates = () => {
@@ -99,35 +96,24 @@ export const AlbumCard: React.FC<AlbumCardProps> = ({
           : 'w-full h-[320px] sm:h-[350px]'
       }`}
     >
-      {/* Background Cover Image with Progressive Loading */}
-      <div className="absolute inset-0 bg-neutral-900 overflow-hidden">
-        {thumbUrl && !imageError ? (
-          <>
-            {/* Instant thumbnail */}
-            <img
-              src={thumbUrl}
-              alt={album.title}
-              loading="lazy"
-              decoding="async"
-              className={`absolute inset-0 w-full h-full object-cover transition-transform duration-700 ease-out group-hover:scale-105 ${
-                highResLoaded ? 'opacity-0' : 'opacity-100'
-              }`}
-            />
-            {/* High-res fade in */}
-            {previewUrl && (
-              <img
-                src={previewUrl}
-                alt={album.title}
-                loading="lazy"
-                decoding="async"
-                onLoad={() => setHighResLoaded(true)}
-                onError={() => setImageError(true)}
-                className={`absolute inset-0 w-full h-full object-cover transition-all duration-700 ease-out group-hover:scale-105 ${
-                  highResLoaded ? 'opacity-100' : 'opacity-0'
-                }`}
-              />
-            )}
-          </>
+      {/* Background Cover Image */}
+      <div className="absolute inset-0 bg-neutral-900 overflow-hidden" style={{ transform: 'translateZ(0)' }}>
+        {activeSrc && !imageError ? (
+          <img
+            src={activeSrc}
+            alt={album.title}
+            loading="lazy"
+            decoding="async"
+            style={{ imageOrientation: 'from-image' }}
+            onError={() => {
+              if (!fallbackUrl && album.coverFile?._id) {
+                setFallbackUrl(getPreviewUrl(album.coverFile._id));
+              } else {
+                setImageError(true);
+              }
+            }}
+            className="w-full h-full object-cover transition-transform duration-300 ease-out group-hover:scale-105"
+          />
         ) : (
           <div className="w-full h-full bg-gradient-to-br from-purple-900/40 via-neutral-900 to-indigo-950/60 flex items-center justify-center">
             <ImageIcon className="w-16 h-16 text-white/20" />
