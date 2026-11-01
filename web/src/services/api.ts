@@ -1,4 +1,4 @@
-import { StorageSummary, FileItem, FolderItem, DeviceItem, User, BreadcrumbItem, ApiKeyItem, MediaAssetItem } from '../types.js';
+import { StorageSummary, FileItem, FolderItem, DeviceItem, User, BreadcrumbItem, ApiKeyItem, MediaAssetItem, AlbumItem, AlbumDetailItem } from '../types.js';
 
 const rawApiUrl = (import.meta.env.VITE_API_URL || '').replace(/\/+$/, '');
 const API_BASE = rawApiUrl ? `${rawApiUrl}/api/v1` : '/api/v1';
@@ -591,6 +591,106 @@ export const api = {
       body: JSON.stringify({ tags, action }),
     });
     if (!res.ok) throw new Error('Failed to update media tags');
+    return res.json();
+  },
+
+  // Trips & Albums Endpoints
+  async listAlbums(): Promise<{ albums: AlbumItem[] }> {
+    const res = await fetchWithLoading(`${API_BASE}/albums`, {
+      headers: getHeaders(),
+    });
+    if (!res.ok) throw new Error('Failed to list albums');
+    return res.json();
+  },
+
+  async getAlbum(id: string): Promise<{ album: AlbumDetailItem }> {
+    const res = await fetchWithLoading(`${API_BASE}/albums/${id}`, {
+      headers: getHeaders(),
+    });
+    if (!res.ok) throw new Error('Failed to fetch album details');
+    return res.json();
+  },
+
+  async createAlbum(data: {
+    title: string;
+    description?: string;
+    destination?: { name: string; latitude?: number; longitude?: number };
+    coverFileId?: string;
+    fileIds?: string[];
+    startDate?: string | null;
+    endDate?: string | null;
+    isPinned?: boolean;
+    themeGradient?: string;
+  }): Promise<{ message: string; album: AlbumItem }> {
+    const res = await fetchWithLoading(`${API_BASE}/albums`, {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify(data),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Failed to create album' }));
+      throw new Error(err.error || 'Failed to create album');
+    }
+    return res.json();
+  },
+
+  async updateAlbum(
+    id: string,
+    data: Partial<{
+      title: string;
+      description: string;
+      destination: { name: string; latitude?: number; longitude?: number };
+      coverFileId: string;
+      startDate: string | null;
+      endDate: string | null;
+      isPinned: boolean;
+      isFavorite: boolean;
+      themeGradient: string;
+    }>
+  ): Promise<{ message: string; album: AlbumItem }> {
+    const res = await fetchWithLoading(`${API_BASE}/albums/${id}`, {
+      method: 'PATCH',
+      headers: getHeaders(),
+      body: JSON.stringify(data),
+    });
+    if (!res.ok) throw new Error('Failed to update album');
+    return res.json();
+  },
+
+  async deleteAlbum(id: string): Promise<{ message: string }> {
+    const res = await fetchWithLoading(`${API_BASE}/albums/${id}`, {
+      method: 'DELETE',
+      headers: getHeaders(),
+    });
+    if (!res.ok) throw new Error('Failed to delete album');
+    return res.json();
+  },
+
+  async addPhotosToAlbum(id: string, fileIds: string[]): Promise<{ message: string; fileCount: number }> {
+    const res = await fetchWithLoading(`${API_BASE}/albums/${id}/photos`, {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify({ fileIds }),
+    });
+    if (!res.ok) throw new Error('Failed to add photos to album');
+    return res.json();
+  },
+
+  async removePhotosFromAlbum(id: string, fileIds: string[]): Promise<{ message: string; fileCount: number }> {
+    const res = await fetchWithLoading(`${API_BASE}/albums/${id}/photos`, {
+      method: 'DELETE',
+      headers: getHeaders(),
+      body: JSON.stringify({ fileIds }),
+    });
+    if (!res.ok) throw new Error('Failed to remove photos from album');
+    return res.json();
+  },
+
+  async suggestTrips(): Promise<{ suggestions: any[] }> {
+    const res = await fetchWithLoading(`${API_BASE}/albums/suggestions`, {
+      headers: getHeaders(),
+    });
+    if (!res.ok) throw new Error('Failed to fetch trip suggestions');
     return res.json();
   },
 };

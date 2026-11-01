@@ -20,6 +20,7 @@ import { deviceRoutes } from './routes/device.routes.js';
 import { shortcutRoutes } from './routes/shortcut.routes.js';
 import { mediaRoutes } from './routes/media.routes.js';
 import { developerRoutes } from './routes/developer.routes.js';
+import { albumRoutes } from './routes/album.routes.js';
 import { Device } from './models/Device.js';
 import { CryptoService } from './services/crypto.service.js';
 
@@ -197,6 +198,7 @@ app.use('/api/v1/shortcuts', shortcutRoutes);
 app.use('/api/v1/media', mediaRoutes);
 app.use('/api/v1/cloudinary', mediaRoutes);
 app.use('/api/v1/developer', developerRoutes);
+app.use('/api/v1/albums', albumRoutes);
 
 app.get('/', (_req: express.Request, res: express.Response) => {
   res.json({ status: 'ok', service: 'myDrive API', version: '1.0.0' });

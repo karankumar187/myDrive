@@ -163,3 +163,36 @@ export interface MediaAssetItem {
   tags: string[];
 }
 
+export interface AlbumContributor {
+  deviceId: string;
+  deviceName: string;
+  platform: string;
+}
+
+export interface AlbumItem {
+  _id: string;
+  title: string;
+  description: string;
+  destination: {
+    name: string;
+    latitude?: number | null;
+    longitude?: number | null;
+  };
+  coverFile?: FileItem | null;
+  fileCount: number;
+  startDate?: string | null;
+  endDate?: string | null;
+  isPinned: boolean;
+  isFavorite: boolean;
+  themeGradient?: string;
+  contributors?: AlbumContributor[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AlbumDetailItem extends AlbumItem {
+  files: FileItem[];
+  totalSizeBytes: number;
+}
+
+

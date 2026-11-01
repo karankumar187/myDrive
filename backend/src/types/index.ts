@@ -253,3 +253,26 @@ export interface ICloudinaryUploadResponse {
   tags?: string[];
 }
 
+export interface IAlbum {
+  userId: Types.ObjectId;
+  title: string;
+  description?: string;
+  destination?: {
+    name: string;
+    latitude?: number;
+    longitude?: number;
+  };
+  coverFileId?: Types.ObjectId;
+  fileIds: Types.ObjectId[];
+  startDate?: Date;
+  endDate?: Date;
+  isPinned: boolean;
+  isFavorite: boolean;
+  themeGradient?: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface IAlbumDocument extends IAlbum, Document {}
+
+

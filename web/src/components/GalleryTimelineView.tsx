@@ -33,6 +33,8 @@ import {
   Smartphone,
   Send,
   Upload,
+  Compass,
+  Clock,
 } from 'lucide-react';
 import { uploadService } from '../services/UploadService.js';
 import { VaultCryptoService } from '../services/vault-crypto.js';
@@ -40,6 +42,7 @@ import { mediaCache, mediaQueue, isVideoFile, extractVideoThumbnailFromUrl } fro
 import { getStreamUrl, getPreviewUrl, formatBytes, formatDate, formatDateTime } from '../utils/format.js';
 import { api, startGlobalLoading, subscribeToProgress, GlobalProgressState } from '../services/api.js';
 import { ModernVideoPlayer } from './ModernVideoPlayer.js';
+import { AlbumsShowcaseView } from './albums/AlbumsShowcaseView.js';
 
 interface Props {
   media: FileItem[];
@@ -80,6 +83,10 @@ export const GalleryTimelineView: React.FC<Props> = ({
   initialCursor,
   initialHasMore,
 }) => {
+  // Gallery Sub-Navigation Mode: Timeline vs Trips & Albums
+  const [gallerySubTab, setGallerySubTab] = useState<'timeline' | 'albums'>('timeline');
+  const [selectedAlbumMediaIds, setSelectedAlbumMediaIds] = useState<string[]>([]);
+
   // Filters & Search
   const [filterType, setFilterType] = useState<'all' | 'favorites' | 'videos' | 'photos'>('all');
   const [isFilterDropdownOpen, setIsFilterDropdownOpen] = useState(false);
@@ -498,8 +505,45 @@ export const GalleryTimelineView: React.FC<Props> = ({
 
   return (
     <div className="space-y-6 w-full max-w-full min-w-0 overflow-x-hidden">
-      {/* Top Header Bar — Clean, borderless, native app layout */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pt-2 pb-1 w-full min-w-0 max-w-full">
+      {/* Top Floating Pill Mode Switcher: Timeline vs Trips & Albums */}
+      <div className="flex items-center justify-center w-full pt-1 pb-1">
+        <div className="inline-flex p-1 rounded-full bg-neutral-900/90 border border-white/10 backdrop-blur-xl shadow-xl">
+          <button
+            onClick={() => setGallerySubTab('timeline')}
+            className={`px-5 py-2 rounded-full text-xs font-bold flex items-center gap-2 transition-all ${
+              gallerySubTab === 'timeline'
+                ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-lg shadow-purple-500/25'
+                : 'text-neutral-400 hover:text-white'
+            }`}
+          >
+            <Clock className="w-3.5 h-3.5" />
+            <span>Timeline</span>
+          </button>
+          <button
+            onClick={() => setGallerySubTab('albums')}
+            className={`px-5 py-2 rounded-full text-xs font-bold flex items-center gap-2 transition-all ${
+              gallerySubTab === 'albums'
+                ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-lg shadow-purple-500/25'
+                : 'text-neutral-400 hover:text-white'
+            }`}
+          >
+            <Compass className="w-3.5 h-3.5" />
+            <span>Trips & Albums</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Trips & Albums Sub-View */}
+      {gallerySubTab === 'albums' ? (
+        <AlbumsShowcaseView
+          allMedia={localMediaList}
+          vaultKey={vaultKey}
+          initialSelectedMediaIds={selectedAlbumMediaIds}
+        />
+      ) : (
+        <>
+          {/* Top Header Bar — Clean, borderless, native app layout */}
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pt-2 pb-1 w-full min-w-0 max-w-full">
         {/* Left: Filter Dropdowns */}
         <div className="flex items-center space-x-2">
           {/* Media Type Filter */}
@@ -764,6 +808,20 @@ export const GalleryTimelineView: React.FC<Props> = ({
           </div>
 
           <div className="flex items-center space-x-2 overflow-x-auto py-0.5">
+            {/* Create Trip Album */}
+            <button
+              disabled={selectedIds.size === 0}
+              onClick={() => {
+                setSelectedAlbumMediaIds(Array.from(selectedIds));
+                setGallerySubTab('albums');
+              }}
+              className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-semibold text-xs border border-purple-400/40 shadow-glow-purple disabled:opacity-40 transition flex items-center space-x-1.5 active:scale-95"
+              title="Create Trip Album from Selected"
+            >
+              <Compass className="w-3.5 h-3.5" />
+              <span>Create Trip</span>
+            </button>
+
             {/* Force Download to Paired Device */}
             <button
               disabled={selectedIds.size === 0}
@@ -902,6 +960,8 @@ export const GalleryTimelineView: React.FC<Props> = ({
         </div>
       )}
       {hasMore && <div ref={sentinelRef} className="h-6 w-full" />}
+      </>
+      )}
 
       {/* Full-Screen Photo Viewer */}
       {selectedMediaIndex !== null && currentMedia && (
