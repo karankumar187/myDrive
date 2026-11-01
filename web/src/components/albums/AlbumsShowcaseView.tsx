@@ -40,12 +40,8 @@ export const AlbumsShowcaseView: React.FC<AlbumsShowcaseViewProps> = ({
   const [selectedDestination, setSelectedDestination] = useState<string>('all');
   const [selectedYear, setSelectedYear] = useState<string>('all');
 
-  // Create Modal & Smart Auto-Detect
+  // Create Modal
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
-  const [createSuggestion, setCreateSuggestion] = useState<any>(null);
-  const [suggestions, setSuggestions] = useState<any[]>([]);
-  const [isDetecting, setIsDetecting] = useState(false);
-  const [isSuggestionsOpen, setIsSuggestionsOpen] = useState(false);
 
   // Load albums from backend
   const loadAlbums = async () => {
@@ -72,20 +68,6 @@ export const AlbumsShowcaseView: React.FC<AlbumsShowcaseViewProps> = ({
       setIsCreateModalOpen(true);
     }
   }, [initialSelectedMediaIds]);
-
-  // Handle Smart Trip Detection
-  const handleAutoDetectTrips = async () => {
-    try {
-      setIsDetecting(true);
-      const res = await api.suggestTrips();
-      setSuggestions(res.suggestions || []);
-      setIsSuggestionsOpen(true);
-    } catch (err) {
-      console.error('Failed to detect trips:', err);
-    } finally {
-      setIsDetecting(false);
-    }
-  };
 
   // Toggle favorite on an album
   const handleToggleAlbumFavorite = async (album: AlbumItem, e: React.MouseEvent) => {
@@ -245,26 +227,9 @@ export const AlbumsShowcaseView: React.FC<AlbumsShowcaseViewProps> = ({
             </select>
           )}
 
-          {/* Auto-Detect Trips Button */}
-          <button
-            onClick={handleAutoDetectTrips}
-            disabled={isDetecting}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-neutral-900 hover:bg-neutral-800 border border-purple-500/30 hover:border-purple-500/60 text-xs font-semibold text-purple-300 backdrop-blur-md transition-all disabled:opacity-50"
-          >
-            {isDetecting ? (
-              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-            ) : (
-              <Sparkles className="w-3.5 h-3.5 text-purple-400" />
-            )}
-            <span>Auto-Detect Trips</span>
-          </button>
-
           {/* Create Trip Album Button */}
           <button
-            onClick={() => {
-              setCreateSuggestion(null);
-              setIsCreateModalOpen(true);
-            }}
+            onClick={() => setIsCreateModalOpen(true)}
             className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-xs font-semibold text-white shadow-lg shadow-purple-500/25 transition-all"
           >
             <Plus className="w-4 h-4" />
@@ -272,58 +237,6 @@ export const AlbumsShowcaseView: React.FC<AlbumsShowcaseViewProps> = ({
           </button>
         </div>
       </div>
-
-      {/* Auto-Detect Suggestions Drawer/Banner */}
-      {isSuggestionsOpen && (
-        <div className="p-5 rounded-2xl bg-purple-950/20 border border-purple-500/30 backdrop-blur-md space-y-3 animate-fadeIn">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2 text-purple-300 font-semibold text-sm">
-              <Sparkles className="w-4 h-4" />
-              <span>Smart Trip Suggestions Detected from EXIF Data</span>
-            </div>
-            <button
-              onClick={() => setIsSuggestionsOpen(false)}
-              className="p-1 rounded-lg text-neutral-400 hover:text-white"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-
-          {suggestions.length === 0 ? (
-            <p className="text-xs text-neutral-400">
-              No new unorganized trip clusters found in recent uploads.
-            </p>
-          ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-              {suggestions.map((sug, idx) => (
-                <div
-                  key={idx}
-                  className="p-3.5 rounded-xl bg-neutral-900/80 border border-white/10 flex items-center justify-between gap-3 hover:border-purple-500/50 transition-all"
-                >
-                  <div>
-                    <h4 className="text-xs font-bold text-white truncate max-w-[180px]">
-                      {sug.suggestedTitle}
-                    </h4>
-                    <span className="text-[11px] text-neutral-400">
-                      {sug.fileCount} photos detected
-                    </span>
-                  </div>
-                  <button
-                    onClick={() => {
-                      setCreateSuggestion(sug);
-                      setIsSuggestionsOpen(false);
-                      setIsCreateModalOpen(true);
-                    }}
-                    className="px-2.5 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-[11px] font-semibold text-white transition-colors"
-                  >
-                    Create
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
 
       {/* Content Rendering */}
       {loading ? (
@@ -342,10 +255,7 @@ export const AlbumsShowcaseView: React.FC<AlbumsShowcaseViewProps> = ({
             vacation, or memorable journeys with contributor device metadata.
           </p>
           <button
-            onClick={() => {
-              setCreateSuggestion(null);
-              setIsCreateModalOpen(true);
-            }}
+            onClick={() => setIsCreateModalOpen(true)}
             className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-xs font-semibold text-white shadow-lg shadow-purple-500/25 transition-all"
           >
             <Plus className="w-4 h-4" />
@@ -402,17 +312,13 @@ export const AlbumsShowcaseView: React.FC<AlbumsShowcaseViewProps> = ({
       {/* Album Creation Modal */}
       <AlbumCreateModal
         isOpen={isCreateModalOpen}
-        onClose={() => {
-          setIsCreateModalOpen(false);
-          setCreateSuggestion(null);
-        }}
+        onClose={() => setIsCreateModalOpen(false)}
         onCreated={(newAlbum) => {
           setAlbums((prev) => [newAlbum, ...prev]);
           setActiveAlbumId(newAlbum._id);
         }}
         allMedia={allMedia}
         initialSelectedIds={initialSelectedMediaIds}
-        initialSuggestion={createSuggestion}
       />
     </div>
   );

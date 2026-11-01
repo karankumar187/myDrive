@@ -22,12 +22,6 @@ interface AlbumCreateModalProps {
   onCreated: (album: AlbumItem) => void;
   allMedia: FileItem[];
   initialSelectedIds?: string[];
-  initialSuggestion?: {
-    suggestedTitle?: string;
-    startDate?: string | Date;
-    endDate?: string | Date;
-    sampleFileIds?: string[];
-  };
 }
 
 export const AlbumCreateModal: React.FC<AlbumCreateModalProps> = ({
@@ -36,7 +30,6 @@ export const AlbumCreateModal: React.FC<AlbumCreateModalProps> = ({
   onCreated,
   allMedia,
   initialSelectedIds = [],
-  initialSuggestion,
 }) => {
   const [title, setTitle] = useState('');
   const [destination, setDestination] = useState('');
@@ -49,25 +42,13 @@ export const AlbumCreateModal: React.FC<AlbumCreateModalProps> = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Sync initial inputs or suggestion
+  // Sync initial selected items
   useEffect(() => {
-    if (initialSuggestion) {
-      if (initialSuggestion.suggestedTitle) setTitle(initialSuggestion.suggestedTitle);
-      if (initialSuggestion.startDate) {
-        setStartDate(new Date(initialSuggestion.startDate).toISOString().slice(0, 10));
-      }
-      if (initialSuggestion.endDate) {
-        setEndDate(new Date(initialSuggestion.endDate).toISOString().slice(0, 10));
-      }
-      if (initialSuggestion.sampleFileIds && initialSuggestion.sampleFileIds.length > 0) {
-        setSelectedFileIds(new Set(initialSuggestion.sampleFileIds));
-        setCoverFileId(initialSuggestion.sampleFileIds[0]);
-      }
-    } else if (initialSelectedIds.length > 0) {
+    if (initialSelectedIds.length > 0) {
       setSelectedFileIds(new Set(initialSelectedIds));
       setCoverFileId(initialSelectedIds[0]);
     }
-  }, [initialSuggestion, initialSelectedIds]);
+  }, [initialSelectedIds]);
 
   // Filter media for photo picker
   const filteredMedia = useMemo(() => {
