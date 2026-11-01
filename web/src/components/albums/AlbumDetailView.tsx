@@ -95,8 +95,8 @@ export const AlbumDetailView: React.FC<AlbumDetailViewProps> = ({
     return () => clearInterval(interval);
   }, [isSlideshowRunning, album]);
 
-  // Format trip dates
-  const formatTripDates = () => {
+  // Format album dates
+  const formatAlbumDates = () => {
     if (!album) return null;
     const start = album.startDate ? new Date(album.startDate) : null;
     const end = album.endDate ? new Date(album.endDate) : null;
@@ -199,7 +199,7 @@ export const AlbumDetailView: React.FC<AlbumDetailViewProps> = ({
     return (
       <div className="min-h-[500px] flex flex-col items-center justify-center gap-3">
         <Loader2 className="w-8 h-8 text-purple-400 animate-spin" />
-        <span className="text-xs text-neutral-400">Loading trip album...</span>
+        <span className="text-xs text-neutral-400">Loading album...</span>
       </div>
     );
   }
@@ -238,7 +238,7 @@ export const AlbumDetailView: React.FC<AlbumDetailViewProps> = ({
           className="inline-flex items-center gap-2 px-3.5 py-2 rounded-full bg-neutral-900/80 hover:bg-neutral-800 border border-white/10 text-xs font-semibold text-neutral-200 backdrop-blur-md transition-all shadow-md group"
         >
           <ChevronLeft className="w-4 h-4 text-purple-400 group-hover:-translate-x-0.5 transition-transform" />
-          <span>Back to Trips & Albums</span>
+          <span>Back to Albums</span>
         </button>
 
         <div className="flex items-center gap-2">
@@ -304,10 +304,10 @@ export const AlbumDetailView: React.FC<AlbumDetailViewProps> = ({
 
           {/* Stats Bar */}
           <div className="flex flex-wrap items-center gap-3 pt-3 text-xs text-neutral-300">
-            {formatTripDates() && (
+            {formatAlbumDates() && (
               <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/10 backdrop-blur-md border border-white/10">
                 <Calendar className="w-3.5 h-3.5 text-neutral-400" />
-                <span>{formatTripDates()}</span>
+                <span>{formatAlbumDates()}</span>
               </div>
             )}
 
@@ -340,7 +340,7 @@ export const AlbumDetailView: React.FC<AlbumDetailViewProps> = ({
         <div className="absolute top-6 right-6 flex items-center gap-2 z-10">
           <button
             onClick={handleTogglePin}
-            title={album.isPinned ? 'Unpin trip' : 'Pin trip'}
+            title={album.isPinned ? 'Unpin album' : 'Pin album'}
             className={`p-2.5 rounded-full backdrop-blur-md border transition-all ${
               album.isPinned
                 ? 'bg-purple-600/80 border-purple-400 text-white shadow-lg shadow-purple-500/20'
@@ -459,7 +459,7 @@ export const AlbumDetailView: React.FC<AlbumDetailViewProps> = ({
 
             <div className="flex-1 overflow-y-auto p-4">
               <p className="text-xs text-neutral-400 mb-3">
-                Select media items from your gallery to add to this trip:
+                Select media items from your gallery to add to this album:
               </p>
               <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 max-h-[350px] overflow-y-auto">
                 {allMedia

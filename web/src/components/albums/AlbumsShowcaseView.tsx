@@ -186,7 +186,7 @@ export const AlbumsShowcaseView: React.FC<AlbumsShowcaseViewProps> = ({
           <Search className="w-4 h-4 text-neutral-400 absolute left-3.5 top-3" />
           <input
             type="text"
-            placeholder="Search destinations, trips or dates..."
+            placeholder="Search albums, destinations, or dates..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="w-full pl-10 pr-4 py-2.5 rounded-2xl bg-neutral-900/80 border border-white/10 focus:border-purple-500 focus:ring-1 focus:ring-purple-500 text-xs sm:text-sm text-white placeholder-neutral-500 outline-none backdrop-blur-md transition-all shadow-inner"
@@ -227,13 +227,13 @@ export const AlbumsShowcaseView: React.FC<AlbumsShowcaseViewProps> = ({
             </select>
           )}
 
-          {/* Create Trip Album Button */}
+          {/* Create Album Button */}
           <button
             onClick={() => setIsCreateModalOpen(true)}
             className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-xs font-semibold text-white shadow-lg shadow-purple-500/25 transition-all"
           >
             <Plus className="w-4 h-4" />
-            <span>New Trip Album</span>
+            <span>New Album</span>
           </button>
         </div>
       </div>
@@ -242,34 +242,33 @@ export const AlbumsShowcaseView: React.FC<AlbumsShowcaseViewProps> = ({
       {loading ? (
         <div className="py-28 flex flex-col items-center justify-center gap-3">
           <Loader2 className="w-8 h-8 text-purple-400 animate-spin" />
-          <span className="text-xs text-neutral-400">Loading your travel albums...</span>
+          <span className="text-xs text-neutral-400">Loading albums...</span>
         </div>
       ) : filteredAlbums.length === 0 ? (
         <div className="py-24 text-center rounded-3xl border border-dashed border-white/10 bg-neutral-900/30 max-w-xl mx-auto p-8">
           <div className="w-16 h-16 rounded-2xl bg-purple-600/10 border border-purple-500/20 flex items-center justify-center text-purple-400 mx-auto mb-4">
             <Compass className="w-8 h-8" />
           </div>
-          <h3 className="text-lg font-bold text-white mb-2">No Trip Albums Yet</h3>
+          <h3 className="text-lg font-bold text-white mb-2">No Albums Yet</h3>
           <p className="text-xs text-neutral-400 leading-relaxed mb-6">
-            Transform your camera roll into narrative travel chapters. Group photos by city,
-            vacation, or memorable journeys with contributor device metadata.
+            Organize and curate your photos and videos into custom albums.
           </p>
           <button
             onClick={() => setIsCreateModalOpen(true)}
             className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-xs font-semibold text-white shadow-lg shadow-purple-500/25 transition-all"
           >
             <Plus className="w-4 h-4" />
-            <span>Create Your First Trip Album</span>
+            <span>Create Your First Album</span>
           </button>
         </div>
       ) : (
         <div className="space-y-8">
-          {/* Featured Hero Trip Card */}
+          {/* Featured Hero Album Card */}
           {featuredAlbum && (
             <div className="space-y-3">
               <div className="flex items-center gap-2 text-xs font-semibold text-neutral-400 uppercase tracking-wider">
                 <Sparkles className="w-3.5 h-3.5 text-purple-400" />
-                <span>Featured Journey</span>
+                <span>Featured Album</span>
               </div>
               <AlbumCard
                 album={featuredAlbum}
@@ -282,12 +281,12 @@ export const AlbumsShowcaseView: React.FC<AlbumsShowcaseViewProps> = ({
             </div>
           )}
 
-          {/* Recent Collections Grid */}
+          {/* All Albums Grid */}
           {remainingAlbums.length > 0 && (
             <div className="space-y-4 pt-4">
               <div className="flex items-center justify-between">
                 <h3 className="text-base font-bold text-white tracking-tight">
-                  Recent Collections & Journeys ({remainingAlbums.length})
+                  All Albums ({remainingAlbums.length})
                 </h3>
               </div>
 

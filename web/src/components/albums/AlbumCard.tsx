@@ -46,7 +46,7 @@ export const AlbumCard: React.FC<AlbumCardProps> = ({
     : null;
 
   // Format dates
-  const formatTripDates = () => {
+  const formatAlbumDates = () => {
     if (!album.startDate && !album.endDate) return null;
     const start = album.startDate ? new Date(album.startDate) : null;
     const end = album.endDate ? new Date(album.endDate) : null;
@@ -64,7 +64,7 @@ export const AlbumCard: React.FC<AlbumCardProps> = ({
     return null;
   };
 
-  const tripDateStr = formatTripDates();
+  const albumDateStr = formatAlbumDates();
 
   const getDeviceIcon = (platform?: string) => {
     const p = (platform || '').toLowerCase();
@@ -127,7 +127,7 @@ export const AlbumCard: React.FC<AlbumCardProps> = ({
           {onTogglePin && (
             <button
               onClick={onTogglePin}
-              title={album.isPinned ? 'Unpin trip' : 'Pin trip'}
+              title={album.isPinned ? 'Unpin album' : 'Pin album'}
               className={`p-2 rounded-full backdrop-blur-md border transition-all ${
                 album.isPinned
                   ? 'bg-purple-600/80 border-purple-400 text-white'
@@ -141,7 +141,7 @@ export const AlbumCard: React.FC<AlbumCardProps> = ({
           {onToggleFavorite && (
             <button
               onClick={onToggleFavorite}
-              title={album.isFavorite ? 'Remove from favorites' : 'Favorite trip'}
+              title={album.isFavorite ? 'Remove from favorites' : 'Favorite album'}
               className={`p-2 rounded-full backdrop-blur-md border transition-all ${
                 album.isFavorite
                   ? 'bg-rose-600/80 border-rose-400 text-white'
@@ -212,10 +212,10 @@ export const AlbumCard: React.FC<AlbumCardProps> = ({
         </h3>
 
         {/* Date Span */}
-        {tripDateStr && (
+        {albumDateStr && (
           <div className="flex items-center gap-1.5 text-xs text-neutral-300/90 mb-3 font-medium">
             <Calendar className="w-3.5 h-3.5 text-neutral-400 shrink-0" />
-            <span>{tripDateStr}</span>
+            <span>{albumDateStr}</span>
           </div>
         )}
 

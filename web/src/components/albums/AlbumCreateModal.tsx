@@ -100,7 +100,7 @@ export const AlbumCreateModal: React.FC<AlbumCreateModalProps> = ({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim()) {
-      setError('Trip/Album title is required');
+      setError('Album title is required');
       return;
     }
 
@@ -141,8 +141,8 @@ export const AlbumCreateModal: React.FC<AlbumCreateModalProps> = ({
               <Sparkles className="w-5 h-5" />
             </div>
             <div>
-              <h2 className="text-lg font-bold text-white tracking-tight">Create Trip Album</h2>
-              <p className="text-xs text-neutral-400">Curate photos into a narrative collection</p>
+              <h2 className="text-lg font-bold text-white tracking-tight">Create Album</h2>
+              <p className="text-xs text-neutral-400">Curate photos into a collection</p>
             </div>
           </div>
           <button
@@ -165,7 +165,7 @@ export const AlbumCreateModal: React.FC<AlbumCreateModalProps> = ({
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-semibold text-neutral-300 mb-1.5">
-                Trip / Album Title <span className="text-purple-400">*</span>
+                Album Title <span className="text-purple-400">*</span>
               </label>
               <input
                 type="text"
@@ -356,7 +356,7 @@ export const AlbumCreateModal: React.FC<AlbumCreateModalProps> = ({
                   Creating...
                 </>
               ) : (
-                'Create Trip Album'
+                'Create Album'
               )}
             </button>
           </div>

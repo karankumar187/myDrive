@@ -35,6 +35,7 @@ import {
   Upload,
   Compass,
   Clock,
+  FolderPlus,
 } from 'lucide-react';
 import { uploadService } from '../services/UploadService.js';
 import { VaultCryptoService } from '../services/vault-crypto.js';
@@ -43,6 +44,7 @@ import { getStreamUrl, getPreviewUrl, formatBytes, formatDate, formatDateTime } 
 import { api, startGlobalLoading, subscribeToProgress, GlobalProgressState } from '../services/api.js';
 import { ModernVideoPlayer } from './ModernVideoPlayer.js';
 import { AlbumsShowcaseView } from './albums/AlbumsShowcaseView.js';
+import { AddToAlbumModal } from './albums/AddToAlbumModal.js';
 
 interface Props {
   media: FileItem[];
@@ -83,9 +85,11 @@ export const GalleryTimelineView: React.FC<Props> = ({
   initialCursor,
   initialHasMore,
 }) => {
-  // Gallery Sub-Navigation Mode: Timeline vs Trips & Albums
+  // Gallery Sub-Navigation Mode: Timeline vs Albums
   const [gallerySubTab, setGallerySubTab] = useState<'timeline' | 'albums'>('timeline');
   const [selectedAlbumMediaIds, setSelectedAlbumMediaIds] = useState<string[]>([]);
+  const [isAddToAlbumOpen, setIsAddToAlbumOpen] = useState(false);
+  const [albumSuccessToast, setAlbumSuccessToast] = useState<string | null>(null);
 
   // Filters & Search
   const [filterType, setFilterType] = useState<'all' | 'favorites' | 'videos' | 'photos'>('all');
@@ -505,7 +509,7 @@ export const GalleryTimelineView: React.FC<Props> = ({
 
   return (
     <div className="space-y-6 w-full max-w-full min-w-0 overflow-x-hidden">
-      {/* Top Floating Pill Mode Switcher: Timeline vs Trips & Albums */}
+      {/* Top Floating Pill Mode Switcher: Timeline vs Albums */}
       <div className="flex items-center justify-center w-full pt-1 pb-1">
         <div className="inline-flex p-1 rounded-full bg-neutral-900/90 border border-white/10 backdrop-blur-xl shadow-xl">
           <button
@@ -527,13 +531,13 @@ export const GalleryTimelineView: React.FC<Props> = ({
                 : 'text-neutral-400 hover:text-white'
             }`}
           >
-            <Compass className="w-3.5 h-3.5" />
-            <span>Trips & Albums</span>
+            <FolderPlus className="w-3.5 h-3.5" />
+            <span>Albums</span>
           </button>
         </div>
       </div>
 
-      {/* Trips & Albums Sub-View */}
+      {/* Albums Sub-View */}
       {gallerySubTab === 'albums' ? (
         <AlbumsShowcaseView
           allMedia={localMediaList}
@@ -808,18 +812,15 @@ export const GalleryTimelineView: React.FC<Props> = ({
           </div>
 
           <div className="flex items-center space-x-2 overflow-x-auto py-0.5">
-            {/* Create Trip Album */}
+            {/* Add to Album */}
             <button
               disabled={selectedIds.size === 0}
-              onClick={() => {
-                setSelectedAlbumMediaIds(Array.from(selectedIds));
-                setGallerySubTab('albums');
-              }}
+              onClick={() => setIsAddToAlbumOpen(true)}
               className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-semibold text-xs border border-purple-400/40 shadow-glow-purple disabled:opacity-40 transition flex items-center space-x-1.5 active:scale-95"
-              title="Create Trip Album from Selected"
+              title="Add selected items to an album"
             >
-              <Compass className="w-3.5 h-3.5" />
-              <span>Create Trip</span>
+              <FolderPlus className="w-3.5 h-3.5" />
+              <span>Add to Album</span>
             </button>
 
             {/* Force Download to Paired Device */}
@@ -1195,6 +1196,31 @@ export const GalleryTimelineView: React.FC<Props> = ({
           </div>
         </div>,
         document.body
+      )}
+
+      {/* Add to Album Modal */}
+      <AddToAlbumModal
+        isOpen={isAddToAlbumOpen}
+        onClose={() => setIsAddToAlbumOpen(false)}
+        selectedFileIds={Array.from(selectedIds)}
+        onSuccess={(albumTitle) => {
+          const count = selectedIds.size;
+          deselectAll();
+          setAlbumSuccessToast(`Added ${count} items to "${albumTitle}"`);
+          setTimeout(() => setAlbumSuccessToast(null), 3000);
+        }}
+        onCreateNewAlbum={() => {
+          setSelectedAlbumMediaIds(Array.from(selectedIds));
+          setGallerySubTab('albums');
+        }}
+      />
+
+      {/* Floating Success Toast */}
+      {albumSuccessToast && (
+        <div className="fixed top-6 right-6 z-[130] px-4 py-2.5 rounded-2xl bg-neutral-900 border border-purple-500/50 shadow-2xl text-xs font-semibold text-purple-300 flex items-center gap-2 animate-fadeIn">
+          <Check className="w-4 h-4 text-purple-400" />
+          <span>{albumSuccessToast}</span>
+        </div>
       )}
     </div>
   );
