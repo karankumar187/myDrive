@@ -270,12 +270,16 @@ export const AlbumCreateModal: React.FC<AlbumCreateModalProps> = ({
                 filteredMedia.map((file) => {
                   const isSelected = selectedFileIds.has(file._id);
                   const isCover = coverFileId === file._id;
-                  const previewUrl = getPreviewUrl(file._id);
+                  const thumbUrl =
+                    file.metadata?.thumbnail && file.metadata.thumbnail.startsWith('data:image/')
+                      ? file.metadata.thumbnail
+                      : api.getThumbnailUrl(file._id);
 
                   return (
                     <div
                       key={file._id}
                       onClick={() => toggleFile(file._id)}
+                      style={{ contentVisibility: 'auto', containIntrinsicSize: '90px' }}
                       className={`group relative aspect-square rounded-xl overflow-hidden cursor-pointer border transition-all ${
                         isSelected
                           ? 'border-purple-500 ring-2 ring-purple-500/60'
@@ -283,9 +287,10 @@ export const AlbumCreateModal: React.FC<AlbumCreateModalProps> = ({
                       }`}
                     >
                       <img
-                        src={previewUrl}
+                        src={thumbUrl}
                         alt={file.filename}
                         loading="lazy"
+                        decoding="async"
                         className="w-full h-full object-cover"
                       />
 

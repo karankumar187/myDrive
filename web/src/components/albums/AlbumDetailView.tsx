@@ -32,6 +32,9 @@ import { ModernVideoPlayer } from '../ModernVideoPlayer.js';
 import { getPreviewUrl, getStreamUrl, formatBytes } from '../../utils/format.js';
 import { isVideoFile } from '../../services/media-cache.js';
 
+// In-memory cache for instant 0ms album transitions (SWR)
+const albumDetailCache = new Map<string, AlbumDetailItem>();
+
 interface AlbumDetailViewProps {
   albumId: string;
   onBack: () => void;
@@ -47,8 +50,8 @@ export const AlbumDetailView: React.FC<AlbumDetailViewProps> = ({
   vaultKey,
   onAlbumUpdated,
 }) => {
-  const [album, setAlbum] = useState<AlbumDetailItem | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [album, setAlbum] = useState<AlbumDetailItem | null>(() => albumDetailCache.get(albumId) || null);
+  const [loading, setLoading] = useState<boolean>(() => !albumDetailCache.has(albumId));
   const [error, setError] = useState<string | null>(null);
 
   // Layout mode: 'collage' or 'grid'
@@ -64,16 +67,21 @@ export const AlbumDetailView: React.FC<AlbumDetailViewProps> = ({
   const [isAddPhotosOpen, setIsAddPhotosOpen] = useState(false);
   const [selectedToAdd, setSelectedToAdd] = useState<Set<string>>(new Set());
 
-  // Load album details
+  // Load album details with Stale-While-Revalidate caching
   const loadAlbumData = async () => {
     try {
-      setLoading(true);
+      if (!albumDetailCache.has(albumId)) {
+        setLoading(true);
+      }
       setError(null);
       const res = await api.getAlbum(albumId);
+      albumDetailCache.set(albumId, res.album);
       setAlbum(res.album);
     } catch (err: any) {
       console.error('Failed to load album:', err);
-      setError(err.message || 'Failed to load album');
+      if (!albumDetailCache.has(albumId)) {
+        setError(err.message || 'Failed to load album');
+      }
     } finally {
       setLoading(false);
     }
@@ -418,28 +426,37 @@ export const AlbumDetailView: React.FC<AlbumDetailViewProps> = ({
         />
       ) : (
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
-          {album.files.map((file, idx) => (
-            <div
-              key={file._id}
-              onClick={() => {
-                setActiveLightboxIndex(idx);
-                setIsSlideshowRunning(false);
-              }}
-              className="group relative aspect-square rounded-2xl overflow-hidden cursor-pointer bg-neutral-900 border border-white/10 hover:border-purple-500/50 transition-all"
-            >
-              <img
-                src={getPreviewUrl(file._id)}
-                alt={file.filename}
-                loading="lazy"
-                className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
-              />
-              {isVideoFile(file.mimeType || file.filename) && (
-                <div className="absolute top-2 left-2 p-1.5 rounded-full bg-black/60 text-purple-400">
-                  <Play className="w-3 h-3 fill-current" />
-                </div>
-              )}
-            </div>
-          ))}
+          {album.files.map((file, idx) => {
+            const thumbUrl =
+              file.metadata?.thumbnail && file.metadata.thumbnail.startsWith('data:image/')
+                ? file.metadata.thumbnail
+                : api.getThumbnailUrl(file._id);
+
+            return (
+              <div
+                key={file._id}
+                onClick={() => {
+                  setActiveLightboxIndex(idx);
+                  setIsSlideshowRunning(false);
+                }}
+                style={{ contentVisibility: 'auto', containIntrinsicSize: '160px' }}
+                className="group relative aspect-square rounded-2xl overflow-hidden cursor-pointer bg-neutral-900 border border-white/10 hover:border-purple-500/50 transition-all select-none"
+              >
+                <img
+                  src={thumbUrl}
+                  alt={file.filename}
+                  loading="lazy"
+                  decoding="async"
+                  className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
+                />
+                {isVideoFile(file.mimeType || file.filename) && (
+                  <div className="absolute top-2 left-2 p-1.5 rounded-full bg-black/60 text-purple-400">
+                    <Play className="w-3 h-3 fill-current" />
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
 
@@ -466,6 +483,11 @@ export const AlbumDetailView: React.FC<AlbumDetailViewProps> = ({
                   .filter((m) => !album.files.some((f) => f._id === m._id))
                   .map((m) => {
                     const isSelected = selectedToAdd.has(m._id);
+                    const thumbUrl =
+                      m.metadata?.thumbnail && m.metadata.thumbnail.startsWith('data:image/')
+                        ? m.metadata.thumbnail
+                        : api.getThumbnailUrl(m._id);
+
                     return (
                       <div
                         key={m._id}
@@ -477,6 +499,7 @@ export const AlbumDetailView: React.FC<AlbumDetailViewProps> = ({
                             return next;
                           });
                         }}
+                        style={{ contentVisibility: 'auto', containIntrinsicSize: '120px' }}
                         className={`relative aspect-square rounded-xl overflow-hidden cursor-pointer border transition-all ${
                           isSelected
                             ? 'border-purple-500 ring-2 ring-purple-500/60'
@@ -484,8 +507,10 @@ export const AlbumDetailView: React.FC<AlbumDetailViewProps> = ({
                         }`}
                       >
                         <img
-                          src={getPreviewUrl(m._id)}
+                          src={thumbUrl}
                           alt={m.filename}
+                          loading="lazy"
+                          decoding="async"
                           className="w-full h-full object-cover"
                         />
                         <div

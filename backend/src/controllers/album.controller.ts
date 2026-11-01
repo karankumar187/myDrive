@@ -47,67 +47,93 @@ export class AlbumController {
         coverMap.set(String(f._id), f);
       }
 
-      // Format response with summary stats
-      const result = await Promise.all(
-        albums.map(async (alb) => {
-          const validFileCount = alb.fileIds?.length || 0;
-          let cover = alb.coverFileId ? coverMap.get(String(alb.coverFileId)) : null;
-          if (!cover && alb.fileIds?.length) {
-            cover = coverMap.get(String(alb.fileIds[0])) || null;
-          }
+      // Collect sample file IDs across ALL albums in a single batch query (No N+1!)
+      const allSampleIds: Types.ObjectId[] = [];
+      const albumFileSampleMap = new Map<string, Types.ObjectId[]>();
+      for (const alb of albums) {
+        if (alb.fileIds && alb.fileIds.length > 0) {
+          const sample = alb.fileIds.slice(0, 30);
+          albumFileSampleMap.set(String(alb._id), sample);
+          sample.forEach((id) => allSampleIds.push(id));
+        }
+      }
 
-          // Sample contributor devices for this album
-          let contributors: { deviceId: string; deviceName: string; platform: string }[] = [];
-          if (alb.fileIds && alb.fileIds.length > 0) {
-            const filesSample = await File.find({
-              _id: { $in: alb.fileIds.slice(0, 50) },
-              isTrash: false,
-            })
-              .select('sourceDeviceIds')
-              .lean();
+      const fileDeviceMap = new Map<string, string[]>();
+      const allDevIdSet = new Set<string>();
 
-            const devIdSet = new Set<string>();
-            for (const f of filesSample) {
-              if (f.sourceDeviceIds) {
-                f.sourceDeviceIds.forEach((id: string) => devIdSet.add(id));
-              }
-            }
-
-            if (devIdSet.size > 0) {
-              const devices = await Device.find({
-                deviceId: { $in: Array.from(devIdSet) },
-                userId,
-              })
-                .select('deviceId deviceName deviceType osVersion')
-                .lean();
-
-              contributors = devices.map((d) => ({
-                deviceId: d.deviceId,
-                deviceName: d.deviceName,
-                platform: (d as any).deviceType || (d as any).osVersion || 'device',
-              }));
-            }
-          }
-
-          return {
-            _id: alb._id,
-            title: alb.title,
-            description: alb.description || '',
-            destination: alb.destination || { name: '' },
-            coverFile: cover || null,
-            fileCount: validFileCount,
-            startDate: alb.startDate || null,
-            endDate: alb.endDate || null,
-            isPinned: alb.isPinned || false,
-            isFavorite: alb.isFavorite || false,
-            themeGradient: alb.themeGradient || 'from-purple-900/60 via-indigo-950/40 to-black',
-            contributors,
-            createdAt: alb.createdAt,
-            updatedAt: alb.updatedAt,
-          };
+      if (allSampleIds.length > 0) {
+        const sampleFiles = await File.find({
+          _id: { $in: allSampleIds },
+          isTrash: false,
         })
-      );
+          .select('_id sourceDeviceIds')
+          .lean();
 
+        for (const sf of sampleFiles) {
+          if (sf.sourceDeviceIds && sf.sourceDeviceIds.length > 0) {
+            fileDeviceMap.set(String(sf._id), sf.sourceDeviceIds);
+            sf.sourceDeviceIds.forEach((devId: string) => allDevIdSet.add(devId));
+          }
+        }
+      }
+
+      // Batch query all unique devices in 1 single fast query
+      const deviceMap = new Map<string, { deviceId: string; deviceName: string; platform: string }>();
+      if (allDevIdSet.size > 0) {
+        const devices = await Device.find({
+          deviceId: { $in: Array.from(allDevIdSet) },
+          userId,
+        })
+          .select('deviceId deviceName deviceType osVersion')
+          .lean();
+
+        for (const d of devices) {
+          deviceMap.set(d.deviceId, {
+            deviceId: d.deviceId,
+            deviceName: d.deviceName,
+            platform: (d as any).deviceType || (d as any).osVersion || 'device',
+          });
+        }
+      }
+
+      // Fast synchronous mapping without any nested database queries
+      const result = albums.map((alb) => {
+        const validFileCount = alb.fileIds?.length || 0;
+        let cover = alb.coverFileId ? coverMap.get(String(alb.coverFileId)) : null;
+        if (!cover && alb.fileIds?.length) {
+          cover = coverMap.get(String(alb.fileIds[0])) || null;
+        }
+
+        const albumSampleIds = albumFileSampleMap.get(String(alb._id)) || [];
+        const albumDevIdSet = new Set<string>();
+        for (const fid of albumSampleIds) {
+          const devIds = fileDeviceMap.get(String(fid));
+          if (devIds) devIds.forEach((id) => albumDevIdSet.add(id));
+        }
+
+        const contributors = Array.from(albumDevIdSet)
+          .map((id) => deviceMap.get(id))
+          .filter(Boolean) as { deviceId: string; deviceName: string; platform: string }[];
+
+        return {
+          _id: alb._id,
+          title: alb.title,
+          description: alb.description || '',
+          destination: alb.destination || { name: '' },
+          coverFile: cover || null,
+          fileCount: validFileCount,
+          startDate: alb.startDate || null,
+          endDate: alb.endDate || null,
+          isPinned: alb.isPinned || false,
+          isFavorite: alb.isFavorite || false,
+          themeGradient: alb.themeGradient || 'from-purple-900/60 via-indigo-950/40 to-black',
+          contributors,
+          createdAt: alb.createdAt,
+          updatedAt: alb.updatedAt,
+        };
+      });
+
+      res.set('Cache-Control', 'private, max-age=15, stale-while-revalidate=60');
       res.json({ albums: result });
     } catch (error) {
       console.error('[AlbumController.listAlbums] Error:', error);
@@ -188,6 +214,7 @@ export class AlbumController {
         }));
       }
 
+      res.set('Cache-Control', 'private, max-age=30, stale-while-revalidate=120');
       res.json({
         album: {
           ...album,

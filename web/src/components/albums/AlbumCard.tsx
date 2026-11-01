@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { AlbumItem } from '../../types.js';
 import {
   MapPin,
@@ -16,6 +16,8 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { getPreviewUrl, formatBytes } from '../../utils/format.js';
+import { api } from '../../services/api.js';
+import { mediaCache } from '../../services/media-cache.js';
 
 interface AlbumCardProps {
   album: AlbumItem;
@@ -37,13 +39,24 @@ export const AlbumCard: React.FC<AlbumCardProps> = ({
   onDelete,
 }) => {
   const [menuOpen, setMenuOpen] = useState(false);
-  const [imageLoaded, setImageLoaded] = useState(false);
+  const [highResLoaded, setHighResLoaded] = useState(false);
   const [imageError, setImageError] = useState(false);
 
-  // Compute display cover image URL
-  const coverUrl = album.coverFile?._id
-    ? getPreviewUrl(album.coverFile._id)
-    : null;
+  // Instant 0ms thumbnail from metadata or cache
+  const thumbUrl = useMemo(() => {
+    if (album.coverFile?.metadata?.thumbnail && album.coverFile.metadata.thumbnail.startsWith('data:image/')) {
+      return album.coverFile.metadata.thumbnail;
+    }
+    if (album.coverFile?._id) {
+      return mediaCache.getThumbnail(album.coverFile._id) || api.getThumbnailUrl(album.coverFile._id);
+    }
+    return null;
+  }, [album.coverFile]);
+
+  // High-res preview for crisp presentation
+  const previewUrl = useMemo(() => {
+    return album.coverFile?._id ? getPreviewUrl(album.coverFile._id) : null;
+  }, [album.coverFile]);
 
   // Format dates
   const formatAlbumDates = () => {
@@ -86,18 +99,35 @@ export const AlbumCard: React.FC<AlbumCardProps> = ({
           : 'w-full h-[320px] sm:h-[350px]'
       }`}
     >
-      {/* Background Cover Image with Zoom Effect */}
+      {/* Background Cover Image with Progressive Loading */}
       <div className="absolute inset-0 bg-neutral-900 overflow-hidden">
-        {coverUrl && !imageError ? (
-          <img
-            src={coverUrl}
-            alt={album.title}
-            onLoad={() => setImageLoaded(true)}
-            onError={() => setImageError(true)}
-            className={`w-full h-full object-cover transition-all duration-700 ease-out group-hover:scale-105 ${
-              imageLoaded ? 'opacity-100' : 'opacity-0'
-            }`}
-          />
+        {thumbUrl && !imageError ? (
+          <>
+            {/* Instant thumbnail */}
+            <img
+              src={thumbUrl}
+              alt={album.title}
+              loading="lazy"
+              decoding="async"
+              className={`absolute inset-0 w-full h-full object-cover transition-transform duration-700 ease-out group-hover:scale-105 ${
+                highResLoaded ? 'opacity-0' : 'opacity-100'
+              }`}
+            />
+            {/* High-res fade in */}
+            {previewUrl && (
+              <img
+                src={previewUrl}
+                alt={album.title}
+                loading="lazy"
+                decoding="async"
+                onLoad={() => setHighResLoaded(true)}
+                onError={() => setImageError(true)}
+                className={`absolute inset-0 w-full h-full object-cover transition-all duration-700 ease-out group-hover:scale-105 ${
+                  highResLoaded ? 'opacity-100' : 'opacity-0'
+                }`}
+              />
+            )}
+          </>
         ) : (
           <div className="w-full h-full bg-gradient-to-br from-purple-900/40 via-neutral-900 to-indigo-950/60 flex items-center justify-center">
             <ImageIcon className="w-16 h-16 text-white/20" />

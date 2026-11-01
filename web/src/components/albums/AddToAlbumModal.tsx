@@ -154,9 +154,12 @@ export const AddToAlbumModal: React.FC<AddToAlbumModalProps> = ({
             ) : (
               <div className="space-y-1.5 max-h-[300px] overflow-y-auto pr-1">
                 {filteredAlbums.map((album) => {
-                  const coverUrl = album.coverFile?._id
-                    ? getPreviewUrl(album.coverFile._id)
-                    : null;
+                  const coverUrl =
+                    album.coverFile?.metadata?.thumbnail && album.coverFile.metadata.thumbnail.startsWith('data:image/')
+                      ? album.coverFile.metadata.thumbnail
+                      : album.coverFile?._id
+                      ? api.getThumbnailUrl(album.coverFile._id)
+                      : null;
                   const isAdding = addingToId === album._id;
 
                   return (
