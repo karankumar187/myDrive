@@ -31,6 +31,7 @@ import {
 import { api } from '../../services/api.js';
 import { EditorialCollageGrid } from './EditorialCollageGrid.js';
 import { AlbumEditModal } from './AlbumEditModal.js';
+import { FullScreenViewer, PhotoDetailsModal } from '../FullScreenViewer.js';
 import { ModernVideoPlayer } from '../ModernVideoPlayer.js';
 import { getPreviewUrl, getStreamUrl, formatBytes } from '../../utils/format.js';
 import { isVideoFile } from '../../services/media-cache.js';
@@ -63,8 +64,7 @@ export const AlbumDetailView: React.FC<AlbumDetailViewProps> = ({
   // Lightbox & Slideshow state
   const [activeLightboxIndex, setActiveLightboxIndex] = useState<number | null>(null);
   const [isSlideshowRunning, setIsSlideshowRunning] = useState(false);
-  const [zoomLevel, setZoomLevel] = useState(1);
-  const [rotation, setRotation] = useState(0);
+  const [isDetailsOpen, setIsDetailsOpen] = useState(false);
 
   // Photo management modals
   const [isAddPhotosOpen, setIsAddPhotosOpen] = useState(false);
@@ -155,8 +155,8 @@ export const AlbumDetailView: React.FC<AlbumDetailViewProps> = ({
   };
 
   // Toggle favorite on an item
-  const handleToggleItemFavorite = async (item: FileItem, e: React.MouseEvent) => {
-    e.stopPropagation();
+  const handleToggleItemFavorite = async (item: FileItem, e?: React.MouseEvent) => {
+    e?.stopPropagation();
     try {
       await api.toggleFavorite(item._id);
       setAlbum((prev) => {
@@ -170,6 +170,32 @@ export const AlbumDetailView: React.FC<AlbumDetailViewProps> = ({
       });
     } catch (err) {
       console.error('Failed to toggle favorite:', err);
+    }
+  };
+
+  // Delete/Remove photo currently active in viewer
+  const handleDeleteCurrentItem = async () => {
+    if (activeLightboxIndex === null || !album) return;
+    const item = album.files[activeLightboxIndex];
+    if (!item) return;
+
+    if (window.confirm(`Remove "${item.filename}" from "${album.title}"?`)) {
+      try {
+        await api.removePhotosFromAlbum(album._id, [item._id]);
+        setAlbum((prev) => {
+          if (!prev) return null;
+          const nextFiles = prev.files.filter((f) => f._id !== item._id);
+          const next = { ...prev, files: nextFiles };
+          albumDetailCache.set(albumId, next);
+          return next;
+        });
+        if (activeLightboxIndex >= album.files.length - 1) {
+          setActiveLightboxIndex(album.files.length - 2 >= 0 ? album.files.length - 2 : null);
+        }
+        onAlbumUpdated?.();
+      } catch (err) {
+        console.error('Failed to remove photo from album:', err);
+      }
     }
   };
 
@@ -263,11 +289,6 @@ export const AlbumDetailView: React.FC<AlbumDetailViewProps> = ({
     : album.files.length > 0
     ? getPreviewUrl(album.files[0]._id)
     : null;
-
-  const currentLightboxItem =
-    activeLightboxIndex !== null && album.files[activeLightboxIndex]
-      ? album.files[activeLightboxIndex]
-      : null;
 
   return (
     <div className="w-full space-y-8 animate-fadeIn pb-16">
@@ -654,129 +675,30 @@ export const AlbumDetailView: React.FC<AlbumDetailViewProps> = ({
         </div>
       )}
 
-      {/* Fullscreen Lightbox & Slideshow */}
-      {currentLightboxItem &&
-        createPortal(
-          <div className="fixed inset-0 z-[100] flex flex-col bg-black/95 backdrop-blur-xl animate-fadeIn">
-            {/* Top Toolbar */}
-            <div className="flex items-center justify-between px-6 py-4 bg-gradient-to-b from-black/80 to-transparent z-20">
-              <div className="flex items-center gap-3">
-                <span className="text-sm font-semibold text-white drop-shadow">
-                  {currentLightboxItem.filename}
-                </span>
-                <span className="text-xs text-neutral-400">
-                  {activeLightboxIndex! + 1} of {album.files.length}
-                </span>
-              </div>
+      {/* Unified Full-Screen Photo & Video Viewer with Swipe, Zoom, Optimistic Thumbnails & 5-item Preload */}
+      {activeLightboxIndex !== null && album && album.files[activeLightboxIndex] && (
+        <FullScreenViewer
+          mediaList={album.files}
+          currentIndex={activeLightboxIndex}
+          vaultKey={vaultKey}
+          onIndexChange={(idx) => setActiveLightboxIndex(idx)}
+          onClose={() => {
+            setActiveLightboxIndex(null);
+            setIsSlideshowRunning(false);
+          }}
+          onToggleFavorite={() => handleToggleItemFavorite(album.files[activeLightboxIndex])}
+          onDelete={handleDeleteCurrentItem}
+          onOpenDetails={() => setIsDetailsOpen(true)}
+        />
+      )}
 
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => setIsSlideshowRunning(!isSlideshowRunning)}
-                  className={`px-3 py-1.5 rounded-full text-xs font-semibold flex items-center gap-1.5 border transition-all ${
-                    isSlideshowRunning
-                      ? 'bg-purple-600 border-purple-400 text-white'
-                      : 'bg-black/50 border-white/20 text-neutral-300 hover:text-white'
-                  }`}
-                >
-                  <Play className="w-3.5 h-3.5 fill-current" />
-                  <span>{isSlideshowRunning ? 'Pause' : 'Slideshow'}</span>
-                </button>
-
-                <button
-                  onClick={() => setZoomLevel((z) => Math.min(z + 0.25, 3))}
-                  className="p-2 rounded-full bg-black/50 hover:bg-black/80 text-neutral-300 hover:text-white border border-white/10"
-                >
-                  <ZoomIn className="w-4 h-4" />
-                </button>
-
-                <button
-                  onClick={() => setZoomLevel((z) => Math.max(z - 0.25, 0.5))}
-                  className="p-2 rounded-full bg-black/50 hover:bg-black/80 text-neutral-300 hover:text-white border border-white/10"
-                >
-                  <ZoomOut className="w-4 h-4" />
-                </button>
-
-                <button
-                  onClick={() => setRotation((r) => (r + 90) % 360)}
-                  className="p-2 rounded-full bg-black/50 hover:bg-black/80 text-neutral-300 hover:text-white border border-white/10"
-                >
-                  <RotateCw className="w-4 h-4" />
-                </button>
-
-                <button
-                  onClick={() => handleRemovePhoto(currentLightboxItem._id)}
-                  title="Remove from album"
-                  className="p-2 rounded-full bg-black/50 hover:bg-red-500/20 text-neutral-300 hover:text-red-400 border border-white/10"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
-
-                <button
-                  onClick={() => {
-                    setActiveLightboxIndex(null);
-                    setIsSlideshowRunning(false);
-                  }}
-                  className="p-2 rounded-full bg-black/50 hover:bg-black/80 text-neutral-300 hover:text-white border border-white/10 ml-2"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-            </div>
-
-            {/* Main Stage View */}
-            <div className="flex-1 relative flex items-center justify-center p-4 overflow-hidden select-none">
-              {/* Prev Button */}
-              {activeLightboxIndex! > 0 && (
-                <button
-                  onClick={() => {
-                    setActiveLightboxIndex(activeLightboxIndex! - 1);
-                    setZoomLevel(1);
-                    setRotation(0);
-                  }}
-                  className="absolute left-6 z-20 p-3 rounded-full bg-black/60 hover:bg-black border border-white/20 text-white transition-all shadow-xl"
-                >
-                  <ChevronLeft className="w-6 h-6" />
-                </button>
-              )}
-
-              {/* Media rendering: video player or image */}
-              {isVideoFile(currentLightboxItem.mimeType || currentLightboxItem.filename) ? (
-                <div className="w-full max-w-5xl max-h-[85vh]">
-                  <ModernVideoPlayer
-                    src={getStreamUrl(currentLightboxItem._id)}
-                    filename={currentLightboxItem.filename}
-                    poster={getPreviewUrl(currentLightboxItem._id)}
-                  />
-                </div>
-              ) : (
-                <img
-                  src={getStreamUrl(currentLightboxItem._id)}
-                  alt={currentLightboxItem.filename}
-                  style={{
-                    transform: `scale(${zoomLevel}) rotate(${rotation}deg)`,
-                    transition: 'transform 0.2s ease-out',
-                  }}
-                  className="max-h-[82vh] max-w-[92vw] object-contain shadow-2xl rounded-lg"
-                />
-              )}
-
-              {/* Next Button */}
-              {activeLightboxIndex! < album.files.length - 1 && (
-                <button
-                  onClick={() => {
-                    setActiveLightboxIndex(activeLightboxIndex! + 1);
-                    setZoomLevel(1);
-                    setRotation(0);
-                  }}
-                  className="absolute right-6 z-20 p-3 rounded-full bg-black/60 hover:bg-black border border-white/20 text-white transition-all shadow-xl"
-                >
-                  <ChevronRight className="w-6 h-6" />
-                </button>
-              )}
-            </div>
-          </div>,
-          document.body
-        )}
+      {/* Photo Details Modal */}
+      {isDetailsOpen && activeLightboxIndex !== null && album && album.files[activeLightboxIndex] && (
+        <PhotoDetailsModal
+          item={album.files[activeLightboxIndex]}
+          onClose={() => setIsDetailsOpen(false)}
+        />
+      )}
 
       {/* Edit Album Details Modal */}
       {isEditModalOpen && (
