@@ -12,9 +12,35 @@ export class DeviceController {
    */
   static async listDevices(req: Request, res: Response): Promise<void> {
     try {
+      const now = Date.now();
       const devices = await Device.find({ userId: req.user!._id })
         .select('-apiKeyHash')
         .sort({ lastSeenAt: -1 });
+
+      // Auto-heal stale syncing devices (if syncing for > 40 seconds without updates)
+      for (const dev of devices) {
+        if (dev.status === 'syncing') {
+          const lastActivity = dev.lastSeenAt ? new Date(dev.lastSeenAt).getTime() : 0;
+          if (now - lastActivity > 40000) {
+            dev.status = 'online';
+            dev.currentSyncActivity = 'Idle (Camera roll synced and up to date)';
+            await Device.updateOne(
+              { _id: dev._id },
+              { $set: { status: 'online', currentSyncActivity: 'Idle (Camera roll synced and up to date)' } }
+            );
+
+            const io = getSocketIoInstance();
+            if (io) {
+              io.to(`user:${req.user!._id}`).emit('device:sync_status', {
+                deviceId: dev.deviceId,
+                status: 'online',
+                currentSyncActivity: 'Idle (Camera roll synced and up to date)',
+                lastSeenAt: new Date().toISOString(),
+              });
+            }
+          }
+        }
+      }
 
       res.json({ devices });
     } catch (error: any) {

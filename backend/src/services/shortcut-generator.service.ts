@@ -305,6 +305,7 @@ export class ShortcutGeneratorService {
     const dateDetectUUID = this.uuid();
     const findPhotosUUID = this.uuid();
     const photoLoopGroup = this.uuid();
+    const syncCompleteUUID = this.uuid();
 
     return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -471,6 +472,28 @@ export class ShortcutGeneratorService {
       </dict>
     </dict>
 
+    <!-- Sync Complete: Notify server that batch checking/syncing has completed -->
+    <dict>
+      <key>WFWorkflowActionIdentifier</key>
+      <string>is.workflow.actions.downloadurl</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict>
+        <key>UUID</key>
+        <string>${syncCompleteUUID}</string>
+        <key>CustomOutputName</key>
+        <string>SyncCompleteResult</string>
+        <key>WFURL</key>
+        <string>${this.esc(serverUrl)}/api/v1/shortcuts/sync-complete?deviceId=${this.esc(deviceId)}&amp;deviceKey=${this.esc(deviceKey)}</string>
+        <key>WFHTTPMethod</key>
+        <string>GET</string>
+        <key>WFHTTPHeaders</key>
+        ${this.headersDict([
+          this.headerItem('X-Device-Id', deviceId),
+          this.headerItem('X-Device-Key', deviceKey),
+        ])}
+      </dict>
+    </dict>
+
     <!-- Final Single Notification -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
@@ -529,6 +552,7 @@ export class ShortcutGeneratorService {
   static generateUploadShortcut(serverUrl: string, deviceId: string, deviceKey: string): string {
     const selectPhotosUUID = this.uuid();
     const photoLoopGroup = this.uuid();
+    const syncCompleteUUID = this.uuid();
 
     return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -584,6 +608,28 @@ export class ShortcutGeneratorService {
         <string>${photoLoopGroup}</string>
         <key>WFControlFlowMode</key>
         <integer>2</integer>
+      </dict>
+    </dict>
+
+    <!-- Sync Complete: Notify server that batch checking/syncing has completed -->
+    <dict>
+      <key>WFWorkflowActionIdentifier</key>
+      <string>is.workflow.actions.downloadurl</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict>
+        <key>UUID</key>
+        <string>${syncCompleteUUID}</string>
+        <key>CustomOutputName</key>
+        <string>SyncCompleteResult</string>
+        <key>WFURL</key>
+        <string>${this.esc(serverUrl)}/api/v1/shortcuts/sync-complete?deviceId=${this.esc(deviceId)}&amp;deviceKey=${this.esc(deviceKey)}</string>
+        <key>WFHTTPMethod</key>
+        <string>GET</string>
+        <key>WFHTTPHeaders</key>
+        ${this.headersDict([
+          this.headerItem('X-Device-Id', deviceId),
+          this.headerItem('X-Device-Key', deviceKey),
+        ])}
       </dict>
     </dict>
 

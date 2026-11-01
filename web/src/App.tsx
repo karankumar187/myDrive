@@ -630,7 +630,12 @@ export const App: React.FC = () => {
           <div className="flex items-center space-x-3">
             {/* Live Syncing Device Indicator Badge */}
             {(() => {
-              const syncingDev = devices.find((d) => d.status === 'syncing');
+              const now = Date.now();
+              const syncingDev = devices.find((d) => {
+                if (d.status !== 'syncing') return false;
+                const lastActivity = d.lastSeenAt ? new Date(d.lastSeenAt).getTime() : 0;
+                return now - lastActivity < 45000;
+              });
               if (!syncingDev) return null;
               return (
                 <button

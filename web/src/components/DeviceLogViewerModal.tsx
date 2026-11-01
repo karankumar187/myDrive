@@ -205,40 +205,52 @@ export const DeviceLogViewerModal: React.FC<Props> = ({
                 <h3 className="font-bold text-white text-base truncate tracking-tight">
                   {device.deviceName} Logs
                 </h3>
-                <span
-                  className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold border ${
-                    device.status === 'syncing'
-                      ? 'bg-purple-950/60 text-purple-300 border-purple-500/50 shadow-glow-purple animate-pulse'
-                      : device.status === 'online'
-                      ? 'bg-emerald-950/40 text-emerald-400 border-emerald-800/50'
-                      : 'bg-zinc-900 text-zinc-500 border-zinc-800'
-                  }`}
-                >
-                  <span
-                    className={`w-1.5 h-1.5 rounded-full mr-1.5 ${
-                      device.status === 'syncing'
-                        ? 'bg-purple-400 animate-ping'
-                        : device.status === 'online'
-                        ? 'bg-emerald-400 shadow-[0_0_6px_#34d399]'
-                        : 'bg-zinc-600'
-                    }`}
-                  />
-                  {device.status.toUpperCase()}
-                </span>
-              </div>
-              <p className="text-xs text-zinc-400 font-mono flex items-center space-x-2 mt-0.5">
-                <span>ID: {device.deviceId}</span>
-                <span className="text-zinc-600">•</span>
-                <span>Type: {device.deviceType}</span>
-                {device.currentSyncActivity && (
-                  <>
-                    <span className="text-zinc-600">•</span>
-                    <span className="text-purple-300 truncate max-w-[220px]">
-                      {device.currentSyncActivity}
+                {(() => {
+                  const isActivelySyncing = device.status === 'syncing' && (Date.now() - (device.lastSeenAt ? new Date(device.lastSeenAt).getTime() : 0) < 45000);
+                  const effectiveStatus = isActivelySyncing ? 'syncing' : (device.status === 'offline' ? 'offline' : 'online');
+                  return (
+                    <span
+                      className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold border ${
+                        effectiveStatus === 'syncing'
+                          ? 'bg-purple-950/60 text-purple-300 border-purple-500/50 shadow-glow-purple animate-pulse'
+                          : effectiveStatus === 'online'
+                          ? 'bg-emerald-950/40 text-emerald-400 border-emerald-800/50'
+                          : 'bg-zinc-900 text-zinc-500 border-zinc-800'
+                      }`}
+                    >
+                      <span
+                        className={`w-1.5 h-1.5 rounded-full mr-1.5 ${
+                          effectiveStatus === 'syncing'
+                            ? 'bg-purple-400 animate-ping'
+                            : effectiveStatus === 'online'
+                            ? 'bg-emerald-400 shadow-[0_0_6px_#34d399]'
+                            : 'bg-zinc-600'
+                        }`}
+                      />
+                      {effectiveStatus.toUpperCase()}
                     </span>
-                  </>
-                )}
-              </p>
+                  );
+                })()}
+              </div>
+              {(() => {
+                const isActivelySyncing = device.status === 'syncing' && (Date.now() - (device.lastSeenAt ? new Date(device.lastSeenAt).getTime() : 0) < 45000);
+                const displayActivity = isActivelySyncing ? device.currentSyncActivity : null;
+                return (
+                  <p className="text-xs text-zinc-400 font-mono flex items-center space-x-2 mt-0.5">
+                    <span>ID: {device.deviceId}</span>
+                    <span className="text-zinc-600">•</span>
+                    <span>Type: {device.deviceType}</span>
+                    {displayActivity && (
+                      <>
+                        <span className="text-zinc-600">•</span>
+                        <span className="text-purple-300 truncate max-w-[220px]">
+                          {displayActivity}
+                        </span>
+                      </>
+                    )}
+                  </p>
+                );
+              })()}
             </div>
           </div>
 

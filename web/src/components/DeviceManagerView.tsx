@@ -323,45 +323,58 @@ export const DeviceManagerView: React.FC<Props> = ({
                   </div>
 
                   {/* Status Badge */}
-                  <span
-                    className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-semibold border shrink-0 ${
-                      device.status === 'syncing'
-                        ? 'bg-purple-950/60 text-purple-300 border-purple-500/50 shadow-glow-purple animate-pulse'
-                        : device.status === 'online'
-                        ? 'bg-emerald-950/40 text-emerald-400 border-emerald-800/50'
-                        : 'bg-zinc-900 text-zinc-500 border-zinc-800'
-                    }`}
-                  >
-                    <span
-                      className={`w-1.5 h-1.5 rounded-full mr-1.5 ${
-                        device.status === 'syncing'
-                          ? 'bg-purple-400 animate-ping'
-                          : device.status === 'online'
-                          ? 'bg-emerald-400 shadow-[0_0_6px_#34d399]'
-                          : 'bg-zinc-600'
-                      }`}
-                    />
-                    {device.status.toUpperCase()}
-                  </span>
+                  {(() => {
+                    const isActivelySyncing = device.status === 'syncing' && (Date.now() - (device.lastSeenAt ? new Date(device.lastSeenAt).getTime() : 0) < 45000);
+                    const effectiveStatus = isActivelySyncing ? 'syncing' : (device.status === 'offline' ? 'offline' : 'online');
+                    return (
+                      <span
+                        className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-semibold border shrink-0 ${
+                          effectiveStatus === 'syncing'
+                            ? 'bg-purple-950/60 text-purple-300 border-purple-500/50 shadow-glow-purple animate-pulse'
+                            : effectiveStatus === 'online'
+                            ? 'bg-emerald-950/40 text-emerald-400 border-emerald-800/50'
+                            : 'bg-zinc-900 text-zinc-500 border-zinc-800'
+                        }`}
+                      >
+                        <span
+                          className={`w-1.5 h-1.5 rounded-full mr-1.5 ${
+                            effectiveStatus === 'syncing'
+                              ? 'bg-purple-400 animate-ping'
+                              : effectiveStatus === 'online'
+                              ? 'bg-emerald-400 shadow-[0_0_6px_#34d399]'
+                              : 'bg-zinc-600'
+                          }`}
+                        />
+                        {effectiveStatus.toUpperCase()}
+                      </span>
+                    );
+                  })()}
                 </div>
 
                 {/* Status & Live Activity Banner */}
-                <div
-                  className={`flex items-center space-x-2.5 px-3.5 py-2 rounded-2xl border text-xs font-medium transition ${
-                    device.status === 'syncing'
-                      ? 'bg-purple-950/40 text-purple-200 border-purple-700/50 shadow-glow-purple'
-                      : 'bg-[#151520] text-zinc-300 border-[#232332]'
-                  }`}
-                >
-                  {device.status === 'syncing' ? (
-                    <RefreshCw className="w-3.5 h-3.5 animate-spin text-purple-400 shrink-0" />
-                  ) : (
-                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                  )}
-                  <span className="truncate">
-                    {device.currentSyncActivity || 'Idle (Camera roll synced & up to date)'}
-                  </span>
-                </div>
+                {(() => {
+                  const isActivelySyncing = device.status === 'syncing' && (Date.now() - (device.lastSeenAt ? new Date(device.lastSeenAt).getTime() : 0) < 45000);
+                  return (
+                    <div
+                      className={`flex items-center space-x-2.5 px-3.5 py-2 rounded-2xl border text-xs font-medium transition ${
+                        isActivelySyncing
+                          ? 'bg-purple-950/40 text-purple-200 border-purple-700/50 shadow-glow-purple'
+                          : 'bg-[#151520] text-zinc-300 border-[#232332]'
+                      }`}
+                    >
+                      {isActivelySyncing ? (
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin text-purple-400 shrink-0" />
+                      ) : (
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                      )}
+                      <span className="truncate">
+                        {isActivelySyncing
+                          ? (device.currentSyncActivity || 'Syncing photos...')
+                          : 'Idle (Camera roll synced & up to date)'}
+                      </span>
+                    </div>
+                  );
+                })()}
 
                 {/* Quick Info Grid: Destination Folder, Last Seen & Quick Stats */}
                 <div className="grid grid-cols-2 gap-2 text-xs">

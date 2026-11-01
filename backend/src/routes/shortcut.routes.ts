@@ -25,6 +25,8 @@ const router = Router();
 
 // iPhone Shortcut endpoints (authenticated with X-Device-Id and X-Device-Key)
 router.get('/sync-check', requireDeviceAuth, ShortcutController.syncCheck);
+router.get('/sync-complete', requireDeviceAuth, ShortcutController.syncComplete);
+router.post('/sync-complete', requireDeviceAuth, ShortcutController.syncComplete);
 router.get('/check', requireDeviceAuth, ShortcutController.checkFile);
 router.get('/synced-assets', requireDeviceAuth, ShortcutController.syncedAssets);
 router.post('/check-batch', requireDeviceAuth, ShortcutController.checkBatch);

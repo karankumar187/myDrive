@@ -470,6 +470,62 @@ export class ShortcutController {
   }
 
   /**
+   * Shortcut sync-complete: Shortcut notifies server that batch checking/syncing has completed.
+   * Immediately resets device status to 'online' and idle activity.
+   */
+  static async syncComplete(req: Request, res: Response): Promise<void> {
+    try {
+      if (!req.user || !req.device) {
+        res.status(401).json({ error: 'Device authentication required' });
+        return;
+      }
+
+      await Device.findOneAndUpdate(
+        { deviceId: req.device.deviceId, userId: req.user._id },
+        {
+          $set: {
+            status: 'online',
+            currentSyncActivity: 'Idle (Camera roll synced and up to date)',
+            lastSeenAt: new Date(),
+            lastSyncCompletedAt: new Date(),
+          },
+          $push: {
+            syncLogs: {
+              $each: [
+                {
+                  timestamp: new Date(),
+                  message: `✅ Sync completed: Camera roll is up to date`,
+                  level: 'idle',
+                  details: 'Camera roll checked. Cloud library is up to date.',
+                },
+              ],
+              $slice: -1000,
+            },
+          },
+        }
+      );
+
+      const io = getSocketIoInstance();
+      if (io) {
+        io.to(`user:${req.user._id}`).emit('device:sync_status', {
+          deviceId: req.device.deviceId,
+          status: 'online',
+          currentSyncActivity: 'Idle (Camera roll synced and up to date)',
+          lastSeenAt: new Date().toISOString(),
+        });
+      }
+
+      res.json({
+        success: true,
+        status: 'online',
+        message: 'Sync completed successfully',
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+
+  /**
    * Direct upload endpoint for Apple Shortcuts 'Get Contents of URL' POST request.
    */
   static async uploadFromShortcut(req: Request, res: Response): Promise<void> {
