@@ -7,6 +7,7 @@ import {
   Calendar,
   Image as ImageIcon,
   Play,
+  Pause,
   Heart,
   Plus,
   Trash2,
@@ -25,9 +26,11 @@ import {
   ZoomIn,
   ZoomOut,
   RotateCw,
+  Edit3,
 } from 'lucide-react';
 import { api } from '../../services/api.js';
 import { EditorialCollageGrid } from './EditorialCollageGrid.js';
+import { AlbumEditModal } from './AlbumEditModal.js';
 import { ModernVideoPlayer } from '../ModernVideoPlayer.js';
 import { getPreviewUrl, getStreamUrl, formatBytes } from '../../utils/format.js';
 import { isVideoFile } from '../../services/media-cache.js';
@@ -66,6 +69,35 @@ export const AlbumDetailView: React.FC<AlbumDetailViewProps> = ({
   // Photo management modals
   const [isAddPhotosOpen, setIsAddPhotosOpen] = useState(false);
   const [selectedToAdd, setSelectedToAdd] = useState<Set<string>>(new Set());
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  // Dynamic rotating hero banner state
+  const [bannerIndex, setBannerIndex] = useState(0);
+  const [isBannerPaused, setIsBannerPaused] = useState(false);
+
+  // Eligible photos for rotating hero banner
+  const bannerPhotos = useMemo(() => {
+    if (!album || !album.files || album.files.length === 0) return [];
+    return album.files;
+  }, [album?.files]);
+
+  // Sync bannerIndex with cover photo initially
+  useEffect(() => {
+    if (album?.coverFile?._id && album.files.length > 0) {
+      const idx = album.files.findIndex((f) => f._id === album.coverFile?._id);
+      if (idx !== -1) setBannerIndex(idx);
+    }
+  }, [album?.coverFile?._id]);
+
+  // Ambient banner slideshow timer (rotates every 4.5s)
+  useEffect(() => {
+    if (isBannerPaused || bannerPhotos.length <= 1) return;
+    const interval = setInterval(() => {
+      setBannerIndex((prev) => (prev + 1) % bannerPhotos.length);
+    }, 4500);
+    return () => clearInterval(interval);
+  }, [isBannerPaused, bannerPhotos.length]);
 
   // Load album details with Stale-While-Revalidate caching
   const loadAlbumData = async () => {
@@ -251,6 +283,15 @@ export const AlbumDetailView: React.FC<AlbumDetailViewProps> = ({
 
         <div className="flex items-center gap-2">
           <button
+            onClick={() => setIsEditModalOpen(true)}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full bg-neutral-900/80 hover:bg-neutral-800 border border-white/10 text-xs font-semibold text-neutral-200 backdrop-blur-md transition-all shadow-md group"
+            title="Edit Album Details"
+          >
+            <Edit3 className="w-3.5 h-3.5 text-purple-400 group-hover:rotate-12 transition-transform" />
+            <span>Edit Album</span>
+          </button>
+
+          <button
             onClick={() => {
               if (album.files.length > 0) {
                 setActiveLightboxIndex(0);
@@ -274,23 +315,47 @@ export const AlbumDetailView: React.FC<AlbumDetailViewProps> = ({
         </div>
       </div>
 
-      {/* Cinematic Hero Cover Banner */}
+      {/* Cinematic Dynamic Ambient Hero Cover Banner */}
       <div className="relative rounded-3xl overflow-hidden min-h-[340px] md:min-h-[420px] flex flex-col justify-end p-6 md:p-10 border border-white/10 shadow-2xl bg-neutral-950">
-        {/* Ambient Cover Art */}
-        {coverUrl ? (
-          <img
-            src={coverUrl}
-            alt={album.title}
-            style={{ transform: 'translateZ(0)' }}
-            className="absolute inset-0 w-full h-full object-cover object-center brightness-75"
-          />
+        {/* Dynamic Rotating Ambient Backdrop */}
+        {bannerPhotos.length > 0 ? (
+          <div className="absolute inset-0 overflow-hidden pointer-events-none">
+            {bannerPhotos.map((photo, idx) => {
+              const isActive = idx === bannerIndex;
+              const isNear =
+                idx === bannerIndex ||
+                idx === (bannerIndex - 1 + bannerPhotos.length) % bannerPhotos.length ||
+                idx === (bannerIndex + 1) % bannerPhotos.length;
+
+              if (!isNear) return null;
+
+              const src =
+                photo.metadata?.thumbnail && photo.metadata.thumbnail.startsWith('data:image/')
+                  ? photo.metadata.thumbnail
+                  : getPreviewUrl(photo._id);
+
+              return (
+                <img
+                  key={photo._id}
+                  src={src}
+                  alt={photo.filename}
+                  style={{ transform: 'translateZ(0)' }}
+                  className={`absolute inset-0 w-full h-full object-cover object-center transition-all duration-1000 ease-in-out ${
+                    isActive
+                      ? 'opacity-100 scale-105 brightness-75'
+                      : 'opacity-0 scale-100 brightness-50'
+                  }`}
+                />
+              );
+            })}
+          </div>
         ) : (
           <div className="absolute inset-0 bg-gradient-to-br from-purple-900/50 via-neutral-900 to-indigo-950" />
         )}
 
         {/* Deep Vignette Overlays */}
-        <div className="absolute inset-0 bg-gradient-to-t from-black via-black/40 to-transparent" />
-        <div className="absolute inset-0 bg-gradient-to-r from-black/80 via-black/30 to-transparent" />
+        <div className="absolute inset-0 bg-gradient-to-t from-black via-black/40 to-transparent pointer-events-none" />
+        <div className="absolute inset-0 bg-gradient-to-r from-black/85 via-black/40 to-transparent pointer-events-none" />
 
         {/* Banner Content */}
         <div className="relative z-10 max-w-3xl space-y-3">
@@ -345,8 +410,46 @@ export const AlbumDetailView: React.FC<AlbumDetailViewProps> = ({
           </div>
         </div>
 
-        {/* Pin & Delete corner actions */}
+        {/* Banner Carousel Controls (Bottom Right) */}
+        {bannerPhotos.length > 1 && (
+          <div className="absolute bottom-6 right-6 z-20 flex items-center gap-1 px-2.5 py-1.5 rounded-full bg-black/60 backdrop-blur-md border border-white/20 text-xs text-white shadow-xl select-none">
+            <button
+              onClick={() => setBannerIndex((prev) => (prev - 1 + bannerPhotos.length) % bannerPhotos.length)}
+              title="Previous banner photo"
+              className="p-1 hover:text-purple-400 transition"
+            >
+              <ChevronLeft className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={() => setIsBannerPaused(!isBannerPaused)}
+              title={isBannerPaused ? 'Resume banner slideshow' : 'Pause banner slideshow'}
+              className="px-1.5 py-0.5 hover:text-purple-400 flex items-center gap-1.5 transition"
+            >
+              {isBannerPaused ? <Play className="w-3 h-3 fill-current text-purple-400" /> : <Pause className="w-3 h-3" />}
+              <span className="font-mono text-[11px] text-neutral-300">
+                {bannerIndex + 1}/{bannerPhotos.length}
+              </span>
+            </button>
+            <button
+              onClick={() => setBannerIndex((prev) => (prev + 1) % bannerPhotos.length)}
+              title="Next banner photo"
+              className="p-1 hover:text-purple-400 transition"
+            >
+              <ChevronRight className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
+
+        {/* Pin, Edit & Delete corner actions */}
         <div className="absolute top-6 right-6 flex items-center gap-2 z-10">
+          <button
+            onClick={() => setIsEditModalOpen(true)}
+            title="Edit Album Details"
+            className="p-2.5 rounded-full bg-black/50 border border-white/20 text-white/70 hover:text-white hover:bg-black/70 backdrop-blur-md transition-all"
+          >
+            <Edit3 className="w-4 h-4" />
+          </button>
+
           <button
             onClick={handleTogglePin}
             title={album.isPinned ? 'Unpin album' : 'Pin album'}
@@ -674,6 +777,35 @@ export const AlbumDetailView: React.FC<AlbumDetailViewProps> = ({
           </div>,
           document.body
         )}
+
+      {/* Edit Album Details Modal */}
+      {isEditModalOpen && (
+        <AlbumEditModal
+          isOpen={isEditModalOpen}
+          onClose={() => setIsEditModalOpen(false)}
+          album={album}
+          files={album.files}
+          onSaved={(updated) => {
+            setAlbum((prev) => {
+              if (!prev) return null;
+              const next = { ...prev, ...updated };
+              albumDetailCache.set(albumId, next);
+              return next;
+            });
+            onAlbumUpdated?.();
+            setToastMessage('Album updated successfully');
+            setTimeout(() => setToastMessage(null), 3000);
+          }}
+        />
+      )}
+
+      {/* Floating Toast Notification */}
+      {toastMessage && (
+        <div className="fixed bottom-6 right-6 z-[130] px-4 py-2.5 rounded-2xl bg-neutral-900/95 backdrop-blur-xl border border-purple-500/40 text-purple-300 text-xs font-semibold shadow-2xl flex items-center gap-2 animate-bounce">
+          <Sparkles className="w-4 h-4 text-purple-400" />
+          <span>{toastMessage}</span>
+        </div>
+      )}
     </div>
   );
 };

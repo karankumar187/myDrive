@@ -16,6 +16,7 @@ import { api } from '../../services/api.js';
 import { AlbumCard } from './AlbumCard.js';
 import { AlbumCreateModal } from './AlbumCreateModal.js';
 import { AlbumDetailView } from './AlbumDetailView.js';
+import { AlbumEditModal } from './AlbumEditModal.js';
 
 interface AlbumsShowcaseViewProps {
   allMedia: FileItem[];
@@ -40,8 +41,9 @@ export const AlbumsShowcaseView: React.FC<AlbumsShowcaseViewProps> = ({
   const [selectedDestination, setSelectedDestination] = useState<string>('all');
   const [selectedYear, setSelectedYear] = useState<string>('all');
 
-  // Create Modal
+  // Create & Edit Modal
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [editingAlbum, setEditingAlbum] = useState<AlbumItem | null>(null);
 
   // Load albums from backend
   const loadAlbums = async () => {
@@ -276,6 +278,10 @@ export const AlbumsShowcaseView: React.FC<AlbumsShowcaseViewProps> = ({
                 onClick={() => setActiveAlbumId(featuredAlbum._id)}
                 onToggleFavorite={(e) => handleToggleAlbumFavorite(featuredAlbum, e)}
                 onTogglePin={(e) => handleToggleAlbumPin(featuredAlbum, e)}
+                onEdit={(e) => {
+                  e.stopPropagation();
+                  setEditingAlbum(featuredAlbum);
+                }}
                 onDelete={(e) => handleDeleteAlbum(featuredAlbum, e)}
               />
             </div>
@@ -299,6 +305,10 @@ export const AlbumsShowcaseView: React.FC<AlbumsShowcaseViewProps> = ({
                     onClick={() => setActiveAlbumId(album._id)}
                     onToggleFavorite={(e) => handleToggleAlbumFavorite(album, e)}
                     onTogglePin={(e) => handleToggleAlbumPin(album, e)}
+                    onEdit={(e) => {
+                      e.stopPropagation();
+                      setEditingAlbum(album);
+                    }}
                     onDelete={(e) => handleDeleteAlbum(album, e)}
                   />
                 ))}
@@ -319,6 +329,22 @@ export const AlbumsShowcaseView: React.FC<AlbumsShowcaseViewProps> = ({
         allMedia={allMedia}
         initialSelectedIds={initialSelectedMediaIds}
       />
+
+      {/* Album Edit Modal */}
+      {editingAlbum && (
+        <AlbumEditModal
+          isOpen={Boolean(editingAlbum)}
+          onClose={() => setEditingAlbum(null)}
+          album={editingAlbum}
+          files={editingAlbum.coverFile ? [editingAlbum.coverFile] : []}
+          onSaved={(updated) => {
+            setAlbums((prev) =>
+              prev.map((a) => (a._id === editingAlbum._id ? { ...a, ...updated } : a))
+            );
+            setEditingAlbum(null);
+          }}
+        />
+      )}
     </div>
   );
 };
