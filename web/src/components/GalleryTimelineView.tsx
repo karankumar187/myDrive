@@ -54,6 +54,8 @@ interface Props {
   onRefresh?: () => void;
   initialCursor?: string | null;
   initialHasMore?: boolean;
+  gallerySubTab?: 'timeline' | 'albums';
+  onSubTabChange?: (tab: 'timeline' | 'albums') => void;
 }
 
 interface LoadedMediaState {
@@ -85,9 +87,13 @@ export const GalleryTimelineView: React.FC<Props> = ({
   onRefresh,
   initialCursor,
   initialHasMore,
+  gallerySubTab: externalSubTab,
+  onSubTabChange,
 }) => {
   // Gallery Sub-Navigation Mode: Timeline vs Albums
-  const [gallerySubTab, setGallerySubTab] = useState<'timeline' | 'albums'>('timeline');
+  const [internalSubTab, setInternalSubTab] = useState<'timeline' | 'albums'>('timeline');
+  const gallerySubTab = externalSubTab ?? internalSubTab;
+  const setGallerySubTab = onSubTabChange ?? setInternalSubTab;
   const [selectedAlbumMediaIds, setSelectedAlbumMediaIds] = useState<string[]>([]);
   const [isAddToAlbumOpen, setIsAddToAlbumOpen] = useState(false);
   const [albumSuccessToast, setAlbumSuccessToast] = useState<string | null>(null);
@@ -509,35 +515,7 @@ export const GalleryTimelineView: React.FC<Props> = ({
   const currentMedia = selectedMediaIndex !== null ? filteredMedia[selectedMediaIndex] : null;
 
   return (
-    <div className="space-y-6 w-full max-w-full min-w-0 overflow-x-hidden">
-      {/* Top Floating Pill Mode Switcher: Timeline vs Albums */}
-      <div className="flex items-center justify-center w-full pt-1 pb-1">
-        <div className="inline-flex p-1 rounded-full bg-neutral-900/90 border border-white/10 backdrop-blur-xl shadow-xl">
-          <button
-            onClick={() => setGallerySubTab('timeline')}
-            className={`px-5 py-2 rounded-full text-xs font-bold flex items-center gap-2 transition-all ${
-              gallerySubTab === 'timeline'
-                ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-lg shadow-purple-500/25'
-                : 'text-neutral-400 hover:text-white'
-            }`}
-          >
-            <Clock className="w-3.5 h-3.5" />
-            <span>Timeline</span>
-          </button>
-          <button
-            onClick={() => setGallerySubTab('albums')}
-            className={`px-5 py-2 rounded-full text-xs font-bold flex items-center gap-2 transition-all ${
-              gallerySubTab === 'albums'
-                ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-lg shadow-purple-500/25'
-                : 'text-neutral-400 hover:text-white'
-            }`}
-          >
-            <FolderPlus className="w-3.5 h-3.5" />
-            <span>Albums</span>
-          </button>
-        </div>
-      </div>
-
+    <div className="space-y-3 sm:space-y-4 w-full max-w-full min-w-0 overflow-x-hidden">
       {/* Albums Sub-View */}
       {gallerySubTab === 'albums' ? (
         <AlbumsShowcaseView
@@ -547,253 +525,281 @@ export const GalleryTimelineView: React.FC<Props> = ({
         />
       ) : (
         <>
-          {/* Top Header Bar — Clean, borderless, native app layout */}
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pt-2 pb-1 w-full min-w-0 max-w-full">
-        {/* Left: Filter Dropdowns */}
-        <div className="flex items-center space-x-2">
-          {/* Media Type Filter */}
-          <div className="relative">
-            <button
-              onClick={() => {
-                setIsFilterDropdownOpen(!isFilterDropdownOpen);
-                setIsDeviceDropdownOpen(false);
-              }}
-              className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-zinc-900/80 hover:bg-zinc-800 text-zinc-200 border border-zinc-800 transition active:scale-95"
-            >
-              <span>
-                {filterType === 'all' && 'All Photos'}
-                {filterType === 'favorites' && 'Favorites ❤️'}
-                {filterType === 'videos' && 'Videos 🎥'}
-                {filterType === 'photos' && 'Photos 📷'}
-              </span>
-              <ChevronDown className="w-3.5 h-3.5 text-zinc-400" />
-            </button>
+          {/* Minimal, Ultra-Low Height (36px) Single-Row Gallery Controls Bar */}
+          <div className="flex items-center gap-1.5 sm:gap-2 w-full pt-1 pb-1">
+            {/* Media Type Filter Dropdown */}
+            <div className="relative shrink-0">
+              <button
+                onClick={() => {
+                  setIsFilterDropdownOpen(!isFilterDropdownOpen);
+                  setIsDeviceDropdownOpen(false);
+                }}
+                className="inline-flex items-center space-x-1.5 h-8 px-2.5 sm:px-3 rounded-full text-xs font-semibold bg-zinc-900/80 hover:bg-zinc-800 text-zinc-200 border border-zinc-800 transition active:scale-95"
+                title="Filter Media Type"
+              >
+                <span>
+                  {filterType === 'all' && (
+                    <>
+                      <span className="hidden sm:inline">All Photos</span>
+                      <span className="sm:hidden">All</span>
+                    </>
+                  )}
+                  {filterType === 'favorites' && (
+                    <>
+                      <span className="hidden sm:inline">Favorites ❤️</span>
+                      <span className="sm:hidden">❤️</span>
+                    </>
+                  )}
+                  {filterType === 'videos' && (
+                    <>
+                      <span className="hidden sm:inline">Videos Only 🎥</span>
+                      <span className="sm:hidden">Videos</span>
+                    </>
+                  )}
+                  {filterType === 'photos' && (
+                    <>
+                      <span className="hidden sm:inline">Photos Only 📷</span>
+                      <span className="sm:hidden">Photos</span>
+                    </>
+                  )}
+                </span>
+                <ChevronDown className="w-3 h-3 text-zinc-400" />
+              </button>
 
-            {isFilterDropdownOpen && (
-              <>
-                <div
-                  className="fixed inset-0 z-20"
-                  onClick={() => setIsFilterDropdownOpen(false)}
-                />
-                <div
-                  className="absolute left-0 mt-2 w-44 bg-[#14141a] border border-zinc-800 rounded-2xl shadow-2xl z-30 py-1.5 overflow-hidden animate-in fade-in"
-                  onClick={() => setIsFilterDropdownOpen(false)}
-                >
-                  <button
-                    onClick={() => setFilterType('all')}
-                    className={`w-full px-3.5 py-2 text-left text-xs flex items-center justify-between hover:bg-purple-950/40 ${
-                      filterType === 'all' ? 'text-purple-300 font-semibold bg-purple-950/30' : 'text-zinc-300'
-                    }`}
+              {isFilterDropdownOpen && (
+                <>
+                  <div
+                    className="fixed inset-0 z-20"
+                    onClick={() => setIsFilterDropdownOpen(false)}
+                  />
+                  <div
+                    className="absolute left-0 mt-1.5 w-44 bg-[#14141a] border border-zinc-800 rounded-2xl shadow-2xl z-30 py-1.5 overflow-hidden animate-in fade-in"
+                    onClick={() => setIsFilterDropdownOpen(false)}
                   >
-                    <span>All Photos</span>
-                    {filterType === 'all' && <Check className="w-3.5 h-3.5 text-purple-400" />}
-                  </button>
-                  <button
-                    onClick={() => setFilterType('favorites')}
-                    className={`w-full px-3.5 py-2 text-left text-xs flex items-center justify-between hover:bg-purple-950/40 ${
-                      filterType === 'favorites' ? 'text-purple-300 font-semibold bg-purple-950/30' : 'text-zinc-300'
-                    }`}
-                  >
-                    <span className="flex items-center">
-                      <Heart className="w-3 h-3 text-red-400 mr-1.5 fill-red-400" /> Favorites
-                    </span>
-                    {filterType === 'favorites' && <Check className="w-3.5 h-3.5 text-purple-400" />}
-                  </button>
-                  <button
-                    onClick={() => setFilterType('videos')}
-                    className={`w-full px-3.5 py-2 text-left text-xs flex items-center justify-between hover:bg-purple-950/40 ${
-                      filterType === 'videos' ? 'text-purple-300 font-semibold bg-purple-950/30' : 'text-zinc-300'
-                    }`}
-                  >
-                    <span className="flex items-center">
-                      <Film className="w-3 h-3 text-purple-400 mr-1.5" /> Videos Only
-                    </span>
-                    {filterType === 'videos' && <Check className="w-3.5 h-3.5 text-purple-400" />}
-                  </button>
-                  <button
-                    onClick={() => setFilterType('photos')}
-                    className={`w-full px-3.5 py-2 text-left text-xs flex items-center justify-between hover:bg-purple-950/40 ${
-                      filterType === 'photos' ? 'text-purple-300 font-semibold bg-purple-950/30' : 'text-zinc-300'
-                    }`}
-                  >
-                    <span className="flex items-center">
-                      <ImageIcon className="w-3 h-3 text-blue-400 mr-1.5" /> Photos Only
-                    </span>
-                    {filterType === 'photos' && <Check className="w-3.5 h-3.5 text-purple-400" />}
-                  </button>
-                </div>
-              </>
-            )}
-          </div>
-
-          {/* Device Filter Dropdown with Checkboxes */}
-          <div className="relative">
-            <button
-              onClick={() => {
-                setIsDeviceDropdownOpen(!isDeviceDropdownOpen);
-                setIsFilterDropdownOpen(false);
-              }}
-              className={`inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-full text-xs font-semibold border transition active:scale-95 ${
-                selectedDeviceFilters.size > 0
-                  ? 'bg-purple-950/60 text-purple-300 border-purple-500/60 shadow-sm'
-                  : 'bg-zinc-900/80 hover:bg-zinc-800 text-zinc-200 border-zinc-800'
-              }`}
-            >
-              <Smartphone className="w-3.5 h-3.5 text-purple-400" />
-              <span>
-                {selectedDeviceFilters.size === 0
-                  ? 'All Devices'
-                  : `${selectedDeviceFilters.size} Device${selectedDeviceFilters.size > 1 ? 's' : ''}`}
-              </span>
-              <ChevronDown className="w-3.5 h-3.5 text-zinc-400" />
-            </button>
-
-            {isDeviceDropdownOpen && (
-              <>
-                <div
-                  className="fixed inset-0 z-30"
-                  onClick={() => setIsDeviceDropdownOpen(false)}
-                />
-                <div
-                  className="absolute left-0 mt-2 w-60 bg-[#14141a] border border-zinc-800 rounded-2xl shadow-2xl z-40 p-2 space-y-1 animate-in fade-in"
-                >
-                  <div className="px-2 py-1 text-[11px] font-bold text-zinc-400 uppercase tracking-wider flex items-center justify-between border-b border-zinc-800 pb-1.5 mb-1">
-                    <span>Upload Source</span>
-                    {selectedDeviceFilters.size > 0 && (
-                      <button
-                        onClick={() => setSelectedDeviceFilters(new Set())}
-                        className="text-purple-400 hover:text-purple-300 normal-case font-semibold text-[10px]"
-                      >
-                        Reset
-                      </button>
-                    )}
+                    <button
+                      onClick={() => setFilterType('all')}
+                      className={`w-full px-3.5 py-2 text-left text-xs flex items-center justify-between hover:bg-purple-950/40 ${
+                        filterType === 'all' ? 'text-purple-300 font-semibold bg-purple-950/30' : 'text-zinc-300'
+                      }`}
+                    >
+                      <span>All Photos</span>
+                      {filterType === 'all' && <Check className="w-3.5 h-3.5 text-purple-400" />}
+                    </button>
+                    <button
+                      onClick={() => setFilterType('favorites')}
+                      className={`w-full px-3.5 py-2 text-left text-xs flex items-center justify-between hover:bg-purple-950/40 ${
+                        filterType === 'favorites' ? 'text-purple-300 font-semibold bg-purple-950/30' : 'text-zinc-300'
+                      }`}
+                    >
+                      <span className="flex items-center">
+                        <Heart className="w-3 h-3 text-red-400 mr-1.5 fill-red-400" /> Favorites
+                      </span>
+                      {filterType === 'favorites' && <Check className="w-3.5 h-3.5 text-purple-400" />}
+                    </button>
+                    <button
+                      onClick={() => setFilterType('videos')}
+                      className={`w-full px-3.5 py-2 text-left text-xs flex items-center justify-between hover:bg-purple-950/40 ${
+                        filterType === 'videos' ? 'text-purple-300 font-semibold bg-purple-950/30' : 'text-zinc-300'
+                      }`}
+                    >
+                      <span className="flex items-center">
+                        <Film className="w-3 h-3 text-purple-400 mr-1.5" /> Videos Only
+                      </span>
+                      {filterType === 'videos' && <Check className="w-3.5 h-3.5 text-purple-400" />}
+                    </button>
+                    <button
+                      onClick={() => setFilterType('photos')}
+                      className={`w-full px-3.5 py-2 text-left text-xs flex items-center justify-between hover:bg-purple-950/40 ${
+                        filterType === 'photos' ? 'text-purple-300 font-semibold bg-purple-950/30' : 'text-zinc-300'
+                      }`}
+                    >
+                      <span className="flex items-center">
+                        <ImageIcon className="w-3 h-3 text-blue-400 mr-1.5" /> Photos Only
+                      </span>
+                      {filterType === 'photos' && <Check className="w-3.5 h-3.5 text-purple-400" />}
+                    </button>
                   </div>
+                </>
+              )}
+            </div>
 
-                  {/* All Devices checkbox */}
-                  <label className="flex items-center space-x-2.5 px-2.5 py-1.5 rounded-xl hover:bg-zinc-800/60 cursor-pointer text-xs text-white">
-                    <input
-                      type="checkbox"
-                      checked={selectedDeviceFilters.size === 0}
-                      onChange={() => setSelectedDeviceFilters(new Set())}
-                      className="w-4 h-4 rounded text-purple-600 focus:ring-purple-500 bg-[#121218] border-zinc-700"
-                    />
-                    <span className="font-semibold">All Devices</span>
-                  </label>
+            {/* Device Filter Dropdown with Counter Badge */}
+            <div className="relative shrink-0">
+              <button
+                onClick={() => {
+                  setIsDeviceDropdownOpen(!isDeviceDropdownOpen);
+                  setIsFilterDropdownOpen(false);
+                }}
+                className={`inline-flex items-center space-x-1 h-8 px-2 sm:px-2.5 rounded-full text-xs font-semibold border transition active:scale-95 ${
+                  selectedDeviceFilters.size > 0
+                    ? 'bg-purple-950/60 text-purple-300 border-purple-500/60 shadow-sm'
+                    : 'bg-zinc-900/80 hover:bg-zinc-800 text-zinc-200 border-zinc-800'
+                }`}
+                title="Filter by Device"
+              >
+                <Smartphone className="w-3.5 h-3.5 text-purple-400" />
+                <span className="hidden sm:inline">
+                  {selectedDeviceFilters.size === 0
+                    ? 'All Devices'
+                    : `${selectedDeviceFilters.size} Device${selectedDeviceFilters.size > 1 ? 's' : ''}`}
+                </span>
+                {selectedDeviceFilters.size > 0 && (
+                  <span className="sm:hidden text-[10px] font-bold text-purple-300">
+                    {selectedDeviceFilters.size}
+                  </span>
+                )}
+                <ChevronDown className="w-3 h-3 text-zinc-400" />
+              </button>
 
-                  {/* Paired devices checkboxes */}
-                  {devices.map((dev) => {
-                    const isChecked = selectedDeviceFilters.has(dev.deviceId);
-                    return (
-                      <label
-                        key={dev.deviceId}
-                        className="flex items-center space-x-2.5 px-2.5 py-1.5 rounded-xl hover:bg-zinc-800/60 cursor-pointer text-xs text-zinc-200"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={isChecked}
-                          onChange={() => {
-                            setSelectedDeviceFilters((prev) => {
-                              const next = new Set(prev);
-                              if (next.has(dev.deviceId)) next.delete(dev.deviceId);
-                              else next.add(dev.deviceId);
-                              return next;
-                            });
-                          }}
-                          className="w-4 h-4 rounded text-purple-600 focus:ring-purple-500 bg-[#121218] border-zinc-700"
-                        />
-                        <span className="truncate flex-1 font-medium">{dev.deviceName}</span>
-                        <span className="text-[10px] text-zinc-500 uppercase">{dev.deviceType}</span>
-                      </label>
-                    );
-                  })}
+              {isDeviceDropdownOpen && (
+                <>
+                  <div
+                    className="fixed inset-0 z-30"
+                    onClick={() => setIsDeviceDropdownOpen(false)}
+                  />
+                  <div
+                    className="absolute left-0 mt-1.5 w-60 bg-[#14141a] border border-zinc-800 rounded-2xl shadow-2xl z-40 p-2 space-y-1 animate-in fade-in"
+                  >
+                    <div className="px-2 py-1 text-[11px] font-bold text-zinc-400 uppercase tracking-wider flex items-center justify-between border-b border-zinc-800 pb-1.5 mb-1">
+                      <span>Upload Source</span>
+                      {selectedDeviceFilters.size > 0 && (
+                        <button
+                          onClick={() => setSelectedDeviceFilters(new Set())}
+                          className="text-purple-400 hover:text-purple-300 normal-case font-semibold text-[10px]"
+                        >
+                          Reset
+                        </button>
+                      )}
+                    </div>
 
-                  {/* Web / Unified Drive checkbox */}
-                  <label className="flex items-center space-x-2.5 px-2.5 py-1.5 rounded-xl hover:bg-zinc-800/60 cursor-pointer text-xs text-zinc-200">
-                    <input
-                      type="checkbox"
-                      checked={selectedDeviceFilters.has('web')}
-                      onChange={() => {
-                        setSelectedDeviceFilters((prev) => {
-                          const next = new Set(prev);
-                          if (next.has('web')) next.delete('web');
-                          else next.add('web');
-                          return next;
-                        });
-                      }}
-                      className="w-4 h-4 rounded text-purple-600 focus:ring-purple-500 bg-[#121218] border-zinc-700"
-                    />
-                    <span className="truncate flex-1 font-medium">Unified Drive (Web)</span>
-                    <Cloud className="w-3.5 h-3.5 text-zinc-500" />
-                  </label>
-                </div>
-              </>
-            )}
+                    {/* All Devices checkbox */}
+                    <label className="flex items-center space-x-2.5 px-2.5 py-1.5 rounded-xl hover:bg-zinc-800/60 cursor-pointer text-xs text-white">
+                      <input
+                        type="checkbox"
+                        checked={selectedDeviceFilters.size === 0}
+                        onChange={() => setSelectedDeviceFilters(new Set())}
+                        className="w-4 h-4 rounded text-purple-600 focus:ring-purple-500 bg-[#121218] border-zinc-700"
+                      />
+                      <span className="font-semibold">All Devices</span>
+                    </label>
+
+                    {/* Paired devices checkboxes */}
+                    {devices.map((dev) => {
+                      const isChecked = selectedDeviceFilters.has(dev.deviceId);
+                      return (
+                        <label
+                          key={dev.deviceId}
+                          className="flex items-center space-x-2.5 px-2.5 py-1.5 rounded-xl hover:bg-zinc-800/60 cursor-pointer text-xs text-zinc-200"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={() => {
+                              setSelectedDeviceFilters((prev) => {
+                                const next = new Set(prev);
+                                if (next.has(dev.deviceId)) next.delete(dev.deviceId);
+                                else next.add(dev.deviceId);
+                                return next;
+                              });
+                            }}
+                            className="w-4 h-4 rounded text-purple-600 focus:ring-purple-500 bg-[#121218] border-zinc-700"
+                          />
+                          <span className="truncate flex-1 font-medium">{dev.deviceName}</span>
+                          <span className="text-[10px] text-zinc-500 uppercase">{dev.deviceType}</span>
+                        </label>
+                      );
+                    })}
+
+                    {/* Web / Unified Drive checkbox */}
+                    <label className="flex items-center space-x-2.5 px-2.5 py-1.5 rounded-xl hover:bg-zinc-800/60 cursor-pointer text-xs text-zinc-200">
+                      <input
+                        type="checkbox"
+                        checked={selectedDeviceFilters.has('web')}
+                        onChange={() => {
+                          setSelectedDeviceFilters((prev) => {
+                            const next = new Set(prev);
+                            if (next.has('web')) next.delete('web');
+                            else next.add('web');
+                            return next;
+                          });
+                        }}
+                        className="w-4 h-4 rounded text-purple-600 focus:ring-purple-500 bg-[#121218] border-zinc-700"
+                      />
+                      <span className="truncate flex-1 font-medium">Unified Drive (Web)</span>
+                      <Cloud className="w-3.5 h-3.5 text-zinc-500" />
+                    </label>
+                  </div>
+                </>
+              )}
+            </div>
+
+            {/* Center: Live Search Bar */}
+            <div className="relative flex-1 min-w-0">
+              <Search className="w-3.5 h-3.5 text-zinc-400 absolute left-2.5 sm:left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search gallery..."
+                className="w-full h-8 pl-8 pr-7 bg-zinc-900/60 hover:bg-zinc-900 focus:bg-zinc-900 border border-zinc-800/80 focus:border-purple-500/80 rounded-full text-xs text-white placeholder-zinc-500 focus:outline-none transition shadow-sm"
+              />
+              {searchQuery && (
+                <button
+                  onClick={() => setSearchQuery('')}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-white"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+
+            {/* Right Actions: Upload & Select */}
+            <div className="flex items-center space-x-1.5 shrink-0">
+              {/* Direct Photo & Video Upload */}
+              <label
+                className="inline-flex items-center justify-center space-x-1.5 h-8 px-2.5 sm:px-3.5 rounded-full text-xs font-bold text-white bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 shadow-md shadow-purple-900/20 cursor-pointer transition active:scale-95"
+                title="Upload Photos or Videos"
+              >
+                <Upload className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Upload</span>
+                <input
+                  type="file"
+                  multiple
+                  accept="image/*,video/*"
+                  className="hidden"
+                  onChange={(e) => {
+                    if (e.target.files && e.target.files.length > 0) {
+                      const selected = Array.from(e.target.files);
+                      e.target.value = '';
+                      setTimeout(() => {
+                        uploadService.enqueue(selected, null);
+                      }, 50);
+                    }
+                  }}
+                />
+              </label>
+
+              {/* Select Mode Toggle */}
+              <button
+                onClick={() => {
+                  if (isSelectionMode) {
+                    deselectAll();
+                  } else {
+                    setIsSelectionMode(true);
+                  }
+                }}
+                className={`inline-flex items-center justify-center space-x-1.5 h-8 px-2.5 sm:px-3 rounded-full text-xs font-semibold transition active:scale-95 ${
+                  isSelectionMode
+                    ? 'bg-purple-600 text-white shadow-md'
+                    : 'bg-zinc-900/80 hover:bg-zinc-800 text-zinc-300 border border-zinc-800/80'
+                }`}
+                title={isSelectionMode ? 'Cancel Selection' : 'Select Photos'}
+              >
+                <CheckSquare className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">{isSelectionMode ? 'Cancel' : 'Select'}</span>
+              </button>
+            </div>
           </div>
-        </div>
-
-        {/* Center: Live Search Bar */}
-        <div className="relative flex-1 w-full md:max-w-lg">
-          <Search className="w-4 h-4 text-zinc-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search photos, videos, or devices..."
-            className="w-full pl-9 pr-8 py-2 bg-zinc-900/70 hover:bg-zinc-900 focus:bg-zinc-900 border border-zinc-800/80 focus:border-purple-500/80 rounded-full text-xs text-white placeholder-zinc-500 focus:outline-none transition shadow-sm"
-          />
-          {searchQuery && (
-            <button
-              onClick={() => setSearchQuery('')}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-white"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
-          )}
-        </div>
-
-        {/* Right Actions: Select Mode, Upload Photos/Videos */}
-        <div className="flex items-center space-x-2 shrink-0 self-end md:self-auto">
-          {/* Direct Photo & Video Upload (Optimized for iPhone & Web) */}
-          <label className="inline-flex items-center space-x-1.5 px-4 py-2 rounded-full text-xs font-bold text-white bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 shadow-md shadow-purple-900/20 cursor-pointer transition active:scale-95" title="Upload Photos or Videos">
-            <Upload className="w-3.5 h-3.5" />
-            <span>Upload</span>
-            <input
-              type="file"
-              multiple
-              accept="image/*,video/*"
-              className="hidden"
-              onChange={(e) => {
-                if (e.target.files && e.target.files.length > 0) {
-                  const selected = Array.from(e.target.files);
-                  e.target.value = '';
-                  // Defer to allow the iOS photo picker sheet to dismiss smoothly without freezing
-                  setTimeout(() => {
-                    uploadService.enqueue(selected, null);
-                  }, 50);
-                }
-              }}
-            />
-          </label>
-
-          <button
-            onClick={() => {
-              if (isSelectionMode) {
-                deselectAll();
-              } else {
-                setIsSelectionMode(true);
-              }
-            }}
-            className={`inline-flex items-center space-x-1.5 px-3.5 py-2 rounded-full text-xs font-semibold transition active:scale-95 ${
-              isSelectionMode
-                ? 'bg-purple-600 text-white shadow-md'
-                : 'bg-zinc-900/80 hover:bg-zinc-800 text-zinc-300 border border-zinc-800/80'
-            }`}
-          >
-            <CheckSquare className="w-3.5 h-3.5" />
-            <span>{isSelectionMode ? 'Cancel' : 'Select'}</span>
-          </button>
-        </div>
-      </div>
 
       {/* Floating Selection Action Bar — Anchored at bottom with rich actions */}
       {(selectedIds.size > 0 || isSelectionMode) && (
