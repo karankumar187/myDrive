@@ -179,6 +179,7 @@ export interface AlbumItem {
     longitude?: number | null;
   };
   coverFile?: FileItem | null;
+  previewFiles?: FileItem[];
   fileCount: number;
   startDate?: string | null;
   endDate?: string | null;

@@ -39,6 +39,7 @@ import {
   Folder,
   HardDrive,
   Plus,
+  MapPin,
 } from 'lucide-react';
 import { uploadService } from '../services/UploadService.js';
 import { VaultCryptoService } from '../services/vault-crypto.js';
@@ -105,6 +106,17 @@ export const GalleryTimelineView: React.FC<Props> = ({
   const [filterType, setFilterType] = useState<'all' | 'favorites' | 'videos' | 'photos'>('all');
   const [isFilterDropdownOpen, setIsFilterDropdownOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+
+  // Album-specific Filter & Search State
+  const [albumSearchQuery, setAlbumSearchQuery] = useState('');
+  const [albumDestination, setAlbumDestination] = useState<string>('all');
+  const [albumYear, setAlbumYear] = useState<string>('all');
+  const [albumDestinations, setAlbumDestinations] = useState<string[]>([]);
+  const [albumYears, setAlbumYears] = useState<string[]>([]);
+  const [isAlbumDetailActive, setIsAlbumDetailActive] = useState(false);
+  const [isAlbumDestDropdownOpen, setIsAlbumDestDropdownOpen] = useState(false);
+  const [isAlbumYearDropdownOpen, setIsAlbumYearDropdownOpen] = useState(false);
+  const [isAlbumCreateOpen, setIsAlbumCreateOpen] = useState(false);
 
   // Device Filter State
   const [devices, setDevices] = useState<DeviceItem[]>([]);
@@ -590,37 +602,40 @@ export const GalleryTimelineView: React.FC<Props> = ({
 
   return (
     <div className="space-y-3 sm:space-y-4 w-full max-w-full min-w-0 overflow-x-hidden">
-      {/* Minimal, Ultra-Low Height (36px) Single-Row Gallery Controls Bar with Sleek Small Timeline/Albums Toggle */}
-      <div className="flex items-center gap-1.5 sm:gap-2 w-full pt-1 pb-1">
-        {/* Sleek, Small Segmented Toggle: Timeline vs Albums */}
-        <div className="inline-flex p-0.5 rounded-full bg-zinc-900/90 border border-zinc-800/80 backdrop-blur-md shrink-0">
-          <button
-            onClick={() => setGallerySubTab('timeline')}
-            className={`h-7 px-2 sm:px-3 rounded-full text-xs font-semibold flex items-center gap-1.5 transition-all active:scale-95 ${
-              gallerySubTab === 'timeline'
-                ? 'bg-purple-600 text-white shadow-sm shadow-purple-500/30'
-                : 'text-zinc-400 hover:text-white'
-            }`}
-            title="Timeline View"
-          >
-            <Clock className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Timeline</span>
-          </button>
-          <button
-            onClick={() => setGallerySubTab('albums')}
-            className={`h-7 px-2 sm:px-3 rounded-full text-xs font-semibold flex items-center gap-1.5 transition-all active:scale-95 ${
-              gallerySubTab === 'albums'
-                ? 'bg-purple-600 text-white shadow-sm shadow-purple-500/30'
-                : 'text-zinc-400 hover:text-white'
-            }`}
-            title="Albums View"
-          >
-            <FolderPlus className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Albums</span>
-          </button>
-        </div>
+      {/* Minimal, Ultra-Low Height (36px) Single-Row Gallery Controls Bar */}
+      {!(gallerySubTab === 'albums' && isAlbumDetailActive) && (
+        <div className="flex items-center gap-1.5 sm:gap-2 w-full pt-1 pb-1">
+          {/* Sleek, Small Segmented Toggle: Timeline vs Albums */}
+          <div className="inline-flex p-0.5 rounded-full bg-zinc-900/90 border border-zinc-800/80 backdrop-blur-md shrink-0">
+            <button
+              onClick={() => setGallerySubTab('timeline')}
+              className={`h-7 px-2 sm:px-3 rounded-full text-xs font-semibold flex items-center gap-1.5 transition-all active:scale-95 ${
+                gallerySubTab === 'timeline'
+                  ? 'bg-purple-600 text-white shadow-sm shadow-purple-500/30'
+                  : 'text-zinc-400 hover:text-white'
+              }`}
+              title="Timeline View"
+            >
+              <Clock className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Timeline</span>
+            </button>
+            <button
+              onClick={() => setGallerySubTab('albums')}
+              className={`h-7 px-2 sm:px-3 rounded-full text-xs font-semibold flex items-center gap-1.5 transition-all active:scale-95 ${
+                gallerySubTab === 'albums'
+                  ? 'bg-purple-600 text-white shadow-sm shadow-purple-500/30'
+                  : 'text-zinc-400 hover:text-white'
+              }`}
+              title="Albums View"
+            >
+              <FolderPlus className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Albums</span>
+            </button>
+          </div>
 
-        {/* Media Type Filter Dropdown */}
+          {gallerySubTab === 'timeline' ? (
+            <>
+              {/* Media Type Filter Dropdown */}
         <div className="relative shrink-0">
           <button
             onClick={() => {
@@ -888,7 +903,176 @@ export const GalleryTimelineView: React.FC<Props> = ({
             <span className="hidden sm:inline">{isSelectionMode ? 'Cancel' : 'Select'}</span>
           </button>
         </div>
-      </div>
+      </>
+    ) : (
+      <>
+        {/* Destination Filter Dropdown (Custom sleek styled matching normal filters) */}
+        {albumDestinations.length > 0 && (
+          <div className="relative shrink-0">
+            <button
+              onClick={() => {
+                setIsAlbumDestDropdownOpen(!isAlbumDestDropdownOpen);
+                setIsAlbumYearDropdownOpen(false);
+              }}
+              className={`inline-flex items-center space-x-1 h-8 px-2 sm:px-2.5 rounded-full text-xs font-semibold border transition active:scale-95 ${
+                albumDestination !== 'all'
+                  ? 'bg-purple-950/60 text-purple-300 border-purple-500/60 shadow-sm'
+                  : 'bg-zinc-900/80 hover:bg-zinc-800 text-zinc-200 border-zinc-800'
+              }`}
+              title="Filter by Destination"
+            >
+              <MapPin className="w-3.5 h-3.5 text-purple-400" />
+              <span className="truncate max-w-[80px] sm:max-w-[120px]">
+                {albumDestination === 'all' ? (
+                  <>
+                    <span className="hidden sm:inline">All Places</span>
+                    <span className="sm:hidden">Places</span>
+                  </>
+                ) : (
+                  albumDestination
+                )}
+              </span>
+              <ChevronDown className="w-3 h-3 text-zinc-400" />
+            </button>
+
+            {isAlbumDestDropdownOpen && (
+              <>
+                <div
+                  className="fixed inset-0 z-20"
+                  onClick={() => setIsAlbumDestDropdownOpen(false)}
+                />
+                <div
+                  className="absolute left-0 mt-1.5 w-48 max-h-60 overflow-y-auto bg-[#14141a] border border-zinc-800 rounded-2xl shadow-2xl z-30 py-1.5 animate-in fade-in"
+                  onClick={() => setIsAlbumDestDropdownOpen(false)}
+                >
+                  <button
+                    onClick={() => setAlbumDestination('all')}
+                    className={`w-full px-3.5 py-2 text-left text-xs flex items-center justify-between hover:bg-purple-950/40 ${
+                      albumDestination === 'all' ? 'text-purple-300 font-semibold bg-purple-950/30' : 'text-zinc-300'
+                    }`}
+                  >
+                    <span>All Destinations</span>
+                    {albumDestination === 'all' && <Check className="w-3.5 h-3.5 text-purple-400" />}
+                  </button>
+                  {albumDestinations.map((dest) => (
+                    <button
+                      key={dest}
+                      onClick={() => setAlbumDestination(dest)}
+                      className={`w-full px-3.5 py-2 text-left text-xs flex items-center justify-between hover:bg-purple-950/40 ${
+                        albumDestination === dest ? 'text-purple-300 font-semibold bg-purple-950/30' : 'text-zinc-300'
+                      }`}
+                    >
+                      <span className="truncate mr-2">{dest}</span>
+                      {albumDestination === dest && <Check className="w-3.5 h-3.5 text-purple-400 shrink-0" />}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* Year Filter Dropdown (Custom sleek styled matching normal filters) */}
+        {albumYears.length > 0 && (
+          <div className="relative shrink-0">
+            <button
+              onClick={() => {
+                setIsAlbumYearDropdownOpen(!isAlbumYearDropdownOpen);
+                setIsAlbumDestDropdownOpen(false);
+              }}
+              className={`inline-flex items-center space-x-1 h-8 px-2 sm:px-2.5 rounded-full text-xs font-semibold border transition active:scale-95 ${
+                albumYear !== 'all'
+                  ? 'bg-purple-950/60 text-purple-300 border-purple-500/60 shadow-sm'
+                  : 'bg-zinc-900/80 hover:bg-zinc-800 text-zinc-200 border-zinc-800'
+              }`}
+              title="Filter by Year"
+            >
+              <Calendar className="w-3.5 h-3.5 text-purple-400" />
+              <span>
+                {albumYear === 'all' ? (
+                  <>
+                    <span className="hidden sm:inline">All Years</span>
+                    <span className="sm:hidden">Years</span>
+                  </>
+                ) : (
+                  albumYear
+                )}
+              </span>
+              <ChevronDown className="w-3 h-3 text-zinc-400" />
+            </button>
+
+            {isAlbumYearDropdownOpen && (
+              <>
+                <div
+                  className="fixed inset-0 z-20"
+                  onClick={() => setIsAlbumYearDropdownOpen(false)}
+                />
+                <div
+                  className="absolute left-0 mt-1.5 w-36 max-h-60 overflow-y-auto bg-[#14141a] border border-zinc-800 rounded-2xl shadow-2xl z-30 py-1.5 animate-in fade-in"
+                  onClick={() => setIsAlbumYearDropdownOpen(false)}
+                >
+                  <button
+                    onClick={() => setAlbumYear('all')}
+                    className={`w-full px-3.5 py-2 text-left text-xs flex items-center justify-between hover:bg-purple-950/40 ${
+                      albumYear === 'all' ? 'text-purple-300 font-semibold bg-purple-950/30' : 'text-zinc-300'
+                    }`}
+                  >
+                    <span>All Years</span>
+                    {albumYear === 'all' && <Check className="w-3.5 h-3.5 text-purple-400" />}
+                  </button>
+                  {albumYears.map((yr) => (
+                    <button
+                      key={yr}
+                      onClick={() => setAlbumYear(yr)}
+                      className={`w-full px-3.5 py-2 text-left text-xs flex items-center justify-between hover:bg-purple-950/40 ${
+                        albumYear === yr ? 'text-purple-300 font-semibold bg-purple-950/30' : 'text-zinc-300'
+                      }`}
+                    >
+                      <span>{yr}</span>
+                      {albumYear === yr && <Check className="w-3.5 h-3.5 text-purple-400" />}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* Center: Live Album Search Bar */}
+        <div className="relative flex-1 min-w-0">
+          <Search className="w-3.5 h-3.5 text-zinc-400 absolute left-2.5 sm:left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+          <input
+            type="text"
+            value={albumSearchQuery}
+            onChange={(e) => setAlbumSearchQuery(e.target.value)}
+            placeholder="Search albums..."
+            className="w-full h-8 pl-8 pr-7 bg-zinc-900/60 hover:bg-zinc-900 focus:bg-zinc-900 border border-zinc-800/80 focus:border-purple-500/80 rounded-full text-xs text-white placeholder-zinc-500 focus:outline-none transition shadow-sm"
+          />
+          {albumSearchQuery && (
+            <button
+              onClick={() => setAlbumSearchQuery('')}
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-white"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
+
+        {/* Right Actions: Create Album */}
+        <div className="flex items-center space-x-1.5 shrink-0">
+          <button
+            onClick={() => setIsAlbumCreateOpen(true)}
+            className="inline-flex items-center justify-center space-x-1.5 h-8 px-2.5 sm:px-3.5 rounded-full text-xs font-bold text-white bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 shadow-md shadow-purple-900/20 cursor-pointer transition active:scale-95"
+            title="Create New Album"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">New Album</span>
+          </button>
+        </div>
+      </>
+    )}
+  </div>
+)}
 
       {/* Main Content: Albums Sub-View OR Timeline Gallery View */}
       {gallerySubTab === 'albums' ? (
@@ -896,6 +1080,16 @@ export const GalleryTimelineView: React.FC<Props> = ({
           allMedia={localMediaList}
           vaultKey={vaultKey}
           initialSelectedMediaIds={selectedAlbumMediaIds}
+          externalSearchQuery={albumSearchQuery}
+          externalDestination={albumDestination}
+          externalYear={albumYear}
+          externalIsCreateOpen={isAlbumCreateOpen}
+          onCloseCreateModal={() => setIsAlbumCreateOpen(false)}
+          onMetaChange={({ destinations, years, isDetailActive }) => {
+            setAlbumDestinations(destinations);
+            setAlbumYears(years);
+            setIsAlbumDetailActive(isDetailActive);
+          }}
         />
       ) : (
         <>

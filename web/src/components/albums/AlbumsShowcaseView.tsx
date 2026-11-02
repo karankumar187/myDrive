@@ -22,12 +22,24 @@ interface AlbumsShowcaseViewProps {
   allMedia: FileItem[];
   vaultKey: CryptoKey | null;
   initialSelectedMediaIds?: string[];
+  externalSearchQuery?: string;
+  externalDestination?: string;
+  externalYear?: string;
+  externalIsCreateOpen?: boolean;
+  onCloseCreateModal?: () => void;
+  onMetaChange?: (meta: { destinations: string[]; years: string[]; isDetailActive: boolean }) => void;
 }
 
 export const AlbumsShowcaseView: React.FC<AlbumsShowcaseViewProps> = ({
   allMedia,
   vaultKey,
   initialSelectedMediaIds = [],
+  externalSearchQuery,
+  externalDestination,
+  externalYear,
+  externalIsCreateOpen,
+  onCloseCreateModal,
+  onMetaChange,
 }) => {
   const [albums, setAlbums] = useState<AlbumItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -36,13 +48,23 @@ export const AlbumsShowcaseView: React.FC<AlbumsShowcaseViewProps> = ({
   // Selected album to view details
   const [activeAlbumId, setActiveAlbumId] = useState<string | null>(null);
 
-  // Search & Filters
-  const [searchQuery, setSearchQuery] = useState('');
-  const [selectedDestination, setSelectedDestination] = useState<string>('all');
-  const [selectedYear, setSelectedYear] = useState<string>('all');
+  // Internal Fallback Search & Filters (used if not passed externally)
+  const [internalSearchQuery, setInternalSearchQuery] = useState('');
+  const [internalDestination, setInternalDestination] = useState<string>('all');
+  const [internalYear, setInternalYear] = useState<string>('all');
+  const [internalIsCreateOpen, setInternalIsCreateOpen] = useState(false);
 
-  // Create & Edit Modal
-  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const searchQuery = externalSearchQuery !== undefined ? externalSearchQuery : internalSearchQuery;
+  const selectedDestination = externalDestination !== undefined ? externalDestination : internalDestination;
+  const selectedYear = externalYear !== undefined ? externalYear : internalYear;
+  const isCreateModalOpen = externalIsCreateOpen !== undefined ? externalIsCreateOpen : internalIsCreateOpen;
+  const handleCloseCreateModal = onCloseCreateModal ?? (() => setInternalIsCreateOpen(false));
+
+  const setSearchQuery = setInternalSearchQuery;
+  const setSelectedDestination = setInternalDestination;
+  const setSelectedYear = setInternalYear;
+  const setIsCreateModalOpen = setInternalIsCreateOpen;
+
   const [editingAlbum, setEditingAlbum] = useState<AlbumItem | null>(null);
 
   // Load albums from backend
@@ -131,6 +153,15 @@ export const AlbumsShowcaseView: React.FC<AlbumsShowcaseViewProps> = ({
     return Array.from(set);
   }, [albums]);
 
+  // Notify parent of available filter options & detail view state
+  useEffect(() => {
+    onMetaChange?.({
+      destinations: uniqueDestinations,
+      years: uniqueYears,
+      isDetailActive: Boolean(activeAlbumId),
+    });
+  }, [uniqueDestinations, uniqueYears, activeAlbumId, onMetaChange]);
+
   // Filtered albums
   const filteredAlbums = useMemo(() => {
     return albums.filter((a) => {
@@ -181,64 +212,66 @@ export const AlbumsShowcaseView: React.FC<AlbumsShowcaseViewProps> = ({
 
   return (
     <div className="w-full space-y-8 animate-fadeIn pb-16">
-      {/* Top Header & Search / Action Row */}
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-        {/* Search Input */}
-        <div className="relative flex-1 max-w-md">
-          <Search className="w-4 h-4 text-neutral-400 absolute left-3.5 top-3" />
-          <input
-            type="text"
-            placeholder="Search albums, destinations, or dates..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-10 pr-4 py-2.5 rounded-2xl bg-neutral-900/80 border border-white/10 focus:border-purple-500 focus:ring-1 focus:ring-purple-500 text-xs sm:text-sm text-white placeholder-neutral-500 outline-none backdrop-blur-md transition-all shadow-inner"
-          />
-        </div>
+      {/* Top Header & Search / Action Row (Only rendered if standalone / uncontrolled) */}
+      {externalSearchQuery === undefined && (
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+          {/* Search Input */}
+          <div className="relative flex-1 max-w-md">
+            <Search className="w-4 h-4 text-neutral-400 absolute left-3.5 top-3" />
+            <input
+              type="text"
+              placeholder="Search albums, destinations, or dates..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full pl-10 pr-4 py-2.5 rounded-2xl bg-neutral-900/80 border border-white/10 focus:border-purple-500 focus:ring-1 focus:ring-purple-500 text-xs sm:text-sm text-white placeholder-neutral-500 outline-none backdrop-blur-md transition-all shadow-inner"
+            />
+          </div>
 
-        {/* Filters and Actions */}
-        <div className="flex flex-wrap items-center gap-2.5">
-          {/* Destination Filter */}
-          {uniqueDestinations.length > 0 && (
-            <select
-              value={selectedDestination}
-              onChange={(e) => setSelectedDestination(e.target.value)}
-              className="px-3 py-2 rounded-xl bg-neutral-900 border border-white/10 text-xs text-neutral-300 outline-none hover:border-white/25 transition-all"
+          {/* Filters and Actions */}
+          <div className="flex flex-wrap items-center gap-2.5">
+            {/* Destination Filter */}
+            {uniqueDestinations.length > 0 && (
+              <select
+                value={selectedDestination}
+                onChange={(e) => setSelectedDestination(e.target.value)}
+                className="px-3 py-2 rounded-xl bg-neutral-900 border border-white/10 text-xs text-neutral-300 outline-none hover:border-white/25 transition-all"
+              >
+                <option value="all">All Destinations</option>
+                {uniqueDestinations.map((d) => (
+                  <option key={d} value={d}>
+                    {d}
+                  </option>
+                ))}
+              </select>
+            )}
+
+            {/* Year Filter */}
+            {uniqueYears.length > 0 && (
+              <select
+                value={selectedYear}
+                onChange={(e) => setSelectedYear(e.target.value)}
+                className="px-3 py-2 rounded-xl bg-neutral-900 border border-white/10 text-xs text-neutral-300 outline-none hover:border-white/25 transition-all"
+              >
+                <option value="all">All Years</option>
+                {uniqueYears.map((y) => (
+                  <option key={y} value={y}>
+                    {y}
+                  </option>
+                ))}
+              </select>
+            )}
+
+            {/* Create Album Button */}
+            <button
+              onClick={() => setIsCreateModalOpen(true)}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-xs font-semibold text-white shadow-lg shadow-purple-500/25 transition-all"
             >
-              <option value="all">All Destinations</option>
-              {uniqueDestinations.map((d) => (
-                <option key={d} value={d}>
-                  {d}
-                </option>
-              ))}
-            </select>
-          )}
-
-          {/* Year Filter */}
-          {uniqueYears.length > 0 && (
-            <select
-              value={selectedYear}
-              onChange={(e) => setSelectedYear(e.target.value)}
-              className="px-3 py-2 rounded-xl bg-neutral-900 border border-white/10 text-xs text-neutral-300 outline-none hover:border-white/25 transition-all"
-            >
-              <option value="all">All Years</option>
-              {uniqueYears.map((y) => (
-                <option key={y} value={y}>
-                  {y}
-                </option>
-              ))}
-            </select>
-          )}
-
-          {/* Create Album Button */}
-          <button
-            onClick={() => setIsCreateModalOpen(true)}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-xs font-semibold text-white shadow-lg shadow-purple-500/25 transition-all"
-          >
-            <Plus className="w-4 h-4" />
-            <span>New Album</span>
-          </button>
+              <Plus className="w-4 h-4" />
+              <span>New Album</span>
+            </button>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Content Rendering */}
       {loading ? (
@@ -321,7 +354,7 @@ export const AlbumsShowcaseView: React.FC<AlbumsShowcaseViewProps> = ({
       {/* Album Creation Modal */}
       <AlbumCreateModal
         isOpen={isCreateModalOpen}
-        onClose={() => setIsCreateModalOpen(false)}
+        onClose={handleCloseCreateModal}
         onCreated={(newAlbum) => {
           setAlbums((prev) => [newAlbum, ...prev]);
           setActiveAlbumId(newAlbum._id);

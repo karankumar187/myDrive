@@ -21,15 +21,19 @@ export class AlbumController {
         .sort({ isPinned: -1, updatedAt: -1 })
         .lean();
 
-      // Collect all coverFileIds and fileIds for batch querying
+      // Collect all coverFileIds and preview fileIds for batch querying
       const allCoverIds: Types.ObjectId[] = [];
       const allDeviceIds = new Set<string>();
 
       for (const alb of albums) {
         if (alb.coverFileId) {
           allCoverIds.push(alb.coverFileId);
-        } else if (alb.fileIds && alb.fileIds.length > 0) {
-          allCoverIds.push(alb.fileIds[0]);
+        }
+        if (alb.fileIds && alb.fileIds.length > 0) {
+          // Load up to 8 photos per album for dynamic rotating slideshow banner
+          for (const fid of alb.fileIds.slice(0, 8)) {
+            allCoverIds.push(fid);
+          }
         }
       }
 
@@ -115,12 +119,18 @@ export class AlbumController {
           .map((id) => deviceMap.get(id))
           .filter(Boolean) as { deviceId: string; deviceName: string; platform: string }[];
 
+        const albumPreviewFiles = (alb.fileIds || [])
+          .slice(0, 8)
+          .map((id) => coverMap.get(String(id)))
+          .filter(Boolean);
+
         return {
           _id: alb._id,
           title: alb.title,
           description: alb.description || '',
           destination: alb.destination || { name: '' },
-          coverFile: cover || null,
+          coverFile: cover || (albumPreviewFiles.length > 0 ? albumPreviewFiles[0] : null),
+          previewFiles: albumPreviewFiles,
           fileCount: validFileCount,
           startDate: alb.startDate || null,
           endDate: alb.endDate || null,

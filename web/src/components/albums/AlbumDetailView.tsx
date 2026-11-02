@@ -292,24 +292,25 @@ export const AlbumDetailView: React.FC<AlbumDetailViewProps> = ({
 
   return (
     <div className="w-full space-y-8 animate-fadeIn pb-16">
-      {/* Top Floating Navigation */}
-      <div className="flex items-center justify-between">
+      {/* Sleek Minimalist Top Navigation Bar (Optimized for iPhone & Desktop) */}
+      <div className="flex items-center justify-between gap-2 w-full pt-0.5">
         <button
           onClick={onBack}
-          className="inline-flex items-center gap-2 px-3.5 py-2 rounded-full bg-neutral-900/80 hover:bg-neutral-800 border border-white/10 text-xs font-semibold text-neutral-200 backdrop-blur-md transition-all shadow-md group"
+          className="inline-flex items-center gap-1 h-8 px-2.5 sm:px-3 rounded-full bg-zinc-900/90 hover:bg-zinc-800 border border-zinc-800/80 text-xs font-semibold text-zinc-200 transition active:scale-95 shrink-0"
+          title="Back to Albums"
         >
-          <ChevronLeft className="w-4 h-4 text-purple-400 group-hover:-translate-x-0.5 transition-transform" />
-          <span>Back to Albums</span>
+          <ChevronLeft className="w-4 h-4 text-purple-400 -ml-0.5" />
+          <span>Albums</span>
         </button>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5 shrink-0">
           <button
             onClick={() => setIsEditModalOpen(true)}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full bg-neutral-900/80 hover:bg-neutral-800 border border-white/10 text-xs font-semibold text-neutral-200 backdrop-blur-md transition-all shadow-md group"
+            className="inline-flex items-center gap-1.5 h-8 px-2.5 sm:px-3 rounded-full bg-zinc-900/90 hover:bg-zinc-800 border border-zinc-800/80 text-xs font-semibold text-zinc-200 transition active:scale-95"
             title="Edit Album Details"
           >
-            <Edit3 className="w-3.5 h-3.5 text-purple-400 group-hover:rotate-12 transition-transform" />
-            <span>Edit Album</span>
+            <Edit3 className="w-3.5 h-3.5 text-purple-400" />
+            <span className="hidden sm:inline">Edit</span>
           </button>
 
           <button
@@ -320,18 +321,21 @@ export const AlbumDetailView: React.FC<AlbumDetailViewProps> = ({
               }
             }}
             disabled={album.files.length === 0}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full bg-purple-600/20 hover:bg-purple-600/30 border border-purple-500/40 text-xs font-semibold text-purple-300 transition-all disabled:opacity-40"
+            className="inline-flex items-center gap-1.5 h-8 px-2.5 sm:px-3 rounded-full bg-purple-950/60 hover:bg-purple-900/60 border border-purple-500/40 text-xs font-semibold text-purple-300 transition active:scale-95 disabled:opacity-40"
+            title="Play Slideshow"
           >
-            <Play className="w-3.5 h-3.5 fill-current" />
-            <span>Play Slideshow</span>
+            <Play className="w-3.5 h-3.5 fill-current text-purple-400" />
+            <span className="hidden sm:inline">Slideshow</span>
           </button>
 
           <button
             onClick={() => setIsAddPhotosOpen(true)}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-xs font-semibold text-white shadow-lg shadow-purple-500/25 transition-all"
+            className="inline-flex items-center gap-1 h-8 px-2.5 sm:px-3.5 rounded-full bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-xs font-bold text-white shadow-md shadow-purple-900/30 transition active:scale-95"
+            title="Add Photos to Album"
           >
             <Plus className="w-3.5 h-3.5" />
-            <span>Add Photos</span>
+            <span>Add</span>
+            <span className="hidden sm:inline">Photos</span>
           </button>
         </div>
       </div>
