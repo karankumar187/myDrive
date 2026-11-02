@@ -36,6 +36,9 @@ import {
   Compass,
   Clock,
   FolderPlus,
+  Folder,
+  HardDrive,
+  Plus,
 } from 'lucide-react';
 import { uploadService } from '../services/UploadService.js';
 import { VaultCryptoService } from '../services/vault-crypto.js';
@@ -130,6 +133,17 @@ export const GalleryTimelineView: React.FC<Props> = ({
   const [folders, setFolders] = useState<FolderItem[]>([]);
   const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
   const [isMoving, setIsMoving] = useState(false);
+
+  // Upload Destination Folder Modal
+  const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
+  const [uploadTargetFolderId, setUploadTargetFolderId] = useState<string | null>(null);
+  const [uploadFolders, setUploadFolders] = useState<FolderItem[]>([]);
+  const [loadingUploadFolders, setLoadingUploadFolders] = useState(false);
+  const [uploadFolderSearch, setUploadFolderSearch] = useState('');
+  const [isCreatingUploadFolder, setIsCreatingUploadFolder] = useState(false);
+  const [newUploadFolderName, setNewUploadFolderName] = useState('');
+  const [isCreatingFolderLoading, setIsCreatingFolderLoading] = useState(false);
+  const fileUploadInputRef = useRef<HTMLInputElement | null>(null);
 
   // Local mutable media list to reflect instant favorite / rename / trash & infinite scroll
   const [localMediaList, setLocalMediaList] = useState<FileItem[]>(() => (media || []).filter((m: any) => !m.isMediaApi && !m.publicId));
@@ -401,6 +415,66 @@ export const GalleryTimelineView: React.FC<Props> = ({
         a.remove();
       }, idx * 400);
     });
+  };
+
+  // Upload to Folder Handlers & Filtered List
+  const filteredUploadFolders = useMemo(() => {
+    if (!uploadFolderSearch.trim()) return uploadFolders;
+    const q = uploadFolderSearch.toLowerCase();
+    return uploadFolders.filter((f) => f.name.toLowerCase().includes(q));
+  }, [uploadFolders, uploadFolderSearch]);
+
+  const handleOpenUploadModal = async () => {
+    setIsUploadModalOpen(true);
+    setUploadFolderSearch('');
+    setIsCreatingUploadFolder(false);
+    setNewUploadFolderName('');
+    setLoadingUploadFolders(true);
+    try {
+      const res = await api.listFolders();
+      setUploadFolders(res.folders || []);
+    } catch (err) {
+      console.error('Failed to list folders for upload:', err);
+    } finally {
+      setLoadingUploadFolders(false);
+    }
+  };
+
+  const handleCreateUploadFolder = async () => {
+    if (!newUploadFolderName.trim()) return;
+    setIsCreatingFolderLoading(true);
+    try {
+      const res = await api.createFolder(newUploadFolderName.trim(), null);
+      if (res.folder) {
+        setUploadFolders((prev) => [res.folder, ...prev]);
+        setUploadTargetFolderId(res.folder._id);
+        setNewUploadFolderName('');
+        setIsCreatingUploadFolder(false);
+      }
+    } catch (err) {
+      console.error('Failed to create folder:', err);
+      alert('Failed to create folder. Please try again.');
+    } finally {
+      setIsCreatingFolderLoading(false);
+    }
+  };
+
+  const handleUploadFilesSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      const selected = Array.from(e.target.files);
+      e.target.value = '';
+      const targetName = uploadTargetFolderId
+        ? uploadFolders.find((f) => f._id === uploadTargetFolderId)?.name || 'Folder'
+        : 'Root / All Files';
+
+      setTimeout(() => {
+        uploadService.enqueue(selected, uploadTargetFolderId, targetName);
+      }, 50);
+
+      setIsUploadModalOpen(false);
+      setAlbumSuccessToast(`Uploading ${selected.length} item(s) to "${targetName}"`);
+      setTimeout(() => setAlbumSuccessToast(null), 4000);
+    }
   };
 
   // Open Move dialog
@@ -774,29 +848,25 @@ export const GalleryTimelineView: React.FC<Props> = ({
 
         {/* Right Actions: Upload & Select */}
         <div className="flex items-center space-x-1.5 shrink-0">
-          {/* Direct Photo & Video Upload */}
-          <label
+          {/* Photo & Video Upload (Opens Destination Folder Picker) */}
+          <button
+            onClick={handleOpenUploadModal}
             className="inline-flex items-center justify-center space-x-1.5 h-8 px-2.5 sm:px-3.5 rounded-full text-xs font-bold text-white bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 shadow-md shadow-purple-900/20 cursor-pointer transition active:scale-95"
             title="Upload Photos or Videos"
           >
             <Upload className="w-3.5 h-3.5" />
             <span className="hidden sm:inline">Upload</span>
-            <input
-              type="file"
-              multiple
-              accept="image/*,video/*"
-              className="hidden"
-              onChange={(e) => {
-                if (e.target.files && e.target.files.length > 0) {
-                  const selected = Array.from(e.target.files);
-                  e.target.value = '';
-                  setTimeout(() => {
-                    uploadService.enqueue(selected, null);
-                  }, 50);
-                }
-              }}
-            />
-          </label>
+          </button>
+
+          {/* Hidden File Picker Input Triggered From Folder Selector Modal */}
+          <input
+            ref={fileUploadInputRef}
+            type="file"
+            multiple
+            accept="image/*,video/*"
+            className="hidden"
+            onChange={handleUploadFilesSelected}
+          />
 
           {/* Select Mode Toggle */}
           <button
@@ -1250,6 +1320,181 @@ export const GalleryTimelineView: React.FC<Props> = ({
           setGallerySubTab('albums');
         }}
       />
+
+      {/* Upload to Folder Modal */}
+      {isUploadModalOpen && createPortal(
+        <div className="fixed inset-0 bg-black/85 z-[110] flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
+          <div className="bg-[#15151e] border border-purple-500/40 rounded-3xl max-w-md w-full p-5 sm:p-6 space-y-4 shadow-2xl">
+            {/* Header */}
+            <div className="flex items-center justify-between pb-2 border-b border-zinc-800/80">
+              <div className="flex items-center space-x-3">
+                <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-purple-600 to-indigo-600 flex items-center justify-center text-white shadow-md shadow-purple-900/30">
+                  <Upload className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white tracking-tight">Upload to Folder</h3>
+                  <p className="text-xs text-zinc-400">Choose destination folder for your media</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsUploadModalOpen(false)}
+                className="p-1.5 rounded-xl text-zinc-400 hover:text-white hover:bg-zinc-800/60 transition"
+                title="Close"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Folder Search (when > 2 folders exist) */}
+            {uploadFolders.length > 2 && (
+              <div className="relative">
+                <Search className="w-3.5 h-3.5 text-zinc-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  type="text"
+                  value={uploadFolderSearch}
+                  onChange={(e) => setUploadFolderSearch(e.target.value)}
+                  placeholder="Filter destination folders..."
+                  className="w-full h-8 pl-8 pr-3 bg-zinc-900/80 border border-zinc-800 rounded-xl text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-purple-500/80 transition"
+                />
+              </div>
+            )}
+
+            {/* Create New Folder Inline Option */}
+            {!isCreatingUploadFolder ? (
+              <button
+                onClick={() => setIsCreatingUploadFolder(true)}
+                className="w-full py-2 px-3 rounded-xl border border-dashed border-zinc-700/80 hover:border-purple-500/80 text-zinc-300 hover:text-purple-300 text-xs font-semibold flex items-center justify-center space-x-2 transition bg-zinc-900/40 hover:bg-purple-950/20 active:scale-98"
+              >
+                <Plus className="w-4 h-4 text-purple-400" />
+                <span>Create New Folder</span>
+              </button>
+            ) : (
+              <div className="p-3 bg-zinc-900/90 border border-purple-500/40 rounded-2xl space-y-2 animate-in fade-in">
+                <div className="text-xs font-semibold text-purple-300 flex items-center space-x-1.5">
+                  <FolderPlus className="w-3.5 h-3.5" />
+                  <span>New Destination Folder</span>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="text"
+                    value={newUploadFolderName}
+                    onChange={(e) => setNewUploadFolderName(e.target.value)}
+                    placeholder="e.g. Vacation, Camera, Trips..."
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handleCreateUploadFolder();
+                    }}
+                    autoFocus
+                    className="flex-1 h-8 px-3 bg-zinc-950 border border-zinc-700 focus:border-purple-500 rounded-xl text-xs text-white placeholder-zinc-500 focus:outline-none"
+                  />
+                  <button
+                    disabled={!newUploadFolderName.trim() || isCreatingFolderLoading}
+                    onClick={handleCreateUploadFolder}
+                    className="h-8 px-3 rounded-xl bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white text-xs font-semibold transition flex items-center space-x-1"
+                  >
+                    {isCreatingFolderLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <span>Create</span>}
+                  </button>
+                  <button
+                    onClick={() => {
+                      setIsCreatingUploadFolder(false);
+                      setNewUploadFolderName('');
+                    }}
+                    className="h-8 px-2.5 rounded-xl text-zinc-400 hover:text-white text-xs transition"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Folder Selection List */}
+            <div className="max-h-56 overflow-y-auto space-y-1.5 pr-1">
+              {/* Root / All Files Option */}
+              <button
+                onClick={() => setUploadTargetFolderId(null)}
+                className={`w-full p-2.5 rounded-xl text-left text-xs flex items-center justify-between transition ${
+                  uploadTargetFolderId === null
+                    ? 'bg-purple-950/60 border border-purple-500/70 text-purple-200 font-semibold shadow-sm'
+                    : 'bg-[#101016] border border-[#222230] text-zinc-300 hover:bg-[#181824]'
+                }`}
+              >
+                <div className="flex items-center space-x-2.5 truncate">
+                  <div className={`p-1.5 rounded-lg ${uploadTargetFolderId === null ? 'bg-purple-600/30 text-purple-300' : 'bg-zinc-800/70 text-zinc-400'}`}>
+                    <HardDrive className="w-3.5 h-3.5" />
+                  </div>
+                  <div className="truncate">
+                    <div className="font-medium">Root / All Files</div>
+                    <div className="text-[10px] text-zinc-500">Main cloud storage root</div>
+                  </div>
+                </div>
+                {uploadTargetFolderId === null && <Check className="w-4 h-4 text-purple-400 shrink-0" />}
+              </button>
+
+              {/* Folders List */}
+              {loadingUploadFolders ? (
+                <div className="py-6 flex flex-col items-center justify-center space-y-2 text-zinc-500 text-xs">
+                  <Loader2 className="w-5 h-5 animate-spin text-purple-400" />
+                  <span>Loading folders...</span>
+                </div>
+              ) : filteredUploadFolders.length === 0 && uploadFolderSearch ? (
+                <div className="py-4 text-center text-xs text-zinc-500">
+                  No folders match "{uploadFolderSearch}"
+                </div>
+              ) : (
+                filteredUploadFolders.map((folder) => {
+                  const isSelected = uploadTargetFolderId === folder._id;
+                  return (
+                    <button
+                      key={folder._id}
+                      onClick={() => setUploadTargetFolderId(folder._id)}
+                      className={`w-full p-2.5 rounded-xl text-left text-xs flex items-center justify-between transition ${
+                        isSelected
+                          ? 'bg-purple-950/60 border border-purple-500/70 text-purple-200 font-semibold shadow-sm'
+                          : 'bg-[#101016] border border-[#222230] text-zinc-300 hover:bg-[#181824]'
+                      }`}
+                    >
+                      <div className="flex items-center space-x-2.5 truncate">
+                        <div className={`p-1.5 rounded-lg ${isSelected ? 'bg-purple-600/30 text-purple-300' : 'bg-zinc-800/70 text-zinc-400'}`}>
+                          <Folder className="w-3.5 h-3.5" />
+                        </div>
+                        <span className="truncate font-medium">{folder.name}</span>
+                      </div>
+                      {isSelected && <Check className="w-4 h-4 text-purple-400 shrink-0" />}
+                    </button>
+                  );
+                })
+              )}
+            </div>
+
+            {/* Modal Bottom Actions */}
+            <div className="pt-2 border-t border-zinc-800/80 flex items-center justify-between gap-2">
+              <div className="text-[11px] text-zinc-400 truncate">
+                Destination:{' '}
+                <span className="text-purple-300 font-semibold">
+                  {uploadTargetFolderId
+                    ? uploadFolders.find((f) => f._id === uploadTargetFolderId)?.name || 'Selected Folder'
+                    : 'Root / All Files'}
+                </span>
+              </div>
+              <div className="flex items-center space-x-2 shrink-0">
+                <button
+                  onClick={() => setIsUploadModalOpen(false)}
+                  className="px-3 py-1.5 text-xs text-zinc-400 hover:text-white rounded-xl hover:bg-zinc-800 transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => fileUploadInputRef.current?.click()}
+                  className="px-4 py-2 text-xs font-bold text-white bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 rounded-xl shadow-glow-purple flex items-center space-x-1.5 active:scale-95 transition"
+                >
+                  <Upload className="w-3.5 h-3.5" />
+                  <span>Choose Files</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
 
       {/* Floating Success Toast */}
       {albumSuccessToast && (
