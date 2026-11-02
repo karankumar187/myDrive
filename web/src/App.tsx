@@ -584,60 +584,28 @@ export const App: React.FC = () => {
 
       {/* TOP FLOATING NAVBAR */}
       <header className="sticky top-0 z-[60] w-full backdrop-blur-xl bg-[#08080a]/90 border-b border-[#1c1c22] pt-safe max-w-full">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-14 sm:h-16 flex items-center justify-between gap-2">
-          {/* Left Brand Logo & Gallery Sub-Tab Toggle */}
-          <div className="flex items-center gap-2 sm:gap-3 shrink-0">
-            <button
-              onClick={() => {
-                setActiveTab('dashboard');
-                window.scrollTo({ top: 0, behavior: 'smooth' });
-              }}
-              className="flex items-center space-x-2.5 group cursor-pointer focus:outline-none transition active:scale-95 text-left"
-              title="Go to Dashboard"
-            >
-              <img
-                src="/logo.png"
-                alt="myDrive"
-                className="w-8 h-8 rounded-lg object-cover border border-white/10 group-hover:border-purple-500/50 transition shadow-sm"
-              />
-              <div className="flex items-center space-x-1">
-                <span className="font-extrabold text-base tracking-tight text-white group-hover:text-purple-200 transition">
-                  my<span className="text-purple-400">Drive</span>
-                </span>
-                <span className="w-1.5 h-1.5 rounded-full bg-purple-500 shadow-glow-purple ml-0.5 group-hover:scale-125 transition-transform" />
-              </div>
-            </button>
-
-            {/* When on Gallery tab, show sleek minimal Timeline | Albums segmented toggle */}
-            {activeTab === 'gallery' && (
-              <div className="inline-flex p-0.5 rounded-full bg-zinc-900/90 border border-white/15 backdrop-blur-xl shadow-inner ml-0.5 sm:ml-1">
-                <button
-                  onClick={() => setGallerySubTab('timeline')}
-                  className={`px-2.5 sm:px-3 py-1 rounded-full text-xs font-semibold flex items-center gap-1.5 transition-all active:scale-95 ${
-                    gallerySubTab === 'timeline'
-                      ? 'bg-purple-600 text-white shadow-sm shadow-purple-500/30'
-                      : 'text-zinc-400 hover:text-white'
-                  }`}
-                  title="Timeline View"
-                >
-                  <Clock className="w-3 h-3" />
-                  <span className="text-[11px] sm:text-xs font-semibold">Timeline</span>
-                </button>
-                <button
-                  onClick={() => setGallerySubTab('albums')}
-                  className={`px-2.5 sm:px-3 py-1 rounded-full text-xs font-semibold flex items-center gap-1.5 transition-all active:scale-95 ${
-                    gallerySubTab === 'albums'
-                      ? 'bg-purple-600 text-white shadow-sm shadow-purple-500/30'
-                      : 'text-zinc-400 hover:text-white'
-                  }`}
-                  title="Albums View"
-                >
-                  <FolderPlus className="w-3 h-3" />
-                  <span className="text-[11px] sm:text-xs font-semibold">Albums</span>
-                </button>
-              </div>
-            )}
-          </div>
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-14 sm:h-16 flex items-center justify-between">
+          {/* Left Brand Logo (Clickable Home / Dashboard Navigation) */}
+          <button
+            onClick={() => {
+              setActiveTab('dashboard');
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            }}
+            className="flex items-center space-x-2.5 group cursor-pointer focus:outline-none transition active:scale-95 text-left"
+            title="Go to Dashboard"
+          >
+            <img
+              src="/logo.png"
+              alt="myDrive"
+              className="w-8 h-8 rounded-lg object-cover border border-white/10 group-hover:border-purple-500/50 transition shadow-sm"
+            />
+            <div className="flex items-center space-x-1">
+              <span className="font-extrabold text-base tracking-tight text-white group-hover:text-purple-200 transition">
+                my<span className="text-purple-400">Drive</span>
+              </span>
+              <span className="w-1.5 h-1.5 rounded-full bg-purple-500 shadow-glow-purple ml-0.5 group-hover:scale-125 transition-transform" />
+            </div>
+          </button>
 
           {/* Center Pill Navbar (Desktop) */}
           <nav className="hidden md:flex items-center bg-[#131317]/90 border border-[#222229] p-1 rounded-full shadow-lg">
