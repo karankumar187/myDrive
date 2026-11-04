@@ -226,28 +226,43 @@ export const FullScreenViewer: React.FC<FullScreenViewerProps> = ({
     const streamUrl = getStreamUrl(item._id);
     const previewUrl = isVideo ? streamUrl : getPreviewUrl(item._id);
 
-    // Check memory cache first
+    const decThumb = (item as any).decryptedThumbnail || (item.metadata as any)?.thumbnail;
+    const effectiveMime = (item as any).decryptedMimeType || (item.mimeType && item.mimeType !== 'application/octet-stream' ? item.mimeType : 'image/jpeg');
+
+    // Fast Path 1: If decrypted thumbnail / preview is available in RAM, display it INSTANTLY (0ms)
+    if (decThumb && !isVideo) {
+      setFullUrl(decThumb);
+      setIsImageLoaded(true);
+      setLoading(false);
+    }
+
+    // Check memory cache second
     const mem = mediaCache.get(item._id);
     if (mem && !mem.startsWith('data:image')) {
       setFullUrl(mem);
+      setIsImageLoaded(true);
       setLoading(false);
       return;
     }
 
     if (!isEncrypted || !vaultKey) {
-      setFullUrl((item as any).isVault ? streamUrl : previewUrl);
+      if ((item as any).isVault) {
+        if (!decThumb) setFullUrl(streamUrl);
+      } else {
+        setFullUrl(previewUrl);
+      }
       setLoading(false);
       return;
     }
 
-    // Decrypt E2EE media if vaultKey provided, otherwise fallback to direct stream
+    // Decrypt E2EE media if vaultKey provided
     const decryptMedia = async () => {
       try {
         const res = await fetch(streamUrl);
         if (!res.ok) throw new Error('Fetch failed');
         const ciphertext = await res.arrayBuffer();
         if (!version?.iv) {
-          if (active) {
+          if (active && !decThumb) {
             setFullUrl((item as any).isVault ? streamUrl : previewUrl);
             setLoading(false);
           }
@@ -255,15 +270,25 @@ export const FullScreenViewer: React.FC<FullScreenViewerProps> = ({
         }
         const decrypted = await VaultCryptoService.decryptBuffer(ciphertext, version.iv, vaultKey!);
         if (active) {
-          const blobUrl = URL.createObjectURL(new Blob([decrypted], { type: item.mimeType }));
+          const blobUrl = URL.createObjectURL(new Blob([decrypted], { type: effectiveMime }));
           mediaCache.set(item._id, blobUrl);
           setFullUrl(blobUrl);
+          setIsImageLoaded(true);
           setLoading(false);
         }
       } catch (err) {
         if (active) {
-          setFullUrl(previewUrl);
-          setLoading(false);
+          if (decThumb) {
+            setFullUrl(decThumb);
+            setIsImageLoaded(true);
+            setLoading(false);
+          } else if (!(item as any).isVault) {
+            setFullUrl(previewUrl);
+            setLoading(false);
+          } else {
+            setLoading(false);
+            setImgError(true);
+          }
         }
       }
     };
@@ -617,8 +642,15 @@ export const FullScreenViewer: React.FC<FullScreenViewerProps> = ({
                   setLoading(false);
                 }}
                 onError={() => {
+                  const decThumb = (item as any).decryptedThumbnail || (item.metadata as any)?.thumbnail;
+                  if (decThumb && fullUrl !== decThumb) {
+                    setFullUrl(decThumb);
+                    setIsImageLoaded(true);
+                    setLoading(false);
+                    return;
+                  }
                   const streamUrl = getStreamUrl(item._id);
-                  if (fullUrl && fullUrl !== streamUrl) {
+                  if (fullUrl && fullUrl !== streamUrl && !(item as any).isVault) {
                     setFullUrl(streamUrl);
                   } else {
                     setIsImageLoaded(false);
