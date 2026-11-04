@@ -1,8 +1,14 @@
 import { Router, Request, Response } from 'express';
+import multer from 'multer';
 import { FileController } from '../controllers/file.controller.js';
 import { requireUserAuth, requireAnyAuth } from '../middlewares/auth.middleware.js';
 
 const router = Router();
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 150 * 1024 * 1024 }, // 150MB limit
+});
 
 // Upload flow (supports both Web user JWT and Android/Shortcut Device Key)
 router.post('/upload/initiate', requireAnyAuth, FileController.initiateUpload);
@@ -12,6 +18,7 @@ router.post('/upload/complete', requireAnyAuth, FileController.completeUpload);
 router.get('/vault/list', requireUserAuth, FileController.listVaultFiles);
 router.post('/vault/move', requireUserAuth, FileController.moveToVault);
 router.post('/vault/restore', requireUserAuth, FileController.restoreFromVault);
+router.post('/vault/reencrypt/:id', requireUserAuth, upload.single('file'), FileController.reencryptVaultFile);
 
 // Virtual files & Gallery
 router.get('/', requireAnyAuth, FileController.listFiles);

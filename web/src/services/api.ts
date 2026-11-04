@@ -395,6 +395,24 @@ export const api = {
     return res.json();
   },
 
+  async reencryptVaultFile(fileId: string, encryptedBlob: Blob, iv: string, contentHash: string): Promise<any> {
+    const formData = new FormData();
+    formData.append('file', encryptedBlob);
+    formData.append('iv', iv);
+    formData.append('contentHash', contentHash);
+
+    const token = localStorage.getItem('drive_token') || '';
+    const res = await fetch(`${API_BASE}/files/vault/reencrypt/${fileId}`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+      body: formData,
+    });
+    if (!res.ok) throw new Error('Failed to re-encrypt vault file');
+    return res.json();
+  },
+
   async deduplicateFiles(): Promise<any> {
     const res = await fetchWithLoading(`${API_BASE}/files/deduplicate`, {
       method: 'POST',

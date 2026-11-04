@@ -320,4 +320,69 @@ export class GoogleDriveService {
       name: res.data.name || metadata.name,
     };
   }
+
+  /**
+   * Sanitizes, renames and obscures a file on Google Drive when moved to the Zero-Knowledge Vault.
+   * Strips original name, sets mimeType to application/octet-stream, and clears description.
+   */
+  static async sanitizeVaultFileOnDrive(account: IStorageAccountDocument, providerFileId: string): Promise<string> {
+    try {
+      const oauth2Client = this.getOAuth2Client(account);
+      const drive = google.drive({ version: 'v3', auth: oauth2Client });
+      const actualFileId = await this.resolveDriveFileId(account, providerFileId);
+
+      const opaqueName = `vault_${Date.now()}_${Math.random().toString(36).substring(2, 10)}.enc`;
+
+      await drive.files.update({
+        fileId: actualFileId,
+        requestBody: {
+          name: opaqueName,
+          mimeType: 'application/octet-stream',
+          description: 'Unified Personal Cloud encrypted vault asset',
+        },
+      });
+
+      return opaqueName;
+    } catch (err) {
+      console.warn('Could not sanitize file metadata in Google Drive:', err);
+      return providerFileId;
+    }
+  }
+
+  /**
+   * Overwrites the file bytes on Google Drive with encrypted ciphertext.
+   * Ensures Google Drive holds zero plaintext bytes.
+   */
+  static async updateFileContent(
+    account: IStorageAccountDocument,
+    providerFileId: string,
+    data: Buffer | NodeJS.ReadableStream,
+    metadata?: {
+      name?: string;
+      mimeType?: string;
+    }
+  ): Promise<void> {
+    const oauth2Client = this.getOAuth2Client(account);
+    const drive = google.drive({ version: 'v3', auth: oauth2Client });
+    const actualFileId = await this.resolveDriveFileId(account, providerFileId);
+
+    let body: any = data;
+    if (Buffer.isBuffer(data)) {
+      const { Readable } = await import('stream');
+      body = Readable.from(data);
+    }
+
+    const requestBody: any = {};
+    if (metadata?.name) requestBody.name = metadata.name;
+    if (metadata?.mimeType) requestBody.mimeType = metadata.mimeType;
+
+    await drive.files.update({
+      fileId: actualFileId,
+      requestBody,
+      media: {
+        mimeType: metadata?.mimeType || 'application/octet-stream',
+        body,
+      },
+    });
+  }
 }

@@ -235,7 +235,7 @@ export const FullScreenViewer: React.FC<FullScreenViewerProps> = ({
     }
 
     if (!isEncrypted || !vaultKey) {
-      setFullUrl(previewUrl);
+      setFullUrl((item as any).isVault ? streamUrl : previewUrl);
       setLoading(false);
       return;
     }
@@ -248,7 +248,7 @@ export const FullScreenViewer: React.FC<FullScreenViewerProps> = ({
         const ciphertext = await res.arrayBuffer();
         if (!version?.iv) {
           if (active) {
-            setFullUrl(previewUrl);
+            setFullUrl((item as any).isVault ? streamUrl : previewUrl);
             setLoading(false);
           }
           return;

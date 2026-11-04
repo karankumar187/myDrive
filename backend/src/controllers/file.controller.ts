@@ -622,6 +622,11 @@ export class FileController {
         return;
       }
 
+      if (file.isVault) {
+        res.status(403).json({ error: 'Vault files cannot be accessed via public preview' });
+        return;
+      }
+
       const latestVersion = file.versions[file.versions.length - 1];
       if (!latestVersion) {
         res.status(404).json({ error: 'No file versions available' });
@@ -719,7 +724,11 @@ export class FileController {
       res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(file.filename)}"`);
       res.setHeader('Accept-Ranges', 'bytes');
       res.setHeader('ETag', etag);
-      res.setHeader('Cache-Control', 'public, max-age=2592000, s-maxage=2592000, stale-while-revalidate=86400, immutable');
+      if (file.isVault) {
+        res.setHeader('Cache-Control', 'private, no-cache, no-store, must-revalidate');
+      } else {
+        res.setHeader('Cache-Control', 'public, max-age=2592000, s-maxage=2592000, stale-while-revalidate=86400, immutable');
+      }
 
       if (req.headers['if-none-match'] === etag) {
         res.status(304).end();
@@ -764,7 +773,8 @@ export class FileController {
 
       // Automatically trigger background NVMe SSD caching for videos and files <= 400MB
       // so all future range seeks, scrubs, and replays stream directly from SSD in ~1ms!
-      if (fileSize > 0 && fileSize <= MAX_AUTO_CACHE_SIZE) {
+      // (Never cache secret vault files on local server SSD disk)
+      if (fileSize > 0 && fileSize <= MAX_AUTO_CACHE_SIZE && !file.isVault) {
         startBackgroundCache(file._id.toString(), account, latestVersion.providerFileId, fileSize);
       }
 
@@ -829,6 +839,11 @@ export class FileController {
 
       if (!file) {
         res.status(404).json({ error: 'File not found or access denied' });
+        return;
+      }
+
+      if (file.isVault) {
+        res.status(403).json({ error: 'Vault files cannot be accessed via preview' });
         return;
       }
 
@@ -1028,6 +1043,11 @@ export class FileController {
         return;
       }
 
+      if (file.isVault) {
+        res.status(403).json({ error: 'Vault files cannot be accessed via public preview' });
+        return;
+      }
+
       // If previously stored as application/octet-stream, auto-correct based on filename extension
       if (file.mimeType === 'application/octet-stream') {
         const effMime = getEffectiveMimeType(file.filename, file.mimeType);
@@ -1180,6 +1200,11 @@ export class FileController {
         return;
       }
 
+      if (file.isVault) {
+        res.status(403).json({ error: 'Vault files cannot be accessed via public preview' });
+        return;
+      }
+
       const updateFields: any = { 'metadata.thumbnail': thumbnail };
       if (file.mimeType === 'application/octet-stream') {
         const effMime = getEffectiveMimeType(file.filename, file.mimeType);
@@ -1215,6 +1240,11 @@ export class FileController {
         return;
       }
 
+      if (file.isVault) {
+        res.status(403).json({ error: 'Vault files cannot be accessed via public preview' });
+        return;
+      }
+
       await CacheService.invalidateUser(userId.toString());
       const io = getSocketIoInstance();
       if (io) {
@@ -1243,6 +1273,11 @@ export class FileController {
 
       if (!file) {
         res.status(404).json({ error: 'File not found or access denied' });
+        return;
+      }
+
+      if (file.isVault) {
+        res.status(403).json({ error: 'Vault files cannot be accessed via public preview' });
         return;
       }
 
@@ -1278,6 +1313,11 @@ export class FileController {
 
       if (!file) {
         res.status(404).json({ error: 'File not found or access denied' });
+        return;
+      }
+
+      if (file.isVault) {
+        res.status(403).json({ error: 'Vault files cannot be accessed via public preview' });
         return;
       }
 
@@ -1525,6 +1565,11 @@ export class FileController {
         res.status(404).json({ error: 'File not found or access denied' });
         return;
       }
+
+      if (file.isVault) {
+        res.status(403).json({ error: 'Vault files cannot be accessed via public preview' });
+        return;
+      }
       file.isFavorite = typeof isFavorite === 'boolean' ? isFavorite : !file.isFavorite;
       await file.save();
       await CacheService.invalidateUser(userId.toString());
@@ -1558,6 +1603,11 @@ export class FileController {
         res.status(404).json({ error: 'File not found or access denied' });
         return;
       }
+
+      if (file.isVault) {
+        res.status(403).json({ error: 'Vault files cannot be accessed via public preview' });
+        return;
+      }
       await CacheService.invalidateUser(userId.toString());
       const io = getSocketIoInstance();
       if (io) {
@@ -1583,6 +1633,11 @@ export class FileController {
       );
       if (!file) {
         res.status(404).json({ error: 'File not found or access denied' });
+        return;
+      }
+
+      if (file.isVault) {
+        res.status(403).json({ error: 'Vault files cannot be accessed via public preview' });
         return;
       }
       await CacheService.invalidateUser(userId.toString());
@@ -2157,7 +2212,38 @@ export class FileController {
       }
 
       const validIds = fileIds.filter((id) => Types.ObjectId.isValid(id)).map((id) => new Types.ObjectId(id));
+      const filesToMove = await File.find({ _id: { $in: validIds }, userId });
 
+      // 1. Purge all local NVMe disk caches (both raw file cache and WebP preview cache)
+      for (const f of filesToMove) {
+        const cachedFilePath = path.join(CACHE_FILES_DIR, f._id.toString());
+        const cachedPreviewPath = path.join(CACHE_PREVIEWS_DIR, `${f._id.toString()}.webp`);
+        try { if (fs.existsSync(cachedFilePath)) fs.unlinkSync(cachedFilePath); } catch {}
+        try { if (fs.existsSync(cachedPreviewPath)) fs.unlinkSync(cachedPreviewPath); } catch {}
+      }
+
+      // 2. Obscure & scrub files on Google Drive (rename to vault_<random>.enc, strip mimeType to application/octet-stream)
+      for (const f of filesToMove) {
+        const latestVersion = f.versions?.[f.versions.length - 1];
+        if (latestVersion && latestVersion.storageAccountId) {
+          try {
+            const account: any = await StorageAccount.findOne({ _id: latestVersion.storageAccountId, userId }).lean();
+            if (account) {
+              const opaqueName = await GoogleDriveService.sanitizeVaultFileOnDrive(account, latestVersion.providerFileId);
+              if (opaqueName && opaqueName !== latestVersion.providerFileId) {
+                await File.updateOne(
+                  { _id: f._id, 'versions.versionNumber': latestVersion.versionNumber },
+                  { $set: { 'versions.$.providerFileId': opaqueName } }
+                );
+              }
+            }
+          } catch (driveErr) {
+            console.warn(`Could not sanitize Drive file for ${f._id}:`, driveErr);
+          }
+        }
+      }
+
+      // 3. Save encrypted metadata if provided
       if (encryptedMetaMap && typeof encryptedMetaMap === 'object') {
         for (const idStr of Object.keys(encryptedMetaMap)) {
           if (Types.ObjectId.isValid(idStr)) {
@@ -2169,12 +2255,20 @@ export class FileController {
         }
       }
 
+      // 4. Update file records in DB: mark isVault: true, clear folderId, scrub unencrypted thumbnails/exif
       await File.updateMany(
         { _id: { $in: validIds }, userId },
-        { $set: { isVault: true, folderId: null } }
+        {
+          $set: {
+            isVault: true,
+            folderId: null,
+            'metadata.thumbnail': null,
+            'metadata.exif': {},
+          },
+        }
       );
 
-      // Remove moved files from all albums so private vault files never remain in albums
+      // 5. Remove moved files from all albums so private vault files never remain in albums
       await Album.updateMany(
         { userId, fileIds: { $in: validIds } },
         { $pull: { fileIds: { $in: validIds } } }
@@ -2182,6 +2276,83 @@ export class FileController {
 
       await CacheService.invalidateUser(userId.toString());
       res.json({ success: true, count: validIds.length });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+
+  /**
+   * Re-encrypts an existing vault file's physical content on Google Drive with client-side Zero-Knowledge ciphertext.
+   * Completely replaces the physical file bytes in Google Drive with AES-256-GCM ciphertext.
+   */
+  static async reencryptVaultFile(req: Request, res: Response): Promise<void> {
+    try {
+      const userId = req.user!._id;
+      const fileId = req.params.id;
+      const { iv, contentHash } = req.body;
+      const fileBuffer = req.file?.buffer;
+
+      if (!fileBuffer || !iv || !contentHash) {
+        res.status(400).json({ error: 'file buffer, iv, and contentHash are required' });
+        return;
+      }
+
+      const file: any = await File.findOne({ _id: fileId, userId, isVault: true });
+      if (!file) {
+        res.status(404).json({ error: 'Vault file not found' });
+        return;
+      }
+
+      const latestVersion = file.versions?.[file.versions.length - 1];
+      if (!latestVersion) {
+        res.status(404).json({ error: 'No version found' });
+        return;
+      }
+
+      const account: any = await StorageAccount.findOne({
+        _id: latestVersion.storageAccountId,
+        userId,
+      }).lean();
+
+      if (!account) {
+        res.status(404).json({ error: 'Associated storage account not found' });
+        return;
+      }
+
+      // Overwrite physical file content on Google Drive with ciphertext
+      await GoogleDriveService.updateFileContent(
+        account,
+        latestVersion.providerFileId,
+        fileBuffer,
+        {
+          mimeType: 'application/octet-stream',
+        }
+      );
+
+      // Wipe local caches
+      const cachedFilePath = path.join(CACHE_FILES_DIR, fileId);
+      const cachedPreviewPath = path.join(CACHE_PREVIEWS_DIR, `${fileId}.webp`);
+      try { if (fs.existsSync(cachedFilePath)) fs.unlinkSync(cachedFilePath); } catch {}
+      try { if (fs.existsSync(cachedPreviewPath)) fs.unlinkSync(cachedPreviewPath); } catch {}
+
+      // Update version metadata to mark as encrypted
+      await File.updateOne(
+        { _id: file._id, 'versions.versionNumber': latestVersion.versionNumber },
+        {
+          $set: {
+            'versions.$.isEncrypted': true,
+            'versions.$.iv': iv,
+            'versions.$.sizeBytes': fileBuffer.length,
+            'versions.$.contentHash': contentHash,
+            sizeBytes: fileBuffer.length,
+            contentHash: contentHash,
+            mimeType: 'application/octet-stream',
+          },
+        }
+      );
+
+      await CacheService.invalidateUser(userId.toString());
+      res.json({ success: true, message: 'File re-encrypted with Zero-Knowledge E2EE' });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }

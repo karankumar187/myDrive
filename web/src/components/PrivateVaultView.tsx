@@ -104,6 +104,30 @@ export const PrivateVaultView: React.FC<PrivateVaultViewProps> = ({
             } catch {}
           }
 
+          // Background Zero-Knowledge byte re-encryption for moved files (converts plaintext Google Drive file to AES-256-GCM ciphertext)
+          const latestVer = f.versions?.[f.versions.length - 1];
+          if (!latestVer?.isEncrypted) {
+            (async () => {
+              try {
+                const streamUrl = `/api/v1/files/${f._id}/stream`;
+                const fetchRes = await fetch(streamUrl, {
+                  headers: {
+                    Authorization: `Bearer ${localStorage.getItem('drive_token') || ''}`,
+                  },
+                });
+                if (!fetchRes.ok) return;
+                const rawBuffer = await fetchRes.arrayBuffer();
+                const { encryptedBlob, ivHex } = await VaultCryptoService.encryptBuffer(rawBuffer, vaultKey);
+                const encBuf = await encryptedBlob.arrayBuffer();
+                const hash = await VaultCryptoService.calculateSha256(encBuf);
+                await api.reencryptVaultFile(f._id, encryptedBlob, ivHex, hash);
+                console.log(`[Zero-Knowledge] File ${f._id} re-encrypted on Google Drive successfully.`);
+              } catch (reErr) {
+                console.warn(`[Zero-Knowledge] Background re-encryption error for ${f._id}:`, reErr);
+              }
+            })();
+          }
+
           return {
             ...f,
             decryptedFilename: decName,
