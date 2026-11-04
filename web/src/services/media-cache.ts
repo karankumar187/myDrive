@@ -15,8 +15,8 @@ class MediaBlobCache {
   }
 
   set(id: string, url: string): void {
-    // Keep up to 200 items in memory to prevent memory leaks
-    if (this.cache.size > 200) {
+    // Keep up to 2500 items in memory to cover large galleries without re-fetching
+    if (this.cache.size > 2500) {
       const firstKey = this.cache.keys().next().value;
       if (firstKey) {
         const oldUrl = this.cache.get(firstKey);

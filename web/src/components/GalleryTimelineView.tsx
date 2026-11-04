@@ -44,7 +44,7 @@ import {
 } from 'lucide-react';
 import { uploadService } from '../services/UploadService.js';
 import { VaultCryptoService } from '../services/vault-crypto.js';
-import { mediaCache, mediaQueue, isVideoFile, extractVideoThumbnailFromUrl } from '../services/media-cache.js';
+import { mediaCache, isVideoFile } from '../services/media-cache.js';
 import { getStreamUrl, getPreviewUrl, formatBytes, formatDate, formatDateTime } from '../utils/format.js';
 import { api, startGlobalLoading, subscribeToProgress, GlobalProgressState } from '../services/api.js';
 import { ModernVideoPlayer } from './ModernVideoPlayer.js';
@@ -1240,7 +1240,7 @@ export const GalleryTimelineView: React.FC<Props> = React.memo(({
           </p>
         </div>
       ) : (
-        Object.entries(groupedMedia).map(([groupTitle, items]) => (
+        Object.entries(groupedMedia).map(([groupTitle, items], groupIdx) => (
           <div
             key={groupTitle}
             className="space-y-3"
@@ -1276,12 +1276,13 @@ export const GalleryTimelineView: React.FC<Props> = React.memo(({
 
             {/* Grid: 3 columns mobile (iOS Photos standard), 4–8 columns desktop */}
             <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-8 gap-1.5 sm:gap-2.5 w-full min-w-0 max-w-full">
-              {items.map((item) => (
+              {items.map((item, itemIdx) => (
                 <GalleryGridTile
                   key={item._id}
                   item={item}
                   isSelected={selectedIds.has(item._id)}
                   isSelectionMode={isSelectionMode}
+                  isPriority={groupIdx === 0 && itemIdx < 32}
                   onToggleSelect={handleTileToggleSelect}
                   onToggleFavorite={handleToggleFavorite}
                   onClick={handleTileClick}
@@ -1746,27 +1747,19 @@ export const GalleryTimelineView: React.FC<Props> = React.memo(({
 GalleryTimelineView.displayName = 'GalleryTimelineView';
 
 // ----------------------------------------------------
-// Grid Tile Component — Blazing fast 120fps virtualized rendering with content-visibility
+// Grid Tile Component — Blazing fast 120fps GPU accelerated rendering
 // ----------------------------------------------------
 const GalleryGridTile: React.FC<{
   item: FileItem;
   isSelected: boolean;
   isSelectionMode: boolean;
+  isPriority?: boolean;
   onToggleSelect: (id: string) => void;
   onToggleFavorite: (item: FileItem) => void;
   onClick: (id: string) => void;
-}> = React.memo(({ item, isSelected, isSelectionMode, onToggleSelect, onClick }) => {
+}> = React.memo(({ item, isSelected, isSelectionMode, isPriority = false, onToggleSelect, onClick }) => {
   const isVideo = isVideoFile(item.mimeType) || isVideoFile(item.filename);
   const [loadError, setLoadError] = useState(false);
-  const [streamFallback, setStreamFallback] = useState<string | null>(null);
-  const [extractedThumb, setExtractedThumb] = useState<string | null>(null);
-
-  const hasRealThumb = Boolean(
-    (item.metadata?.thumbnail &&
-      item.metadata.thumbnail.startsWith('data:image/') &&
-      item.metadata.thumbnail.length > 500) ||
-      mediaCache.getThumbnail(item._id)
-  );
 
   // Synchronously compute thumbnail without extra render cycles
   const thumbUrl = useMemo(() => {
@@ -1775,35 +1768,6 @@ const GalleryGridTile: React.FC<{
     }
     return mediaCache.getThumbnail(item._id) || mediaCache.get(item._id) || api.getThumbnailUrl(item._id);
   }, [item._id, item.metadata?.thumbnail]);
-
-  // If a video has no real thumbnail stored, automatically extract it in the background queue
-  useEffect(() => {
-    if (!isVideo || hasRealThumb || extractedThumb) return;
-
-    let active = true;
-    mediaQueue.enqueue(async () => {
-      if (!active) return;
-      if (mediaCache.getThumbnail(item._id)) return;
-      try {
-        const streamUrl = getStreamUrl(item._id);
-        const captured = await extractVideoThumbnailFromUrl(streamUrl);
-        if (captured && active) {
-          mediaCache.saveThumbnail(item._id, captured);
-          setExtractedThumb(captured);
-          // Persist to backend database asynchronously so it's permanently stored for all devices!
-          api.updateThumbnail(item._id, captured).catch(() => {});
-        }
-      } catch (err) {
-        // Silently continue if video stream cannot be decoded
-      }
-    });
-
-    return () => {
-      active = false;
-    };
-  }, [item._id, isVideo, hasRealThumb, extractedThumb]);
-
-  const activeSrc = extractedThumb || streamFallback || thumbUrl;
 
   const handleClick = useCallback(() => {
     onClick(item._id);
@@ -1817,7 +1781,6 @@ const GalleryGridTile: React.FC<{
   return (
     <div
       onClick={handleClick}
-      style={{ contentVisibility: 'auto', containIntrinsicSize: '130px' }}
       className={`group relative aspect-square bg-[#121217] border rounded-lg sm:rounded-2xl overflow-hidden cursor-pointer transition-transform duration-100 active:scale-95 select-none ${
         isSelected
           ? 'border-purple-500 ring-2 ring-purple-500/80 scale-[0.98]'
@@ -1825,27 +1788,16 @@ const GalleryGridTile: React.FC<{
       }`}
     >
       {/* Media display */}
-      {activeSrc && !loadError ? (
+      {thumbUrl && !loadError ? (
         <img
-          src={activeSrc}
+          src={thumbUrl}
           alt={item.filename}
           style={{ imageOrientation: 'from-image' }}
           className="w-full h-full object-cover"
-          loading="lazy"
-          decoding="async"
+          loading={isPriority ? 'eager' : 'lazy'}
+          decoding={isPriority ? 'sync' : 'async'}
           onError={() => {
-            if (isVideo) {
-              setLoadError(true);
-            } else if (!streamFallback) {
-              const fallbackUrl = getPreviewUrl(item._id);
-              if (activeSrc !== fallbackUrl) {
-                setStreamFallback(fallbackUrl);
-              } else {
-                setLoadError(true);
-              }
-            } else {
-              setLoadError(true);
-            }
+            setLoadError(true);
           }}
         />
       ) : (

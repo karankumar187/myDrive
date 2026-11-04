@@ -135,9 +135,41 @@ interface CachedThumbnail {
   etag: string;
 }
 const memoryThumbnailCache = new Map<string, CachedThumbnail>();
-const MAX_MEMORY_THUMBNAILS = 400;
+const MAX_MEMORY_THUMBNAILS = 5000;
 
 export class FileController {
+  /**
+   * Preloads the top hot thumbnails for a user into server RAM so gallery thumbnail requests respond in 0ms.
+   */
+  static async preloadHotThumbnails(userId: string): Promise<void> {
+    try {
+      const files = await File.find({
+        userId,
+        isTrash: false,
+        isVault: { $ne: true },
+        'metadata.thumbnail': { $exists: true, $ne: null },
+      })
+        .select('_id metadata.thumbnail updatedAt')
+        .sort({ 'metadata.takenAt': -1, createdAt: -1 })
+        .limit(300)
+        .lean();
+
+      for (const f of files as any[]) {
+        const fileId = f._id.toString();
+        if (!memoryThumbnailCache.has(fileId) && f.metadata?.thumbnail?.startsWith('data:image/')) {
+          const commaIdx = f.metadata.thumbnail.indexOf(',');
+          if (commaIdx !== -1) {
+            const header = f.metadata.thumbnail.substring(5, commaIdx);
+            const contentType = header.split(';')[0] || 'image/jpeg';
+            const base64Data = f.metadata.thumbnail.substring(commaIdx + 1);
+            const buffer = Buffer.from(base64Data, 'base64');
+            const etag = `"${fileId}_${new Date(f.updatedAt || 0).getTime()}"`;
+            memoryThumbnailCache.set(fileId, { buffer, contentType, etag });
+          }
+        }
+      }
+    } catch (_err) {}
+  }
   /**
    * Step 1 of Upload: Checks for duplicates and requests a direct Google Drive Resumable Upload Session URL.
    */
@@ -536,19 +568,36 @@ export class FileController {
         ).toString('base64url');
       }
 
-      // Fetch base64 thumbnails ONLY for the first 50 items to keep DB transfer ultra fast
-      const first50Ids = uniqueMediaFiles.slice(0, 50).map(f => f._id);
-      if (first50Ids.length > 0) {
-        const thumbs = await File.find({ _id: { $in: first50Ids } }).select('_id metadata.thumbnail').lean();
+      // Fetch base64 thumbnails for the first 80 items so the initial screen renders placeholders instantly
+      const first80Ids = uniqueMediaFiles.slice(0, 80).map((f) => f._id);
+      if (first80Ids.length > 0) {
+        const thumbs = await File.find({ _id: { $in: first80Ids } }).select('_id metadata.thumbnail updatedAt').lean();
         const thumbMap = new Map();
-        thumbs.forEach((t: any) => thumbMap.set(t._id.toString(), t.metadata?.thumbnail));
+        thumbs.forEach((t: any) => {
+          const fileId = t._id.toString();
+          thumbMap.set(fileId, t.metadata?.thumbnail);
+          if (t.metadata?.thumbnail && t.metadata.thumbnail.startsWith('data:image/')) {
+            const commaIdx = t.metadata.thumbnail.indexOf(',');
+            if (commaIdx !== -1) {
+              const header = t.metadata.thumbnail.substring(5, commaIdx);
+              const contentType = header.split(';')[0] || 'image/jpeg';
+              const base64Data = t.metadata.thumbnail.substring(commaIdx + 1);
+              const buffer = Buffer.from(base64Data, 'base64');
+              const etag = `"${fileId}_${new Date(t.updatedAt || 0).getTime()}"`;
+              memoryThumbnailCache.set(fileId, { buffer, contentType, etag });
+            }
+          }
+        });
         uniqueMediaFiles.forEach((f: any, idx: number) => {
-          if (idx < 50) {
+          if (idx < 80) {
             f.metadata = f.metadata || {};
             f.metadata.thumbnail = thumbMap.get(f._id.toString());
           }
         });
       }
+
+      // Pre-warm hot thumbnails in memory asynchronously in the background
+      FileController.preloadHotThumbnails(userId.toString()).catch(() => {});
 
       let index = 0;
       const enrichedMedia = uniqueMediaFiles.map((file: any) => {
@@ -572,13 +621,14 @@ export class FileController {
         obj.hasThumbnail = hasThumb;
         obj.thumbnailUrl = `/api/v1/files/${file._id}/thumbnail`;
         
-        // Retain base64 thumbnails for the first 50 items so the initial screen renders blurred placeholders instantly.
+        // Retain base64 thumbnails for the first 80 items so the initial screen renders placeholders instantly.
         // Strip for the rest to prevent payload bloat, and strip any massive (>40KB) base64 strings regardless.
         if (obj.metadata?.thumbnail && !obj.metadata.thumbnail.startsWith('http')) {
-          if (index >= 50 || obj.metadata.thumbnail.length > 40000) {
+          if (index >= 80 || obj.metadata.thumbnail.length > 40000) {
             delete obj.metadata.thumbnail;
           }
         }
+        index++;
         
         // Strip backend-only or redundant fields to minimize payload size further
         delete obj.contentHash;
@@ -1082,9 +1132,12 @@ export class FileController {
         }
 
         if (file.metadata.thumbnail.startsWith('data:image/')) {
-          const matches = file.metadata.thumbnail.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
-          if (matches && matches.length === 3) {
-            saveAndSend(Buffer.from(matches[2], 'base64'), matches[1]);
+          const commaIdx = file.metadata.thumbnail.indexOf(',');
+          if (commaIdx !== -1) {
+            const header = file.metadata.thumbnail.substring(5, commaIdx);
+            const contentType = header.split(';')[0] || 'image/jpeg';
+            const base64Data = file.metadata.thumbnail.substring(commaIdx + 1);
+            saveAndSend(Buffer.from(base64Data, 'base64'), contentType);
             return;
           }
         }
