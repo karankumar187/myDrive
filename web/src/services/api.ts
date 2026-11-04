@@ -214,7 +214,7 @@ export const api = {
     if (params?.limit) query.append('limit', params.limit.toString());
     if (params?.cursor) query.append('cursor', params.cursor);
     const qs = query.toString() ? `?${query.toString()}` : '';
-    const res = await fetchWithLoading(`${API_BASE}/files/gallery${qs}`, { headers: getHeaders() });
+    const res = await fetch(`${API_BASE}/files/gallery${qs}`, { headers: getHeaders() });
     if (!res.ok) throw new Error('Failed to fetch media gallery');
     return res.json();
   },

@@ -92,7 +92,7 @@ export const App: React.FC = () => {
     } catch { return []; }
   });
   const [galleryCursor, setGalleryCursor] = useState<string | null>(null);
-  const [galleryHasMore, setGalleryHasMore] = useState<boolean>(true);
+  const [galleryHasMore, setGalleryHasMore] = useState<boolean>(false);
   const [gallerySubTab, setGallerySubTab] = useState<'timeline' | 'albums'>('timeline');
   const [devices, setDevices] = useState<DeviceItem[]>([]);
   const [trashedFiles, setTrashedFiles] = useState<FileItem[]>([]);
@@ -943,9 +943,10 @@ export const App: React.FC = () => {
           />
         )}
 
-        {activeTab === 'gallery' && (
+        <div className={activeTab === 'gallery' ? 'contents' : 'hidden'}>
           <GalleryTimelineView
             media={media}
+            devices={devices}
             vaultKey={vaultKey}
             onOpenVault={() => setIsVaultModalOpen(true)}
             onMoveToVault={handleMoveFilesToVault}
@@ -955,7 +956,7 @@ export const App: React.FC = () => {
             gallerySubTab={gallerySubTab}
             onSubTabChange={setGallerySubTab}
           />
-        )}
+        </div>
 
         {activeTab === 'devices' && (
           <DeviceManagerView

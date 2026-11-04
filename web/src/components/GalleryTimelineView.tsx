@@ -52,8 +52,14 @@ import { FullScreenViewer, PhotoDetailsModal } from './FullScreenViewer.js';
 import { AlbumsShowcaseView } from './albums/AlbumsShowcaseView.js';
 import { AddToAlbumModal } from './albums/AddToAlbumModal.js';
 
+const MONTH_NAMES = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December'
+];
+
 interface Props {
   media: FileItem[];
+  devices?: DeviceItem[];
   vaultKey: CryptoKey | null;
   onOpenVault?: () => void;
   onRefresh?: () => void;
@@ -88,6 +94,7 @@ const getLastCursor = (list: FileItem[]): string | null => {
 
 export const GalleryTimelineView: React.FC<Props> = ({
   media,
+  devices: externalDevices,
   vaultKey,
   onOpenVault,
   onRefresh,
@@ -121,8 +128,8 @@ export const GalleryTimelineView: React.FC<Props> = ({
   const [isAlbumYearDropdownOpen, setIsAlbumYearDropdownOpen] = useState(false);
   const [isAlbumCreateOpen, setIsAlbumCreateOpen] = useState(false);
 
-  // Device Filter State
-  const [devices, setDevices] = useState<DeviceItem[]>([]);
+  // Device Filter State (preloaded from App so 0 network delay on tab switch)
+  const [devices, setDevices] = useState<DeviceItem[]>(externalDevices || []);
   const [selectedDeviceFilters, setSelectedDeviceFilters] = useState<Set<string>>(new Set());
   const [isDeviceDropdownOpen, setIsDeviceDropdownOpen] = useState(false);
 
@@ -163,30 +170,29 @@ export const GalleryTimelineView: React.FC<Props> = ({
   // Local mutable media list to reflect instant favorite / rename / trash & infinite scroll
   const [localMediaList, setLocalMediaList] = useState<FileItem[]>(() => (media || []).filter((m: any) => !m.isMediaApi && !m.publicId));
   const [nextCursor, setNextCursor] = useState<string | null>(initialCursor ?? null);
-  const [hasMore, setHasMore] = useState<boolean>(initialHasMore ?? true);
+  const [hasMore, setHasMore] = useState<boolean>(Boolean(initialHasMore && initialCursor));
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const isFirstMountRef = useRef(true);
 
+  const prevMediaRef = useRef(media);
   useEffect(() => {
-    setLocalMediaList(media);
+    if (prevMediaRef.current !== media) {
+      prevMediaRef.current = media;
+      setLocalMediaList((media || []).filter((m: any) => !m.isMediaApi && !m.publicId));
+    }
     if (initialCursor !== undefined) setNextCursor(initialCursor);
-    if (initialHasMore !== undefined) setHasMore(initialHasMore);
+    if (initialHasMore !== undefined) setHasMore(Boolean(initialHasMore && initialCursor));
   }, [media, initialCursor, initialHasMore]);
 
   // Load more media on infinite scroll
   const loadMoreMedia = useCallback(async () => {
-    if (isLoadingMore || !hasMore) return;
+    if (isLoadingMore || !hasMore || !nextCursor) return;
     setIsLoadingMore(true);
     try {
-      const cursor = nextCursor || getLastCursor(localMediaList);
-      if (!cursor) {
-        setHasMore(false);
-        return;
-      }
       const res = await api.getGallery({
-        limit: 'all',
-        cursor,
+        limit: 50,
+        cursor: nextCursor,
         filter: filterType !== 'all' ? filterType : undefined,
         search: searchQuery.trim() || undefined,
       });
@@ -198,7 +204,7 @@ export const GalleryTimelineView: React.FC<Props> = ({
           return [...prev, ...newItems];
         });
         setNextCursor(res.nextCursor || null);
-        setHasMore(Boolean(res.hasMore));
+        setHasMore(Boolean(res.hasMore && res.nextCursor));
       } else {
         setHasMore(false);
       }
@@ -208,16 +214,16 @@ export const GalleryTimelineView: React.FC<Props> = ({
     } finally {
       setIsLoadingMore(false);
     }
-  }, [isLoadingMore, hasMore, nextCursor, localMediaList, filterType, searchQuery]);
+  }, [isLoadingMore, hasMore, nextCursor, filterType, searchQuery]);
 
   // Infinite scroll IntersectionObserver
   useEffect(() => {
     const sentinel = sentinelRef.current;
-    if (!sentinel) return;
+    if (!sentinel || !hasMore || !nextCursor) return;
 
     const observer = new IntersectionObserver(
       (entries) => {
-        if (entries[0].isIntersecting && hasMore && !isLoadingMore) {
+        if (entries[0].isIntersecting && hasMore && !isLoadingMore && nextCursor) {
           loadMoreMedia();
         }
       },
@@ -228,7 +234,7 @@ export const GalleryTimelineView: React.FC<Props> = ({
     return () => {
       observer.disconnect();
     };
-  }, [loadMoreMedia, hasMore, isLoadingMore]);
+  }, [loadMoreMedia, hasMore, isLoadingMore, nextCursor]);
 
   // Query server when filter or search changes
   useEffect(() => {
@@ -271,14 +277,21 @@ export const GalleryTimelineView: React.FC<Props> = ({
   }, [filterType, searchQuery]);
 
   useEffect(() => {
-    api.listDevices().then((res) => {
-      const devList = res.devices || [];
-      setDevices(devList);
-      if (devList.length > 0) {
-        setSelectedTargetDeviceId(devList[0].deviceId);
+    if (externalDevices && externalDevices.length > 0) {
+      setDevices(externalDevices);
+      if (!selectedTargetDeviceId) {
+        setSelectedTargetDeviceId(externalDevices[0].deviceId);
       }
-    }).catch((err) => console.error('Failed to load devices for gallery filter:', err));
-  }, []);
+    } else {
+      api.listDevices().then((res) => {
+        const devList = res.devices || [];
+        setDevices(devList);
+        if (devList.length > 0 && !selectedTargetDeviceId) {
+          setSelectedTargetDeviceId(devList[0].deviceId);
+        }
+      }).catch(() => {});
+    }
+  }, [externalDevices]);
 
   // Filtered media based on filterType, selectedDeviceFilters, and searchQuery
   const filteredMedia = useMemo(() => {
@@ -308,19 +321,16 @@ export const GalleryTimelineView: React.FC<Props> = ({
     });
   }, [localMediaList, filterType, selectedDeviceFilters, searchQuery]);
 
-  // Cached month-year formatter for blazing fast grouping
-  const monthYearFormatter = useMemo(() => new Intl.DateTimeFormat('en-US', { month: 'long', year: 'numeric' }), []);
-
-  // Group media by Month & Year
+  // Group media by Month & Year using pre-indexed array for 0ms computation
   const groupedMedia = useMemo(() => {
     return filteredMedia.reduce((acc, item) => {
       const date = new Date(item.metadata?.takenAt || item.createdAt);
-      const monthYear = monthYearFormatter.format(date);
+      const monthYear = `${MONTH_NAMES[date.getMonth()]} ${date.getFullYear()}`;
       if (!acc[monthYear]) acc[monthYear] = [];
       acc[monthYear].push(item);
       return acc;
     }, {} as Record<string, FileItem[]>);
-  }, [filteredMedia, monthYearFormatter]);
+  }, [filteredMedia]);
 
   // Precomputed ID -> Index map for instantaneous O(1) tile opening
   const mediaIndexMap = useMemo(() => {
