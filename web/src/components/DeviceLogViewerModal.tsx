@@ -50,7 +50,13 @@ export const DeviceLogViewerModal: React.FC<Props> = ({
   } | null>(null);
 
   const logs = useMemo(() => {
-    return device.syncLogs || [];
+    // Show newest / latest logs first on top (descending order)
+    const raw = device.syncLogs || [];
+    return [...raw].reverse().sort((a, b) => {
+      const timeA = new Date(a.timestamp).getTime();
+      const timeB = new Date(b.timestamp).getTime();
+      return timeB - timeA;
+    });
   }, [device.syncLogs]);
 
   // Infer severity level if not explicitly provided
@@ -447,7 +453,10 @@ export const DeviceLogViewerModal: React.FC<Props> = ({
               <div className="col-span-3 sm:col-span-2 flex items-center space-x-1.5">
                 <span>SEVERITY</span>
               </div>
-              <div className="col-span-4 sm:col-span-3">TIMESTAMP</div>
+              <div className="col-span-4 sm:col-span-3 flex items-center space-x-1">
+                <span>TIMESTAMP</span>
+                <span className="text-[9px] text-purple-400 font-semibold tracking-normal">(LATEST FIRST)</span>
+              </div>
               <div className="col-span-5 sm:col-span-7">MESSAGE / EVENT</div>
             </div>
 
