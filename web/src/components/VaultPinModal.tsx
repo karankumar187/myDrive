@@ -78,7 +78,6 @@ export const VaultPinModal: React.FC<VaultPinModalProps> = ({
             // Derive key and set up vault
             const { saltHex, encryptedVaultKey, key } = await VaultCryptoService.setupVaultWithPin(enteredPin);
             await api.updateVaultCredentials(saltHex, encryptedVaultKey);
-            await VaultCryptoService.exportKeyToSession(key);
 
             if (onUserUpdated) {
               onUserUpdated({
@@ -106,8 +105,6 @@ export const VaultPinModal: React.FC<VaultPinModalProps> = ({
             return;
           }
 
-          // Save derived key to session storage for seamless tab usage
-          await VaultCryptoService.exportKeyToSession(key);
           onUnlocked(key);
           onClose();
         }
