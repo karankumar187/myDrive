@@ -138,17 +138,26 @@ export const App: React.FC = () => {
     setVaultKey(null);
   }, []);
 
-  // Rule: If vault was opened and user moves to another page/tab, automatically lock it immediately!
-  const prevTabRef = useRef<Tab>(activeTab);
-  useEffect(() => {
-    const prev = prevTabRef.current;
-    prevTabRef.current = activeTab;
+  // Synchronous tab switcher that automatically locks vault when navigating away
+  const switchTab = useCallback((newTab: Tab) => {
+    if (activeTab === 'vault' && newTab !== 'vault') {
+      if (vaultInactiveTimerRef.current) {
+        clearTimeout(vaultInactiveTimerRef.current);
+        vaultInactiveTimerRef.current = null;
+      }
+      setVaultKey(null);
+      VaultCryptoService.clearSessionKey();
+      sessionStorage.removeItem('drive_vault_hidden_at');
+    }
+    setActiveTab(newTab);
+  }, [activeTab]);
 
-    if (prev === 'vault' && activeTab !== 'vault') {
-      // User moved away from vault to another page -> lock vault immediately
+  // Safety invariant: If activeTab is not 'vault', vaultKey must be locked immediately!
+  useEffect(() => {
+    if (activeTab !== 'vault' && vaultKey) {
       handleLockVault();
     }
-  }, [activeTab, handleLockVault]);
+  }, [activeTab, vaultKey, handleLockVault]);
 
   // Rule: Lock vault immediately after 30 seconds if page is inactive (tab switch, another app open, running in bg)
   useEffect(() => {
@@ -720,7 +729,7 @@ export const App: React.FC = () => {
           {/* Left Brand Logo (Clickable Home / Dashboard Navigation) */}
           <button
             onClick={() => {
-              setActiveTab('dashboard');
+              switchTab('dashboard');
               window.scrollTo({ top: 0, behavior: 'smooth' });
             }}
             className="flex items-center space-x-2.5 group cursor-pointer focus:outline-none transition active:scale-95 text-left"
@@ -744,7 +753,7 @@ export const App: React.FC = () => {
             {TABS.map(({ id, label }) => (
               <button
                 key={id}
-                onClick={() => setActiveTab(id)}
+                onClick={() => switchTab(id)}
                 className={`px-4 py-1.5 rounded-full text-xs font-semibold transition flex items-center space-x-1 ${
                   activeTab === id
                     ? 'bg-purple-600 text-white shadow-[0_0_12px_rgba(168,85,247,0.4)]'
@@ -776,7 +785,7 @@ export const App: React.FC = () => {
                 <button
                   onClick={() => {
                     setLogModalDevice(syncingDev);
-                    setActiveTab('devices');
+                    switchTab('devices');
                   }}
                   className="flex items-center space-x-2 px-3 py-1 bg-purple-950/70 hover:bg-purple-900/80 border border-purple-500/60 text-purple-300 rounded-full text-xs font-semibold shadow-glow-purple transition animate-pulse"
                   title={`Device syncing live: ${syncingDev.deviceName}`}
@@ -854,7 +863,7 @@ export const App: React.FC = () => {
                       )}
                     </button>
                     <button
-                      onClick={() => { setActiveTab('media-api'); setShowProfileMenu(false); }}
+                      onClick={() => { switchTab('media-api'); setShowProfileMenu(false); }}
                       className="w-full flex items-center space-x-2 px-3 py-2 text-xs text-zinc-300 hover:bg-purple-600/10 hover:text-purple-300 rounded-xl transition"
                     >
                       <Key className="w-3.5 h-3.5 text-purple-400" />
@@ -961,7 +970,7 @@ export const App: React.FC = () => {
         {activeTab === 'media-api' && (
           <MediaApiStudioView
             currentUser={currentUser}
-            onBackToDashboard={() => setActiveTab('dashboard')}
+            onBackToDashboard={() => switchTab('dashboard')}
           />
         )}
 
@@ -985,7 +994,7 @@ export const App: React.FC = () => {
         {TABS.map(({ id, label, icon: Icon }) => (
           <button
             key={id}
-            onClick={() => setActiveTab(id)}
+            onClick={() => switchTab(id)}
             className={`p-2.5 rounded-full text-xs flex items-center justify-center transition active:scale-90 ${
               activeTab === id ? 'bg-white text-zinc-950 shadow-md' : 'text-zinc-400 hover:text-white'
             }`}
