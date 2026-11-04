@@ -568,10 +568,10 @@ export class FileController {
         ).toString('base64url');
       }
 
-      // Fetch base64 thumbnails for the first 80 items so the initial screen renders placeholders instantly
-      const first80Ids = uniqueMediaFiles.slice(0, 80).map((f) => f._id);
-      if (first80Ids.length > 0) {
-        const thumbs = await File.find({ _id: { $in: first80Ids } }).select('_id metadata.thumbnail updatedAt').lean();
+      // Fetch base64 thumbnails for the first 120 items so the initial screen renders placeholders instantly
+      const first120Ids = uniqueMediaFiles.slice(0, 120).map((f) => f._id);
+      if (first120Ids.length > 0) {
+        const thumbs = await File.find({ _id: { $in: first120Ids } }).select('_id metadata.thumbnail updatedAt').lean();
         const thumbMap = new Map();
         thumbs.forEach((t: any) => {
           const fileId = t._id.toString();
@@ -589,7 +589,7 @@ export class FileController {
           }
         });
         uniqueMediaFiles.forEach((f: any, idx: number) => {
-          if (idx < 80) {
+          if (idx < 120) {
             f.metadata = f.metadata || {};
             f.metadata.thumbnail = thumbMap.get(f._id.toString());
           }
@@ -621,10 +621,10 @@ export class FileController {
         obj.hasThumbnail = hasThumb;
         obj.thumbnailUrl = `/api/v1/files/${file._id}/thumbnail`;
         
-        // Retain base64 thumbnails for the first 80 items so the initial screen renders placeholders instantly.
+        // Retain base64 thumbnails for the first 120 items so the initial screen renders placeholders instantly.
         // Strip for the rest to prevent payload bloat, and strip any massive (>40KB) base64 strings regardless.
         if (obj.metadata?.thumbnail && !obj.metadata.thumbnail.startsWith('http')) {
-          if (index >= 80 || obj.metadata.thumbnail.length > 40000) {
+          if (index >= 120 || obj.metadata.thumbnail.length > 40000) {
             delete obj.metadata.thumbnail;
           }
         }
@@ -635,7 +635,6 @@ export class FileController {
         delete obj.sourceDeviceIds;
         delete obj.folderId;
         
-        index++;
         return obj;
       });
 

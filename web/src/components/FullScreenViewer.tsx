@@ -152,10 +152,10 @@ export const FullScreenViewer: React.FC<FullScreenViewerProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [currentIndex, mediaList.length]);
 
-  // Preload adjacent images & thumbnails (next 5 and previous 5) for ultra-smooth photo transitions
+  // Preload adjacent images & thumbnails (next 1 and previous 1) for ultra-smooth photo transitions
   useEffect(() => {
-    // Interleaved proximity order: +1, -1, +2, -2, +3, -3, +4, -4, +5, -5
-    const offsets = [1, -1, 2, -2, 3, -3, 4, -4, 5, -5];
+    // Only preload adjacent thumbnails first so network is not congested
+    const offsets = [1, -1];
     const indicesToPreload = offsets
       .map((offset) => currentIndex + offset)
       .filter((idx) => idx >= 0 && idx < mediaList.length);
@@ -169,21 +169,18 @@ export const FullScreenViewer: React.FC<FullScreenViewerProps> = ({
       const mIsVault = (m as any).isVault || !!vaultKey;
 
       // 1. If thumbnail / decrypted preview is already in RAM (base64 Data URL), 0ms - no network needed!
-      const decThumb = (m as any).decryptedThumbnail || (m.metadata as any)?.thumbnail;
+      const decThumb = (m as any).decryptedThumbnail || (m.metadata as any)?.thumbnail || mediaCache.getThumbnail(m._id);
       if (decThumb) return;
 
-      // 2. Preload web-optimized preview image if not a video (~250KB WebP) for normal gallery images
+      // 2. Preload web-optimized thumbnail image (~25KB) for instant swipe transitions without choking bandwidth
       if (!isMVideo && !mIsVault) {
-        const previewUrl = getPreviewUrl(m._id);
-        const fImg = new Image();
-        fImg.src = previewUrl;
+        const thumbUrl = api.getThumbnailUrl(m._id);
+        const tImg = new Image();
+        tImg.src = thumbUrl;
       } else if (isMVideo) {
-        // Pre-warm video cache on server for immediate neighbor videos (distance <= 2)
-        const distance = Math.abs(idx - currentIndex);
-        if (distance <= 2) {
-          const vUrl = getStreamUrl(m._id);
-          fetch(vUrl, { headers: { Range: 'bytes=0-1023' } }).catch(() => {});
-        }
+        // Pre-warm video cache on server for immediate neighbor videos (distance <= 1)
+        const vUrl = getStreamUrl(m._id);
+        fetch(vUrl, { headers: { Range: 'bytes=0-1023' } }).catch(() => {});
       }
     });
 
@@ -198,8 +195,6 @@ export const FullScreenViewer: React.FC<FullScreenViewerProps> = ({
     let active = true;
     setScale(1);
     setRotation(0);
-    setLoading(true);
-    setIsImageLoaded(false);
     setVideoError(false);
     setImgError(false);
 
@@ -209,16 +204,31 @@ export const FullScreenViewer: React.FC<FullScreenViewerProps> = ({
     const previewUrl = isVideo ? streamUrl : getPreviewUrl(item._id);
 
     const decThumb = (item as any).decryptedThumbnail || (item.metadata as any)?.thumbnail;
+    const cachedThumb = decThumb || mediaCache.getThumbnail(item._id) || mediaCache.get(item._id);
     const effectiveMime = (item as any).decryptedMimeType || (item.mimeType && item.mimeType !== 'application/octet-stream' ? item.mimeType : 'image/jpeg');
 
-    // Fast Path 1: If decrypted thumbnail / WebP preview is available in RAM, display it INSTANTLY (0ms)
-    // Exactly like normal gallery images, we display the web-optimized preview with 0 lag and 0 network buffering!
-    if (decThumb && !isVideo) {
-      setFullUrl(decThumb);
+    // Fast Path 1: If decrypted thumbnail / WebP preview / cached grid thumbnail is available, display it INSTANTLY (0ms)
+    // Exactly like Secret Vault, we display the image immediately with 0 lag and 0 wait!
+    if (cachedThumb && !isVideo) {
+      setFullUrl(cachedThumb);
       setIsImageLoaded(true);
       setLoading(false);
-      return; // Do NOT fetch the 10-50MB uncompressed raw file!
+
+      // For standard gallery photos, asynchronously upgrade to 2048px preview in the background (no blocking spinners!)
+      if (!isVaultItem && !isEncrypted) {
+        const hdImg = new Image();
+        hdImg.src = previewUrl;
+        hdImg.onload = () => {
+          if (active) {
+            setFullUrl(previewUrl);
+          }
+        };
+      }
+      return;
     }
+
+    setLoading(true);
+    setIsImageLoaded(false);
 
     // Check memory cache second (e.g. if already decrypted previously when zooming)
     const mem = mediaCache.get(item._id);
@@ -229,7 +239,7 @@ export const FullScreenViewer: React.FC<FullScreenViewerProps> = ({
       return;
     }
 
-    // Normal (non-vault) images: fetch web-optimized preview
+    // Normal (non-vault) images without cached thumb: fetch web-optimized preview
     if (!isEncrypted || !vaultKey) {
       if (isVaultItem) {
         if (!decThumb) setFullUrl(streamUrl);

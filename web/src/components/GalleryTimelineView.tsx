@@ -1770,8 +1770,11 @@ const GalleryGridTile: React.FC<{
   }, [item._id, item.metadata?.thumbnail]);
 
   const handleClick = useCallback(() => {
+    if (thumbUrl) {
+      mediaCache.saveThumbnail(item._id, thumbUrl);
+    }
     onClick(item._id);
-  }, [onClick, item._id]);
+  }, [onClick, item._id, thumbUrl]);
 
   const handleSelectClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
@@ -1796,6 +1799,11 @@ const GalleryGridTile: React.FC<{
           className="w-full h-full object-cover"
           loading={isPriority ? 'eager' : 'lazy'}
           decoding={isPriority ? 'sync' : 'async'}
+          onLoad={() => {
+            if (thumbUrl) {
+              mediaCache.saveThumbnail(item._id, thumbUrl);
+            }
+          }}
           onError={() => {
             setLoadError(true);
           }}
