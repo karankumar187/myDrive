@@ -30,6 +30,7 @@ import {
   Cloud,
   ChevronDown,
   Check,
+  CheckCheck,
   Smartphone,
   Send,
   Upload,
@@ -1099,115 +1100,115 @@ export const GalleryTimelineView: React.FC<Props> = ({
 
       {/* Floating Selection Action Bar — Anchored at bottom with rich actions */}
       {(selectedIds.size > 0 || isSelectionMode) && (
-        <div className="fixed bottom-[max(4.5rem,calc(env(safe-area-inset-bottom,0px)+3.75rem))] sm:bottom-6 inset-x-0 mx-auto w-[94%] max-w-3xl z-50 bg-[#13131c]/95 backdrop-blur-2xl border border-purple-500/50 rounded-2xl px-4 py-3 shadow-2xl flex flex-wrap sm:flex-nowrap items-center justify-between gap-3 animate-in fade-in slide-in-from-bottom-4">
-          <div className="flex items-center space-x-3">
-            <div className="bg-purple-600/20 border border-purple-500/40 px-2.5 py-1 rounded-lg">
-              <span className="text-xs font-bold text-purple-300">
-                {selectedIds.size} selected
-              </span>
-            </div>
-            <button
-              onClick={selectedIds.size === filteredMedia.length ? deselectAll : selectAll}
-              className="text-xs text-purple-400 hover:text-purple-300 font-semibold transition"
-            >
-              {selectedIds.size === filteredMedia.length ? 'Deselect All' : 'Select All'}
-            </button>
+        <div className="fixed bottom-[max(4.5rem,calc(env(safe-area-inset-bottom,0px)+3.75rem))] sm:bottom-6 left-1/2 -translate-x-1/2 z-50 max-w-[calc(100vw-1.5rem)] bg-[#121217]/95 backdrop-blur-2xl border border-zinc-800/90 shadow-2xl shadow-black/90 rounded-full px-2 sm:px-3 py-1.5 flex items-center gap-1 sm:gap-1.5 animate-in fade-in slide-in-from-bottom-3 select-none">
+          {/* Selected count pill */}
+          <div className="flex items-center gap-1 pl-1.5 pr-2 py-0.5 rounded-full bg-purple-500/20 text-purple-300 font-bold text-xs shrink-0">
+            <span className="w-4 h-4 rounded-full bg-purple-600 text-white font-extrabold text-[10px] flex items-center justify-center tabular-nums">
+              {selectedIds.size}
+            </span>
+            <span className="hidden sm:inline text-[11px] font-medium text-purple-300/80">selected</span>
           </div>
 
-          <div className="flex items-center space-x-2 overflow-x-auto py-0.5">
-            {/* Add to Album */}
-            <button
-              disabled={selectedIds.size === 0}
-              onClick={() => setIsAddToAlbumOpen(true)}
-              className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-semibold text-xs border border-purple-400/40 shadow-glow-purple disabled:opacity-40 transition flex items-center space-x-1.5 active:scale-95"
-              title="Add selected items to an album"
-            >
-              <FolderPlus className="w-3.5 h-3.5" />
-              <span>Add to Album</span>
-            </button>
+          {/* Select all toggle */}
+          <button
+            onClick={selectedIds.size === filteredMedia.length ? deselectAll : selectAll}
+            className="p-1.5 rounded-full text-zinc-400 hover:text-white hover:bg-white/10 transition active:scale-95 shrink-0"
+            title={selectedIds.size === filteredMedia.length ? 'Deselect All' : 'Select All'}
+          >
+            <CheckCheck className={`w-4 h-4 ${selectedIds.size === filteredMedia.length ? 'text-purple-400' : 'text-zinc-400'}`} />
+          </button>
 
-            {/* Force Download to Paired Device */}
+          <div className="w-px h-4 bg-zinc-800 shrink-0 mx-0.5" />
+
+          {/* Add to Album */}
+          <button
+            disabled={selectedIds.size === 0}
+            onClick={() => setIsAddToAlbumOpen(true)}
+            className="w-8 h-8 rounded-full bg-purple-600/20 hover:bg-purple-600/35 border border-purple-500/30 text-purple-300 flex items-center justify-center transition active:scale-95 disabled:opacity-30 shrink-0"
+            title="Add to Album"
+          >
+            <FolderPlus className="w-4 h-4" />
+          </button>
+
+          {/* Force Download to Paired Device */}
+          {devices.length > 0 && (
             <button
               disabled={selectedIds.size === 0}
               onClick={() => {
                 setForceDownloadTargetIds(Array.from(selectedIds));
                 setIsForceDownloadOpen(true);
               }}
-              className="px-3 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-semibold text-xs border border-purple-400/40 shadow-glow-purple disabled:opacity-40 transition flex items-center space-x-1.5 active:scale-95"
-              title="Force Download to Paired Device"
+              className="w-8 h-8 rounded-full bg-cyan-600/20 hover:bg-cyan-600/35 border border-cyan-500/30 text-cyan-300 flex items-center justify-center transition active:scale-95 disabled:opacity-30 shrink-0"
+              title="Send to Device"
             >
-              <Smartphone className="w-3.5 h-3.5" />
-              <span>Send to Device</span>
+              <Smartphone className="w-4 h-4" />
             </button>
+          )}
 
-            {/* Favorite */}
-            <button
-              disabled={selectedIds.size === 0}
-              onClick={() => handleBulkFavorite(true)}
-              className="px-2.5 py-1.5 rounded-xl bg-[#1e1e28] hover:bg-purple-950/60 text-zinc-300 hover:text-red-400 border border-[#2d2d3d] disabled:opacity-40 transition flex items-center space-x-1 text-xs active:scale-95"
-              title="Favorite Selected"
-            >
-              <Heart className="w-3.5 h-3.5 text-red-400" />
-              <span className="hidden md:inline">Favorite</span>
-            </button>
+          {/* Move to Secret Vault */}
+          <button
+            disabled={selectedIds.size === 0}
+            onClick={() => {
+              const selectedFiles = filteredMedia.filter((f) => selectedIds.has(f._id));
+              onMoveToVault?.(selectedFiles);
+              deselectAll();
+            }}
+            className="w-8 h-8 rounded-full bg-amber-500/20 hover:bg-amber-500/35 border border-amber-500/40 text-amber-300 flex items-center justify-center transition active:scale-95 disabled:opacity-30 shrink-0 shadow-sm shadow-amber-500/10"
+            title="Move to Secret Vault"
+          >
+            <Lock className="w-4 h-4" />
+          </button>
 
-            {/* Download */}
-            <button
-              disabled={selectedIds.size === 0}
-              onClick={handleBulkDownload}
-              className="px-2.5 py-1.5 rounded-xl bg-[#1e1e28] hover:bg-[#282836] text-zinc-300 hover:text-white border border-[#2d2d3d] disabled:opacity-40 transition flex items-center space-x-1 text-xs active:scale-95"
-              title="Download to PC"
-            >
-              <Download className="w-3.5 h-3.5" />
-              <span className="hidden md:inline">Download</span>
-            </button>
+          {/* Favorite */}
+          <button
+            disabled={selectedIds.size === 0}
+            onClick={() => handleBulkFavorite(true)}
+            className="w-8 h-8 rounded-full bg-zinc-900/90 hover:bg-pink-950/40 border border-zinc-800 text-zinc-300 hover:text-pink-400 flex items-center justify-center transition active:scale-95 disabled:opacity-30 shrink-0"
+            title="Favorite"
+          >
+            <Heart className="w-4 h-4" />
+          </button>
 
-            {/* Move to Folder */}
-            <button
-              disabled={selectedIds.size === 0}
-              onClick={handleOpenMove}
-              className="px-2.5 py-1.5 rounded-xl bg-[#1e1e28] hover:bg-[#282836] text-zinc-300 hover:text-white border border-[#2d2d3d] disabled:opacity-40 transition flex items-center space-x-1 text-xs active:scale-95"
-              title="Move to Folder"
-            >
-              <FolderInput className="w-3.5 h-3.5" />
-              <span className="hidden md:inline">Move</span>
-            </button>
+          {/* Download */}
+          <button
+            disabled={selectedIds.size === 0}
+            onClick={handleBulkDownload}
+            className="w-8 h-8 rounded-full bg-zinc-900/90 hover:bg-zinc-800 border border-zinc-800 text-zinc-300 hover:text-white flex items-center justify-center transition active:scale-95 disabled:opacity-30 shrink-0"
+            title="Download"
+          >
+            <Download className="w-4 h-4" />
+          </button>
 
-            {/* Move to Secret Vault */}
-            <button
-              disabled={selectedIds.size === 0}
-              onClick={() => {
-                const selectedFiles = filteredMedia.filter((f) => selectedIds.has(f._id));
-                onMoveToVault?.(selectedFiles);
-                deselectAll();
-              }}
-              className="px-2.5 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 disabled:opacity-40 transition flex items-center space-x-1 text-xs active:scale-95"
-              title="Move to Secret Vault"
-            >
-              <Lock className="w-3.5 h-3.5 text-amber-400" />
-              <span className="hidden md:inline font-semibold">Vault</span>
-            </button>
+          {/* Move to Folder */}
+          <button
+            disabled={selectedIds.size === 0}
+            onClick={handleOpenMove}
+            className="w-8 h-8 rounded-full bg-zinc-900/90 hover:bg-zinc-800 border border-zinc-800 text-zinc-300 hover:text-white flex items-center justify-center transition active:scale-95 disabled:opacity-30 shrink-0"
+            title="Move to Folder"
+          >
+            <FolderInput className="w-4 h-4" />
+          </button>
 
-            {/* Move to Trash */}
-            <button
-              disabled={selectedIds.size === 0}
-              onClick={handleBulkTrash}
-              className="px-2.5 py-1.5 rounded-xl bg-red-950/40 hover:bg-red-900/60 text-red-400 border border-red-800/40 disabled:opacity-40 transition flex items-center space-x-1 text-xs active:scale-95"
-              title="Move to Trash"
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-              <span className="hidden md:inline">Delete</span>
-            </button>
+          {/* Move to Trash */}
+          <button
+            disabled={selectedIds.size === 0}
+            onClick={handleBulkTrash}
+            className="w-8 h-8 rounded-full bg-red-950/30 hover:bg-red-950/60 border border-red-800/40 text-red-400 flex items-center justify-center transition active:scale-95 disabled:opacity-30 shrink-0"
+            title="Move to Trash"
+          >
+            <Trash2 className="w-4 h-4" />
+          </button>
 
-            {/* Cancel Selection */}
-            <button
-              onClick={deselectAll}
-              className="p-1.5 rounded-xl text-zinc-400 hover:text-white hover:bg-zinc-800 transition active:scale-95"
-              title="Cancel Selection"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
+          <div className="w-px h-4 bg-zinc-800 shrink-0 mx-0.5" />
+
+          {/* Cancel Selection */}
+          <button
+            onClick={deselectAll}
+            className="w-7 h-7 rounded-full text-zinc-400 hover:text-white hover:bg-zinc-800/80 flex items-center justify-center transition active:scale-95 shrink-0"
+            title="Cancel Selection"
+          >
+            <X className="w-4 h-4" />
+          </button>
         </div>
       )}
 

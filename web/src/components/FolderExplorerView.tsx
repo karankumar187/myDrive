@@ -1016,24 +1016,51 @@ export const FolderExplorerView: React.FC<Props> = ({
 
       {/* ======== MULTI-SELECT FLOATING ACTION BAR ======== */}
       {isSelectionMode && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 flex items-center space-x-2 px-4 py-2.5 bg-[#1a1a28] border border-purple-500/40 rounded-2xl shadow-2xl shadow-purple-900/30 backdrop-blur-md">
-          <span className="text-xs font-bold text-purple-300 mr-2">
-            {selectedFileIds.size} selected
-          </span>
+        <div className="fixed bottom-[max(4.5rem,calc(env(safe-area-inset-bottom,0px)+3.75rem))] sm:bottom-6 left-1/2 -translate-x-1/2 z-40 max-w-[calc(100vw-1.5rem)] bg-[#121217]/95 backdrop-blur-2xl border border-zinc-800/90 shadow-2xl shadow-black/90 rounded-full px-2 sm:px-3 py-1.5 flex items-center gap-1 sm:gap-1.5 animate-in fade-in slide-in-from-bottom-3 select-none">
+          {/* Selected count pill */}
+          <div className="flex items-center gap-1 pl-1.5 pr-2 py-0.5 rounded-full bg-purple-500/20 text-purple-300 font-bold text-xs shrink-0">
+            <span className="w-4 h-4 rounded-full bg-purple-600 text-white font-extrabold text-[10px] flex items-center justify-center tabular-nums">
+              {selectedFileIds.size}
+            </span>
+            <span className="hidden sm:inline text-[11px] font-medium text-purple-300/80">selected</span>
+          </div>
+
+          {/* Select all toggle */}
           <button
             onClick={() => { if (selectedFileIds.size === localFiles.length) deselectAllFiles(); else selectAllFiles(); }}
-            className="p-2 rounded-lg text-zinc-400 hover:text-white hover:bg-[#22222b] transition"
+            className="p-1.5 rounded-full text-zinc-400 hover:text-white hover:bg-white/10 transition active:scale-95 shrink-0"
             title={selectedFileIds.size === localFiles.length ? 'Deselect All' : 'Select All'}
           >
-            {selectedFileIds.size === localFiles.length && localFiles.length > 0 ? <XCircle className="w-4 h-4" /> : <CheckCircle2 className="w-4 h-4" />}
+            {selectedFileIds.size === localFiles.length && localFiles.length > 0 ? (
+              <XCircle className="w-4 h-4 text-purple-400" />
+            ) : (
+              <CheckCircle2 className="w-4 h-4 text-zinc-400" />
+            )}
           </button>
-          <div className="w-px h-5 bg-[#333]" />
-          <button onClick={handleBulkFavorite} disabled={selectedFileIds.size === 0} className="p-2 rounded-lg text-zinc-400 hover:text-pink-400 hover:bg-pink-950/30 transition disabled:opacity-30" title="Favorite selected">
+
+          <div className="w-px h-4 bg-zinc-800 shrink-0 mx-0.5" />
+
+          {/* Favorite */}
+          <button
+            onClick={handleBulkFavorite}
+            disabled={selectedFileIds.size === 0}
+            className="w-8 h-8 rounded-full bg-zinc-900/90 hover:bg-pink-950/40 border border-zinc-800 text-zinc-300 hover:text-pink-400 flex items-center justify-center transition active:scale-95 disabled:opacity-30 shrink-0"
+            title="Favorite selected"
+          >
             <Heart className="w-4 h-4" />
           </button>
-          <button onClick={() => { setIsBulkMove(true); setMoveFile(null); setMoveTargetFolderId(null); }} disabled={selectedFileIds.size === 0} className="p-2 rounded-lg text-zinc-400 hover:text-cyan-400 hover:bg-cyan-950/30 transition disabled:opacity-30" title="Move to folder">
+
+          {/* Move to folder */}
+          <button
+            onClick={() => { setIsBulkMove(true); setMoveFile(null); setMoveTargetFolderId(null); }}
+            disabled={selectedFileIds.size === 0}
+            className="w-8 h-8 rounded-full bg-zinc-900/90 hover:bg-zinc-800 border border-zinc-800 text-zinc-300 hover:text-white flex items-center justify-center transition active:scale-95 disabled:opacity-30 shrink-0"
+            title="Move to folder"
+          >
             <FolderInput className="w-4 h-4" />
           </button>
+
+          {/* Move to Secret Vault */}
           <button
             onClick={() => {
               const selected = localFiles.filter((f) => selectedFileIds.has(f._id));
@@ -1041,21 +1068,42 @@ export const FolderExplorerView: React.FC<Props> = ({
               exitSelectionMode();
             }}
             disabled={selectedFileIds.size === 0}
-            className="p-2 rounded-lg text-amber-300 hover:text-amber-200 hover:bg-amber-950/40 transition disabled:opacity-30"
+            className="w-8 h-8 rounded-full bg-amber-500/20 hover:bg-amber-500/35 border border-amber-500/40 text-amber-300 flex items-center justify-center transition active:scale-95 disabled:opacity-30 shrink-0 shadow-sm shadow-amber-500/10"
             title="Move selected to Secret Vault"
           >
-            <Lock className="w-4 h-4 text-amber-400" />
+            <Lock className="w-4 h-4" />
           </button>
+
+          {/* Send to device */}
           {devices.length > 0 && (
-            <button onClick={handleBulkSendToDevice} disabled={selectedFileIds.size === 0} className="p-2 rounded-lg text-zinc-400 hover:text-green-400 hover:bg-green-950/30 transition disabled:opacity-30" title="Send to device">
+            <button
+              onClick={handleBulkSendToDevice}
+              disabled={selectedFileIds.size === 0}
+              className="w-8 h-8 rounded-full bg-cyan-600/20 hover:bg-cyan-600/35 border border-cyan-500/30 text-cyan-300 flex items-center justify-center transition active:scale-95 disabled:opacity-30 shrink-0"
+              title="Send to device"
+            >
               <Smartphone className="w-4 h-4" />
             </button>
           )}
-          <button onClick={handleBulkTrash} disabled={selectedFileIds.size === 0} className="p-2 rounded-lg text-zinc-400 hover:text-red-400 hover:bg-red-950/30 transition disabled:opacity-30" title="Move to trash">
+
+          {/* Trash */}
+          <button
+            onClick={handleBulkTrash}
+            disabled={selectedFileIds.size === 0}
+            className="w-8 h-8 rounded-full bg-red-950/30 hover:bg-red-950/60 border border-red-800/40 text-red-400 flex items-center justify-center transition active:scale-95 disabled:opacity-30 shrink-0"
+            title="Move to trash"
+          >
             <Trash2 className="w-4 h-4" />
           </button>
-          <div className="w-px h-5 bg-[#333]" />
-          <button onClick={exitSelectionMode} className="p-2 rounded-lg text-zinc-400 hover:text-white hover:bg-[#22222b] transition" title="Cancel selection">
+
+          <div className="w-px h-4 bg-zinc-800 shrink-0 mx-0.5" />
+
+          {/* Cancel */}
+          <button
+            onClick={exitSelectionMode}
+            className="w-7 h-7 rounded-full text-zinc-400 hover:text-white hover:bg-zinc-800/80 flex items-center justify-center transition active:scale-95 shrink-0"
+            title="Cancel selection"
+          >
             <X className="w-4 h-4" />
           </button>
         </div>
