@@ -21,7 +21,6 @@ import {
   Music,
   X,
   MoreVertical,
-  Sparkles,
 } from 'lucide-react';
 import { api } from '../services/api.js';
 import { VaultCryptoService } from '../services/vault-crypto.js';
@@ -80,9 +79,6 @@ export const PrivateVaultView: React.FC<PrivateVaultViewProps> = ({
   >([]);
   const [actionMenuFileId, setActionMenuFileId] = useState<string | null>(null);
   const [downloadingFileId, setDownloadingFileId] = useState<string | null>(null);
-  const [isGeneratingThumbnails, setIsGeneratingThumbnails] = useState(false);
-  const [generatorProgress, setGeneratorProgress] = useState<{ current: number; total: number; currentName?: string } | null>(null);
-  const cancelGeneratorRef = useRef(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -241,35 +237,6 @@ export const PrivateVaultView: React.FC<PrivateVaultViewProps> = ({
       setLoading(false);
     }
   }, [vaultKey, generateSingleThumbnail]);
-
-  const handleGenerateThumbnails = useCallback(async (forceAll: boolean = false) => {
-    if (isGeneratingThumbnails) return;
-    const mediaFiles = files.filter((f) => {
-      const isMedia = f.decryptedMimeType.startsWith('image/') || f.decryptedMimeType.startsWith('video/');
-      if (!isMedia) return false;
-      if (forceAll) return true;
-      return !f.decryptedThumbnail;
-    });
-
-    if (mediaFiles.length === 0) {
-      alert('All media files in Secret Vault already have 1024px encrypted thumbnails!');
-      return;
-    }
-
-    cancelGeneratorRef.current = false;
-    setIsGeneratingThumbnails(true);
-    setGeneratorProgress({ current: 0, total: mediaFiles.length, currentName: mediaFiles[0].decryptedFilename });
-
-    for (let i = 0; i < mediaFiles.length; i++) {
-      if (cancelGeneratorRef.current) break;
-      const f = mediaFiles[i];
-      setGeneratorProgress({ current: i + 1, total: mediaFiles.length, currentName: f.decryptedFilename });
-      await generateSingleThumbnail(f);
-    }
-
-    setIsGeneratingThumbnails(false);
-    setGeneratorProgress(null);
-  }, [files, isGeneratingThumbnails, generateSingleThumbnail]);
 
   useEffect(() => {
     loadVaultFiles();
@@ -600,20 +567,6 @@ export const PrivateVaultView: React.FC<PrivateVaultViewProps> = ({
         {/* Action Buttons */}
         <div className="flex items-center space-x-2 shrink-0">
           <button
-            onClick={() => handleGenerateThumbnails(false)}
-            disabled={isGeneratingThumbnails}
-            className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 hover:border-zinc-700 text-zinc-300 hover:text-white font-medium text-xs transition active:scale-95 disabled:opacity-50"
-            title="Scan and generate 1024px encrypted thumbnails for all vault media"
-          >
-            {isGeneratingThumbnails ? (
-              <Loader2 className="w-3.5 h-3.5 animate-spin text-purple-400" />
-            ) : (
-              <Sparkles className="w-3.5 h-3.5 text-purple-400" />
-            )}
-            <span>{isGeneratingThumbnails ? 'Generating…' : 'Thumbnails'}</span>
-          </button>
-
-          <button
             onClick={() => fileInputRef.current?.click()}
             className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-zinc-100 hover:bg-white text-zinc-950 font-semibold text-xs transition active:scale-95 shadow-sm"
           >
@@ -631,35 +584,6 @@ export const PrivateVaultView: React.FC<PrivateVaultViewProps> = ({
           </button>
         </div>
       </div>
-
-      {/* Thumbnail Generator Progress Banner */}
-      {generatorProgress && (
-        <div className="mb-5 rounded-2xl bg-[#101013] border border-purple-900/60 p-3.5 space-y-2.5 shadow-lg">
-          <div className="flex items-center justify-between text-xs">
-            <span className="font-semibold text-purple-200 flex items-center gap-2">
-              <Sparkles className="w-3.5 h-3.5 text-purple-400 animate-pulse" />
-              Generating 1024px Encrypted Previews ({generatorProgress.current} of {generatorProgress.total})
-            </span>
-            <button
-              onClick={() => {
-                cancelGeneratorRef.current = true;
-              }}
-              className="text-[10px] text-zinc-400 hover:text-white px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 transition"
-            >
-              Cancel
-            </button>
-          </div>
-          <p className="text-[11px] text-zinc-400 truncate font-mono">
-            {generatorProgress.currentName}
-          </p>
-          <div className="w-full h-1.5 bg-zinc-800 rounded-full overflow-hidden">
-            <div
-              className="h-full bg-gradient-to-r from-purple-500 via-indigo-500 to-purple-400 transition-all duration-300"
-              style={{ width: `${Math.round((generatorProgress.current / generatorProgress.total) * 100)}%` }}
-            />
-          </div>
-        </div>
-      )}
 
       {/* Upload Tasks Progress Banner */}
       {uploadingFiles.length > 0 && (
