@@ -237,6 +237,8 @@ export class StorageEngineService {
     deviceAssetId?: string;
     isEncrypted?: boolean;
     iv?: string;
+    isVault?: boolean;
+    encryptedMeta?: string | null;
     metadata?: IFileMetadata;
   }): Promise<{ file: IFileDocument; isDuplicate: boolean }> {
     const {
@@ -252,6 +254,8 @@ export class StorageEngineService {
       deviceAssetId,
       isEncrypted = false,
       iv,
+      isVault = false,
+      encryptedMeta = null,
       metadata = {},
     } = params;
 
@@ -325,6 +329,9 @@ export class StorageEngineService {
         existingByName.sourceDeviceIds.push(deviceId);
       }
 
+      if (isVault !== undefined) existingByName.isVault = Boolean(isVault);
+      if (encryptedMeta !== undefined) existingByName.encryptedMeta = encryptedMeta;
+
       savedFile = await existingByName.save();
     } else {
       // Brand new file
@@ -349,6 +356,8 @@ export class StorageEngineService {
           },
         ],
         metadata,
+        isVault: Boolean(isVault),
+        encryptedMeta: encryptedMeta || null,
         isTrash: false,
         sourceDeviceIds: deviceId ? [deviceId] : [],
       });

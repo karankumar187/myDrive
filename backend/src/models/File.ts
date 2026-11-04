@@ -144,6 +144,15 @@ const FileSchema = new Schema<IFileDocument>(
       enum: ['image', 'video', 'raw'],
       default: 'image',
     },
+    isVault: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+    encryptedMeta: {
+      type: String,
+      default: null,
+    },
   },
   {
     timestamps: true,
@@ -152,6 +161,7 @@ const FileSchema = new Schema<IFileDocument>(
 
 // Compound indexes for high-speed queries
 FileSchema.index({ userId: 1, contentHash: 1 }); // Deduplication check
+FileSchema.index({ userId: 1, isVault: 1, isTrash: 1, createdAt: -1 }); // Fast vault files list
 FileSchema.index({ userId: 1, publicId: 1 }, { sparse: true }); // Fast public_id media lookup
 FileSchema.index({ userId: 1, isMediaApi: 1, createdAt: -1 }); // Fast media API list
 FileSchema.index({ userId: 1, isTrash: 1, folderId: 1, createdAt: -1 }); // Folder explorer

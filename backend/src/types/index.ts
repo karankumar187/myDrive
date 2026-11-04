@@ -83,6 +83,8 @@ export interface IFile {
   tags?: string[]; // Media tags for search and categorization
   isMediaApi?: boolean; // Flag denoting media uploaded via Developer API
   resourceType?: 'image' | 'video' | 'raw'; // Resource classification
+  isVault?: boolean; // True if stored in zero-knowledge encrypted private vault
+  encryptedMeta?: string | null; // Client-encrypted JSON string (original filename, mimeType, etc.)
   createdAt: Date;
   updatedAt: Date;
 }

@@ -5,6 +5,7 @@ export interface User {
   avatarUrl?: string;
   hasEncryptedVault: boolean;
   masterKeySalt?: string;
+  encryptedVaultKey?: string;
 }
 
 export interface StorageAccount {
@@ -43,6 +44,16 @@ export interface FileItem {
   sourceDeviceIds: string[];
   sourceDeviceId?: string;
   isFavorite?: boolean;
+  isVault?: boolean;
+  encryptedMeta?: string | null;
+  decryptedMeta?: {
+    originalFilename?: string;
+    originalMimeType?: string;
+    originalSize?: number;
+    thumbnail?: string;
+    takenAt?: string;
+    [key: string]: any;
+  };
   sourceDeviceName?: string;
   folderName?: string | null;
   storageAccountName?: string;

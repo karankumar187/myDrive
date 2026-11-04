@@ -358,6 +358,43 @@ export const api = {
     return res.json();
   },
 
+  // Zero-Knowledge Private Vault
+  async updateVaultCredentials(masterKeySalt: string, encryptedVaultKey: string): Promise<any> {
+    const res = await fetchWithLoading(`${API_BASE}/auth/vault/keys`, {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify({ masterKeySalt, encryptedVaultKey }),
+    });
+    if (!res.ok) throw new Error('Failed to store vault credentials');
+    return res.json();
+  },
+
+  async listVaultFiles(): Promise<{ files: FileItem[] }> {
+    const res = await fetchWithLoading(`${API_BASE}/files/vault/list`, { headers: getHeaders() });
+    if (!res.ok) throw new Error('Failed to list private vault files');
+    return res.json();
+  },
+
+  async moveToVault(fileIds: string[], encryptedMetaMap?: Record<string, string>): Promise<any> {
+    const res = await fetchWithLoading(`${API_BASE}/files/vault/move`, {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify({ fileIds, encryptedMetaMap }),
+    });
+    if (!res.ok) throw new Error('Failed to move files to vault');
+    return res.json();
+  },
+
+  async restoreFromVault(fileIds: string[], restoredMetadataMap?: Record<string, any>): Promise<any> {
+    const res = await fetchWithLoading(`${API_BASE}/files/vault/restore`, {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify({ fileIds, restoredMetadataMap }),
+    });
+    if (!res.ok) throw new Error('Failed to restore files from vault');
+    return res.json();
+  },
+
   async deduplicateFiles(): Promise<any> {
     const res = await fetchWithLoading(`${API_BASE}/files/deduplicate`, {
       method: 'POST',

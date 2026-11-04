@@ -8,6 +8,11 @@ const router = Router();
 router.post('/upload/initiate', requireAnyAuth, FileController.initiateUpload);
 router.post('/upload/complete', requireAnyAuth, FileController.completeUpload);
 
+// Zero-Knowledge Private Vault routes (must precede /:id)
+router.get('/vault/list', requireUserAuth, FileController.listVaultFiles);
+router.post('/vault/move', requireUserAuth, FileController.moveToVault);
+router.post('/vault/restore', requireUserAuth, FileController.restoreFromVault);
+
 // Virtual files & Gallery
 router.get('/', requireAnyAuth, FileController.listFiles);
 router.get('/gallery', requireAnyAuth, FileController.getGallery);

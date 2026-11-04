@@ -16,6 +16,8 @@ import {
   Key,
   Clock,
   FolderPlus,
+  Lock,
+  KeyRound,
 } from 'lucide-react';
 import { api, subscribeToProgress, GlobalProgressState } from './services/api.js';
 import { getSocket, refreshSocketAuth } from './services/socket.js';
@@ -29,13 +31,14 @@ import { MediaApiStudioView } from './components/MediaApiStudioView.js';
 import { IPhoneShortcutModal } from './components/IPhoneShortcutModal.js';
 import { UploadDrawer } from './components/UploadDrawer.js';
 import { uploadService } from './services/UploadService.js';
-import { VaultModal } from './components/VaultModal.js';
+import { VaultPinModal } from './components/VaultPinModal.js';
+import { PrivateVaultView } from './components/PrivateVaultView.js';
 import { VaultCryptoService } from './services/vault-crypto.js';
 import { LockScreen } from './components/LockScreen.js';
 import { SecuritySettings } from './components/SecuritySettings.js';
 import { LockSecurityService } from './services/lock-security.js';
 
-type Tab = 'dashboard' | 'folders' | 'gallery' | 'devices' | 'media-api' | 'trash';
+type Tab = 'dashboard' | 'folders' | 'gallery' | 'devices' | 'media-api' | 'trash' | 'vault';
 
 const TABS: Array<{ id: Tab; label: string; icon: React.ComponentType<{ className?: string }> }> = [
   { id: 'dashboard', label: 'Dashboard', icon: HardDrive },
@@ -112,6 +115,30 @@ export const App: React.FC = () => {
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
   const [logModalDevice, setLogModalDevice] = useState<DeviceItem | null>(null);
+
+  // Restore active vault session key on refresh if available
+  useEffect(() => {
+    VaultCryptoService.restoreKeyFromSession().then((key) => {
+      if (key) setVaultKey(key);
+    });
+  }, []);
+
+  const handleOpenVault = () => {
+    setShowProfileMenu(false);
+    if (vaultKey) {
+      setActiveTab('vault');
+    } else {
+      setIsVaultModalOpen(true);
+    }
+  };
+
+  const handleLockVault = () => {
+    setVaultKey(null);
+    VaultCryptoService.clearSessionKey();
+    if (activeTab === 'vault') {
+      setActiveTab('dashboard');
+    }
+  };
 
   // Lock screen state
   const [isLocked, setIsLocked] = useState(() => LockSecurityService.isPinSet());
@@ -681,6 +708,36 @@ export const App: React.FC = () => {
                       <p className="text-xs font-bold text-white truncate">{currentUser.name}</p>
                       <p className="text-[10px] text-zinc-400 truncate">{currentUser.email}</p>
                     </div>
+
+                    {/* Secret Private Vault Option */}
+                    <button
+                      onClick={handleOpenVault}
+                      className="w-full flex items-center space-x-2 px-3 py-2 text-xs text-zinc-300 hover:bg-amber-500/10 hover:text-amber-300 rounded-xl transition group"
+                    >
+                      <Lock className="w-3.5 h-3.5 text-amber-400 group-hover:scale-110 transition-transform" />
+                      <span className="font-medium">Private Vault</span>
+                      {vaultKey ? (
+                        <span className="ml-auto text-[9px] font-bold text-amber-400 bg-amber-500/15 border border-amber-500/30 px-1.5 py-0.5 rounded-full flex items-center gap-1">
+                          <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+                          OPEN
+                        </span>
+                      ) : (
+                        <span className="ml-auto text-[9px] font-semibold text-zinc-500 bg-zinc-800/80 px-1.5 py-0.5 rounded-full">
+                          LOCKED
+                        </span>
+                      )}
+                    </button>
+
+                    {vaultKey && (
+                      <button
+                        onClick={handleLockVault}
+                        className="w-full flex items-center space-x-2 px-3 py-1.5 text-xs text-zinc-400 hover:bg-red-500/10 hover:text-red-300 rounded-xl transition"
+                      >
+                        <KeyRound className="w-3.5 h-3.5 text-zinc-500" />
+                        <span>Lock Vault Now</span>
+                      </button>
+                    )}
+
                     <button
                       onClick={() => { setShowSecuritySettings(true); setShowProfileMenu(false); }}
                       className="w-full flex items-center space-x-2 px-3 py-2 text-xs text-zinc-300 hover:bg-purple-600/10 rounded-xl transition"
@@ -807,6 +864,13 @@ export const App: React.FC = () => {
             onRefresh={loadDashboardData}
           />
         )}
+
+        {activeTab === 'vault' && vaultKey && (
+          <PrivateVaultView
+            vaultKey={vaultKey}
+            onLockVault={handleLockVault}
+          />
+        )}
       </main>
 
       {/* MOBILE / APP / SHORTCUT FLOATING BOTTOM NAVBAR */}
@@ -834,11 +898,18 @@ export const App: React.FC = () => {
         }}
       />
 
-      <VaultModal
-        isOpen={isVaultModalOpen}
-        onClose={() => setIsVaultModalOpen(false)}
-        onVaultUnlocked={(key) => setVaultKey(key)}
-      />
+      {currentUser && (
+        <VaultPinModal
+          isOpen={isVaultModalOpen}
+          onClose={() => setIsVaultModalOpen(false)}
+          currentUser={currentUser}
+          onUnlocked={(key) => {
+            setVaultKey(key);
+            setActiveTab('vault');
+          }}
+          onUserUpdated={(updatedUser) => setCurrentUser(updatedUser)}
+        />
+      )}
 
       {/* Floating Background Upload Drawer */}
       <UploadDrawer />

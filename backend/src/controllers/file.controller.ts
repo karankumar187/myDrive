@@ -143,7 +143,7 @@ export class FileController {
   static async initiateUpload(req: Request, res: Response): Promise<void> {
     try {
       const userId = req.user!._id;
-      const { filename, mimeType, sizeBytes, contentHash, folderId, isEncrypted } = req.body;
+      const { filename, mimeType, sizeBytes, contentHash, folderId, isEncrypted, isVault } = req.body;
 
       if (!filename || !mimeType || !sizeBytes || !contentHash) {
         res.status(400).json({ error: 'Missing required fields: filename, mimeType, sizeBytes, contentHash' });
@@ -182,12 +182,14 @@ export class FileController {
       // Select target Google Drive account with sufficient room
       const targetAccount = await StorageEngineService.selectTargetAccount(userId, sizeBytes);
 
-      // Target Google Drive filename sanitized
+      // Target Google Drive filename sanitized (Zero-knowledge: opaque .enc if isVault)
       const sanitizedName = filename.replace(/[^a-zA-Z0-9._-]/g, '_');
-      const driveOpaqueName = `file_${Date.now()}_${sanitizedName}`;
+      const driveOpaqueName = isVault
+        ? `vault_${Date.now()}_${Math.random().toString(36).substring(2, 10)}.enc`
+        : `file_${Date.now()}_${sanitizedName}`;
 
       const clientOrigin = (req.headers.origin as string) || (process.env.CLIENT_URL || 'http://localhost:5173').split(',')[0].trim();
-      const effectiveMime = getEffectiveMimeType(filename, mimeType);
+      const effectiveMime = isVault ? 'application/octet-stream' : getEffectiveMimeType(filename, mimeType);
       const resumableSessionUri = await GoogleDriveService.createResumableUploadSession(targetAccount, {
         name: driveOpaqueName,
         mimeType: effectiveMime,
@@ -224,6 +226,8 @@ export class FileController {
         folderId,
         deviceAssetId,
         isEncrypted,
+        isVault,
+        encryptedMeta,
         iv,
         metadata,
         thumbnail,
@@ -250,7 +254,9 @@ export class FileController {
         providerFileId: effectiveProviderId,
         deviceId,
         deviceAssetId,
-        isEncrypted: false,
+        isEncrypted: Boolean(isEncrypted || isVault),
+        isVault: Boolean(isVault),
+        encryptedMeta: encryptedMeta || null,
         iv,
         metadata: finalMetadata,
       });
@@ -299,6 +305,7 @@ export class FileController {
       const filter: any = {
         userId, // Strict IDOR protection
         isTrash,
+        isVault: { $ne: true }, // Zero-knowledge: never leak vault files into standard listings
       };
 
       if (folderId && folderId !== 'root') {
@@ -343,7 +350,7 @@ export class FileController {
 
       let recentFiles: any[] = [];
       if ((!folderId || folderId === 'root') && !search && !isTrash) {
-        const rawRecent: any[] = await File.find({ userId, isTrash: false, isMediaApi: { $ne: true } })
+        const rawRecent: any[] = await File.find({ userId, isTrash: false, isVault: { $ne: true }, isMediaApi: { $ne: true } })
           .sort({ createdAt: -1 })
           .limit(20)
           .lean();
@@ -373,6 +380,7 @@ export class FileController {
       const mediaFilter: any = {
         userId,
         isTrash: false,
+        isVault: { $ne: true }, // Zero-knowledge: never leak vault media into gallery
         isMediaApi: { $ne: true },
       };
 
@@ -1878,6 +1886,7 @@ export class FileController {
       let deviceFilesQuery = File.find({
         userId,
         isTrash: false,
+        isVault: { $ne: true },
         $or: [{ sourceDeviceIds: deviceId }, { _id: { $in: stateFileIds } }],
       })
         .select('_id filename mimeType sizeBytes createdAt folderId sourceDeviceIds')
@@ -1921,6 +1930,7 @@ export class FileController {
       let candidateQuery = File.find({
         userId,
         isTrash: false,
+        isVault: { $ne: true },
       })
         .select('_id filename mimeType sizeBytes createdAt folderId sourceDeviceIds')
         .populate('folderId', 'name path')
@@ -1955,6 +1965,7 @@ export class FileController {
           _id: { $in: forceFileIds },
           userId,
           isTrash: false,
+          isVault: { $ne: true },
         })
           .select('_id filename mimeType sizeBytes createdAt folderId sourceDeviceIds')
           .populate('folderId', 'name path')
@@ -2106,6 +2117,105 @@ export class FileController {
       } catch (_: any) {}
 
       res.json({ success: true, state });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+
+  /**
+   * Lists all zero-knowledge encrypted vault files for the user.
+   */
+  static async listVaultFiles(req: Request, res: Response): Promise<void> {
+    try {
+      const userId = req.user!._id;
+      const files = await File.find({
+        userId,
+        isTrash: false,
+        isVault: true,
+      })
+        .select('_id filename mimeType sizeBytes createdAt metadata isEncrypted versions encryptedMeta isFavorite')
+        .sort({ createdAt: -1 })
+        .lean();
+
+      res.json({ success: true, files });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+
+  /**
+   * Moves existing files into the Zero-Knowledge Vault.
+   */
+  static async moveToVault(req: Request, res: Response): Promise<void> {
+    try {
+      const userId = req.user!._id;
+      const { fileIds, encryptedMetaMap } = req.body;
+      if (!Array.isArray(fileIds) || fileIds.length === 0) {
+        res.status(400).json({ error: 'fileIds array is required' });
+        return;
+      }
+
+      const validIds = fileIds.filter((id) => Types.ObjectId.isValid(id)).map((id) => new Types.ObjectId(id));
+
+      if (encryptedMetaMap && typeof encryptedMetaMap === 'object') {
+        for (const idStr of Object.keys(encryptedMetaMap)) {
+          if (Types.ObjectId.isValid(idStr)) {
+            await File.updateOne(
+              { _id: new Types.ObjectId(idStr), userId },
+              { $set: { encryptedMeta: encryptedMetaMap[idStr] } }
+            );
+          }
+        }
+      }
+
+      await File.updateMany(
+        { _id: { $in: validIds }, userId },
+        { $set: { isVault: true, folderId: null } }
+      );
+
+      await CacheService.invalidateUser(userId.toString());
+      res.json({ success: true, count: validIds.length });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+
+  /**
+   * Restores files from the Zero-Knowledge Vault back into standard library.
+   */
+  static async restoreFromVault(req: Request, res: Response): Promise<void> {
+    try {
+      const userId = req.user!._id;
+      const { fileIds, restoredMetadataMap } = req.body;
+      if (!Array.isArray(fileIds) || fileIds.length === 0) {
+        res.status(400).json({ error: 'fileIds array is required' });
+        return;
+      }
+
+      const validIds = fileIds.filter((id) => Types.ObjectId.isValid(id)).map((id) => new Types.ObjectId(id));
+
+      if (restoredMetadataMap && typeof restoredMetadataMap === 'object') {
+        for (const idStr of Object.keys(restoredMetadataMap)) {
+          if (Types.ObjectId.isValid(idStr)) {
+            const meta = restoredMetadataMap[idStr];
+            const updateFields: any = { isVault: false, encryptedMeta: null };
+            if (meta?.filename) updateFields.filename = meta.filename;
+            if (meta?.mimeType) updateFields.mimeType = meta.mimeType;
+            await File.updateOne(
+              { _id: new Types.ObjectId(idStr), userId },
+              { $set: updateFields }
+            );
+          }
+        }
+      } else {
+        await File.updateMany(
+          { _id: { $in: validIds }, userId },
+          { $set: { isVault: false } }
+        );
+      }
+
+      await CacheService.invalidateUser(userId.toString());
+      res.json({ success: true, count: validIds.length });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }

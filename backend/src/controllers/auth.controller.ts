@@ -76,6 +76,7 @@ export class AuthController {
           avatarUrl: req.user.avatarUrl,
           role: req.user.role,
           masterKeySalt: req.user.masterKeySalt,
+          encryptedVaultKey: req.user.encryptedVaultKey,
           hasEncryptedVault: !!req.user.encryptedVaultKey,
         },
       });
