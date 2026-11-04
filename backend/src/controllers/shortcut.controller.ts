@@ -626,11 +626,16 @@ export class ShortcutController {
 
       // Extract photo creation timestamp to continuously advance sync checkpoint
       let photoTakenDate: Date | null = null;
+      let hasRealCreationDate = false;
+
       if (req.body?.photoDate) {
         const parsed = new Date(req.body.photoDate);
-        if (!isNaN(parsed.getTime())) photoTakenDate = parsed;
+        if (!isNaN(parsed.getTime()) && parsed.getTime() <= Date.now() + 60000) {
+          photoTakenDate = parsed;
+          hasRealCreationDate = true;
+        }
       }
-      if (!photoTakenDate && mimeType.startsWith('image/')) {
+      if (!hasRealCreationDate && mimeType.startsWith('image/')) {
         try {
           const sharp = (await import('sharp')).default;
           const meta = await sharp(fileBuffer).metadata();
@@ -639,16 +644,19 @@ export class ShortcutController {
             const dateMatch = /(\d{4}):(\d{2}):(\d{2}) (\d{2}):(\d{2}):(\d{2})/.exec(exifStr);
             if (dateMatch) {
               const [, y, m, day, h, min, s] = dateMatch;
-              photoTakenDate = new Date(`${y}-${m}-${day}T${h}:${min}:${s}`);
+              const parsed = new Date(`${y}-${m}-${day}T${h}:${min}:${s}`);
+              if (!isNaN(parsed.getTime()) && parsed.getTime() <= Date.now() + 60000) {
+                photoTakenDate = parsed;
+                hasRealCreationDate = true;
+              }
             }
           }
         } catch {
           // ignore
         }
       }
-      if (!photoTakenDate || isNaN(photoTakenDate.getTime())) {
-        photoTakenDate = new Date();
-      }
+      // CRITICAL: NEVER default photoTakenDate to new Date() if missing, because advancing
+      // lastSyncedPhotoDate to today's clock time skips all past unsynced camera roll photos!
 
       // Check if duplicate already exists (by cryptographic contentHash, or filename + sizeBytes)
       const existingDuplicate = await StorageEngineService.findExistingDuplicate(
@@ -744,33 +752,37 @@ export class ShortcutController {
             metadata: thumbnailBase64 ? { thumbnail: thumbnailBase64 } : undefined,
           });
 
+          const duplicateDeviceUpdate: any = {
+            $set: {
+              status: 'online',
+              currentSyncActivity: `Synced ${originalName} (linked duplicate)`,
+              lastSeenAt: new Date(),
+            },
+            $push: {
+              syncLogs: {
+                $each: [
+                  {
+                    timestamp: new Date(),
+                    message: `⚡ Duplicate detected: ${originalName}`,
+                    level: 'duplicate',
+                    filename: originalName,
+                    sizeBytes,
+                    details: `SHA-256 hash match (${contentHash.substring(0, 10)}...). Linked device without re-uploading bytes to cloud.`,
+                  },
+                ],
+                $slice: -1000,
+              },
+            },
+          };
+          if (hasRealCreationDate && photoTakenDate) {
+            duplicateDeviceUpdate.$max = {
+              lastSyncedPhotoDate: photoTakenDate,
+            };
+          }
+
           await Device.findOneAndUpdate(
             { deviceId: req.device.deviceId, userId: req.user._id },
-            {
-              $set: {
-                status: 'online',
-                currentSyncActivity: `Synced ${originalName} (linked duplicate)`,
-                lastSeenAt: new Date(),
-              },
-              $max: {
-                lastSyncedPhotoDate: photoTakenDate,
-              },
-              $push: {
-                syncLogs: {
-                  $each: [
-                    {
-                      timestamp: new Date(),
-                      message: `⚡ Duplicate detected: ${originalName}`,
-                      level: 'duplicate',
-                      filename: originalName,
-                      sizeBytes,
-                      details: `SHA-256 hash match (${contentHash.substring(0, 10)}...). Linked device without re-uploading bytes to cloud.`,
-                    },
-                  ],
-                  $slice: -1000,
-                },
-              },
-            }
+            duplicateDeviceUpdate
           );
 
           // Invalidate user cache & broadcast real-time Socket.IO notification
@@ -825,33 +837,37 @@ export class ShortcutController {
         tempFilePath,
       });
 
+      const uploadDeviceUpdate: any = {
+        $set: {
+          status: 'syncing',
+          currentSyncActivity: `Uploaded ${originalName} (${(sizeBytes / (1024 * 1024)).toFixed(1)} MB)`,
+          lastSeenAt: new Date(),
+        },
+        $push: {
+          syncLogs: {
+            $each: [
+              {
+                timestamp: new Date(),
+                message: `✓ Uploaded: ${originalName} (${(sizeBytes / (1024 * 1024)).toFixed(1)} MB)`,
+                level: 'uploaded',
+                filename: originalName,
+                sizeBytes,
+                details: `File received on server (${mimeType}) • Queued for async Google Drive streaming`,
+              },
+            ],
+            $slice: -1000,
+          },
+        },
+      };
+      if (hasRealCreationDate && photoTakenDate) {
+        uploadDeviceUpdate.$max = {
+          lastSyncedPhotoDate: photoTakenDate,
+        };
+      }
+
       await Device.findOneAndUpdate(
         { deviceId: req.device.deviceId, userId: req.user._id },
-        {
-          $set: {
-            status: 'syncing',
-            currentSyncActivity: `Uploaded ${originalName} (${(sizeBytes / (1024 * 1024)).toFixed(1)} MB)`,
-            lastSeenAt: new Date(),
-          },
-          $max: {
-            lastSyncedPhotoDate: photoTakenDate,
-          },
-          $push: {
-            syncLogs: {
-              $each: [
-                {
-                  timestamp: new Date(),
-                  message: `✓ Uploaded: ${originalName} (${(sizeBytes / (1024 * 1024)).toFixed(1)} MB)`,
-                  level: 'uploaded',
-                  filename: originalName,
-                  sizeBytes,
-                  details: `File received on server (${mimeType}) • Queued for async Google Drive streaming`,
-                },
-              ],
-              $slice: -1000,
-            },
-          },
-        }
+        uploadDeviceUpdate
       );
 
       console.log(`[Shortcut Upload QUEUED] ${originalName} (${(sizeBytes / (1024 * 1024)).toFixed(2)} MB) staged for background Google Drive backup`);

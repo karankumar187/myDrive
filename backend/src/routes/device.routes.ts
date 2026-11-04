@@ -12,6 +12,7 @@ router.put('/:id/policy', requireAnyAuth, DeviceController.updatePolicy);
 router.delete('/:id/revoke', requireUserAuth, DeviceController.revokeDevice);
 router.delete('/:id/logs', requireUserAuth, DeviceController.clearDeviceLogs);
 router.post('/:id/reset-key', requireUserAuth, DeviceController.resetDeviceKey);
+router.post('/:id/reset-sync', requireUserAuth, DeviceController.resetSyncCheckpoint);
 router.post('/:id/command', requireUserAuth, DeviceController.sendRemoteCommand);
 router.post('/sync-status', requireAnyAuth, DeviceController.updateSyncStatus);
 router.post('/:deviceId/sync-status', requireAnyAuth, DeviceController.updateSyncStatus);

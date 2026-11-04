@@ -464,6 +464,18 @@ export const api = {
     return res.json();
   },
 
+  async resetDeviceSync(id: string): Promise<any> {
+    const res = await fetchWithLoading(`${API_BASE}/devices/${id}/reset-sync`, {
+      method: 'POST',
+      headers: getHeaders(),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Failed to reset device sync checkpoint' }));
+      throw new Error(err.error || 'Failed to reset device sync checkpoint');
+    }
+    return res.json();
+  },
+
   /**
    * Returns a URL that, when opened on iPhone, auto-downloads and imports a
    * pre-configured .shortcut file into the iOS Shortcuts app.

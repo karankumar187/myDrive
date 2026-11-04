@@ -520,4 +520,65 @@ export class DeviceController {
       res.status(500).json({ error: error.message });
     }
   }
+
+  /**
+   * Resets the photo sync checkpoint (lastSyncedPhotoDate) for a specific device.
+   * Allows the next Auto Sync run to scan the entire camera roll from the beginning,
+   * relying on hash-based deduplication to skip already uploaded files in ~5ms.
+   */
+  static async resetSyncCheckpoint(req: Request, res: Response): Promise<void> {
+    try {
+      const query = Types.ObjectId.isValid(req.params.id)
+        ? { _id: req.params.id, userId: req.user!._id }
+        : { deviceId: req.params.id, userId: req.user!._id };
+
+      const device = await Device.findOneAndUpdate(
+        query,
+        {
+          $set: {
+            lastSyncedPhotoDate: null,
+            status: 'online',
+            currentSyncActivity: 'Sync checkpoint reset. Ready to scan from beginning of camera roll.',
+          },
+          $push: {
+            syncLogs: {
+              $each: [
+                {
+                  timestamp: new Date(),
+                  message: '🔄 Sync checkpoint reset to beginning of camera roll',
+                  level: 'info',
+                  details: 'Manual reset performed from dashboard. Next auto-sync will re-evaluate all camera roll photos with instant deduplication protection.',
+                },
+              ],
+              $slice: -1000,
+            },
+          },
+        },
+        { new: true }
+      ).select('-apiKeyHash');
+
+      if (!device) {
+        res.status(404).json({ error: 'Device not found or access denied' });
+        return;
+      }
+
+      const io = getSocketIoInstance();
+      if (io) {
+        io.to(`user:${req.user!._id}`).emit('device:sync_status', {
+          deviceId: device.deviceId,
+          lastSyncedPhotoDate: null,
+          status: device.status,
+          currentSyncActivity: device.currentSyncActivity,
+        });
+      }
+
+      res.json({
+        success: true,
+        message: `Sync checkpoint reset for ${device.deviceName}. Next sync will scan full camera roll.`,
+        device,
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
 }

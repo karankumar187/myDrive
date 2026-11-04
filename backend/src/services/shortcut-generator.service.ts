@@ -182,6 +182,8 @@ export class ShortcutGeneratorService {
   private static photoLoopBody(serverUrl: string, deviceId: string, deviceKey: string): string {
     const convUUID = this.uuid();
     const nameUUID = this.uuid();
+    const datePropUUID = this.uuid();
+    const formatDateUUID = this.uuid();
     const uploadUUID = this.uuid();
 
     return `
@@ -221,6 +223,42 @@ export class ShortcutGeneratorService {
       </dict>
     </dict>
 
+    <!-- Get Creation Date directly from Apple Photos -->
+    <dict>
+      <key>WFWorkflowActionIdentifier</key>
+      <string>is.workflow.actions.properties.images</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict>
+        <key>UUID</key>
+        <string>${datePropUUID}</string>
+        <key>CustomOutputName</key>
+        <string>PhotoDate</string>
+        <key>WFContentItemPropertyName</key>
+        <string>Creation Date</string>
+        <key>WFInput</key>
+        ${this.varInput('Repeat Item')}
+      </dict>
+    </dict>
+
+    <!-- Format Photo Date to ISO 8601 string -->
+    <dict>
+      <key>WFWorkflowActionIdentifier</key>
+      <string>is.workflow.actions.format.date</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict>
+        <key>UUID</key>
+        <string>${formatDateUUID}</string>
+        <key>CustomOutputName</key>
+        <string>FormattedPhotoDate</string>
+        <key>WFDateFormatStyle</key>
+        <string>ISO 8601</string>
+        <key>WFISO8601IncludeTime</key>
+        <true/>
+        <key>WFDate</key>
+        ${this.actionInput(datePropUUID, 'PhotoDate')}
+      </dict>
+    </dict>
+
     <!-- Upload photo via Multipart Form -->
     <dict>
       <key>WFWorkflowActionIdentifier</key>
@@ -247,6 +285,7 @@ export class ShortcutGeneratorService {
           this.formFieldFileFromOutput('media', convUUID, 'ConvertedPhoto'),
           this.formFieldText('filename', nameUUID, 'PhotoName'),
           this.formFieldText('deviceAssetId', nameUUID, 'PhotoName'),
+          this.formFieldText('photoDate', formatDateUUID, 'FormattedPhotoDate'),
           this.formFieldStaticText('deviceId', deviceId),
           this.formFieldStaticText('deviceKey', deviceKey),
         ])}

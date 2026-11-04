@@ -27,6 +27,7 @@ import {
   Settings,
   Sliders,
   Folder,
+  RotateCcw,
 } from 'lucide-react';
 import { api } from '../services/api.js';
 import { formatBytes } from '../utils/format.js';
@@ -91,6 +92,26 @@ export const DeviceManagerView: React.FC<Props> = ({
       alert(`Failed to clear logs: ${err.message}`);
     } finally {
       setIsClearingLogs(false);
+    }
+  };
+
+  const handleResetSync = async (deviceDocId: string, deviceName: string) => {
+    if (
+      !confirm(
+        `Reset sync checkpoint for "${deviceName}"?\n\nThe next time you run Auto Sync, it will re-scan your camera roll from the beginning. Already backed-up photos will be checked and skipped in milliseconds via instant hash deduplication.`
+      )
+    )
+      return;
+
+    try {
+      setLoadingId(deviceDocId);
+      const res = await api.resetDeviceSync(deviceDocId);
+      alert(res.message || 'Sync checkpoint reset successfully.');
+      onRefresh();
+    } catch (err: any) {
+      alert(`Failed to reset sync checkpoint: ${err.message}`);
+    } finally {
+      setLoadingId(null);
     }
   };
 
@@ -611,6 +632,15 @@ export const DeviceManagerView: React.FC<Props> = ({
                       ) : (
                         <Settings className="w-3.5 h-3.5" />
                       )}
+                    </button>
+
+                    <button
+                      onClick={() => handleResetSync(device._id, device.deviceName)}
+                      disabled={loadingId === device._id}
+                      className="p-2 rounded-xl text-xs text-amber-400/80 hover:text-amber-300 bg-[#151520] hover:bg-amber-950/20 border border-[#232332] hover:border-amber-900/40 transition active:scale-95 disabled:opacity-50"
+                      title="Reset Sync Checkpoint (Re-scan camera roll from beginning)"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
                     </button>
 
                     <button
