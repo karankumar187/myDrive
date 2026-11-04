@@ -19,6 +19,7 @@ router.get('/vault/list', requireUserAuth, FileController.listVaultFiles);
 router.post('/vault/move', requireUserAuth, FileController.moveToVault);
 router.post('/vault/restore', requireUserAuth, FileController.restoreFromVault);
 router.post('/vault/reencrypt/:id', requireUserAuth, upload.single('file'), FileController.reencryptVaultFile);
+router.post('/vault/restore-plaintext/:id', requireUserAuth, upload.single('file'), FileController.restorePlaintextVaultFile);
 
 // Virtual files & Gallery
 router.get('/', requireAnyAuth, FileController.listFiles);

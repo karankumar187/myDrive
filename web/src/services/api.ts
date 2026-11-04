@@ -413,6 +413,31 @@ export const api = {
     return res.json();
   },
 
+  async restorePlaintextVaultFile(
+    fileId: string,
+    decryptedBlob: Blob,
+    filename: string,
+    mimeType: string,
+    contentHash: string
+  ): Promise<any> {
+    const formData = new FormData();
+    formData.append('file', decryptedBlob);
+    formData.append('filename', filename);
+    formData.append('mimeType', mimeType);
+    formData.append('contentHash', contentHash);
+
+    const token = localStorage.getItem('drive_token') || '';
+    const res = await fetch(`${API_BASE}/files/vault/restore-plaintext/${fileId}`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+      body: formData,
+    });
+    if (!res.ok) throw new Error('Failed to restore decrypted file to drive');
+    return res.json();
+  },
+
   async deduplicateFiles(): Promise<any> {
     const res = await fetchWithLoading(`${API_BASE}/files/deduplicate`, {
       method: 'POST',

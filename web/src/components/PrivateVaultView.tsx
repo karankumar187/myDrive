@@ -309,12 +309,27 @@ export const PrivateVaultView: React.FC<PrivateVaultViewProps> = ({
     }
 
     try {
-      await api.restoreFromVault([file._id], {
-        [file._id]: {
-          filename: file.decryptedFilename,
-          mimeType: file.decryptedMimeType,
-        },
-      });
+      const version = file.versions?.[file.versions.length - 1];
+      if (version?.isEncrypted && version?.iv) {
+        // Download ciphertext, decrypt with vaultKey, and upload plaintext back to Google Drive
+        const streamUrl = `/api/v1/files/${file._id}/stream`;
+        const res = await fetch(streamUrl, {
+          headers: { Authorization: `Bearer ${localStorage.getItem('drive_token') || ''}` },
+        });
+        if (!res.ok) throw new Error('Failed to download encrypted file for restoration');
+        const ciphertext = await res.arrayBuffer();
+        const decryptedBuffer = await VaultCryptoService.decryptBuffer(ciphertext, version.iv, vaultKey);
+        const decryptedBlob = new Blob([decryptedBuffer], { type: file.decryptedMimeType });
+        const hash = await VaultCryptoService.calculateSha256(decryptedBuffer);
+        await api.restorePlaintextVaultFile(file._id, decryptedBlob, file.decryptedFilename, file.decryptedMimeType, hash);
+      } else {
+        await api.restoreFromVault([file._id], {
+          [file._id]: {
+            filename: file.decryptedFilename,
+            mimeType: file.decryptedMimeType,
+          },
+        });
+      }
       setFiles((prev) => prev.filter((f) => f._id !== file._id));
     } catch (err: any) {
       alert(`Failed to restore file: ${err.message}`);

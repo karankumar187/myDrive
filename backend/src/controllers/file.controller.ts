@@ -2229,11 +2229,11 @@ export class FileController {
           try {
             const account: any = await StorageAccount.findOne({ _id: latestVersion.storageAccountId, userId }).lean();
             if (account) {
-              const opaqueName = await GoogleDriveService.sanitizeVaultFileOnDrive(account, latestVersion.providerFileId);
-              if (opaqueName && opaqueName !== latestVersion.providerFileId) {
+              const { actualFileId, opaqueName } = await GoogleDriveService.sanitizeVaultFileOnDrive(account, latestVersion.providerFileId);
+              if (actualFileId || opaqueName) {
                 await File.updateOne(
                   { _id: f._id, 'versions.versionNumber': latestVersion.versionNumber },
-                  { $set: { 'versions.$.providerFileId': opaqueName } }
+                  { $set: { 'versions.$.providerFileId': actualFileId || opaqueName } }
                 );
               }
             }
@@ -2243,13 +2243,20 @@ export class FileController {
         }
       }
 
-      // 3. Save encrypted metadata if provided
+      // 3. Save encrypted metadata if provided (and mask plaintext root filename in MongoDB)
       if (encryptedMetaMap && typeof encryptedMetaMap === 'object') {
         for (const idStr of Object.keys(encryptedMetaMap)) {
           if (Types.ObjectId.isValid(idStr)) {
+            const opaqueFilename = `vault_${Date.now()}_${Math.random().toString(36).substring(2, 8)}.enc`;
             await File.updateOne(
               { _id: new Types.ObjectId(idStr), userId },
-              { $set: { encryptedMeta: encryptedMetaMap[idStr] } }
+              {
+                $set: {
+                  encryptedMeta: encryptedMetaMap[idStr],
+                  filename: opaqueFilename,
+                  mimeType: 'application/octet-stream',
+                },
+              }
             );
           }
         }
@@ -2320,7 +2327,7 @@ export class FileController {
       }
 
       // Overwrite physical file content on Google Drive with ciphertext
-      await GoogleDriveService.updateFileContent(
+      const actualFileId = await GoogleDriveService.updateFileContent(
         account,
         latestVersion.providerFileId,
         fileBuffer,
@@ -2344,6 +2351,7 @@ export class FileController {
             'versions.$.iv': iv,
             'versions.$.sizeBytes': fileBuffer.length,
             'versions.$.contentHash': contentHash,
+            'versions.$.providerFileId': actualFileId || latestVersion.providerFileId,
             sizeBytes: fileBuffer.length,
             contentHash: contentHash,
             mimeType: 'application/octet-stream',
@@ -2353,6 +2361,88 @@ export class FileController {
 
       await CacheService.invalidateUser(userId.toString());
       res.json({ success: true, message: 'File re-encrypted with Zero-Knowledge E2EE' });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+
+  /**
+   * Restores a Zero-Knowledge Vault file back to regular library with client-decrypted plaintext.
+   * Overwrites Google Drive bytes with the original unencrypted media, restores original name and mimeType.
+   */
+  static async restorePlaintextVaultFile(req: Request, res: Response): Promise<void> {
+    try {
+      const userId = req.user!._id;
+      const fileId = req.params.id;
+      const { filename, mimeType, contentHash } = req.body;
+      const fileBuffer = req.file?.buffer;
+
+      if (!fileBuffer || !filename || !mimeType || !contentHash) {
+        res.status(400).json({ error: 'file buffer, filename, mimeType, and contentHash are required' });
+        return;
+      }
+
+      const file: any = await File.findOne({ _id: fileId, userId, isVault: true });
+      if (!file) {
+        res.status(404).json({ error: 'Vault file not found' });
+        return;
+      }
+
+      const latestVersion = file.versions?.[file.versions.length - 1];
+      if (!latestVersion) {
+        res.status(404).json({ error: 'No version found' });
+        return;
+      }
+
+      const account: any = await StorageAccount.findOne({
+        _id: latestVersion.storageAccountId,
+        userId,
+      }).lean();
+
+      if (!account) {
+        res.status(404).json({ error: 'Associated storage account not found' });
+        return;
+      }
+
+      // Overwrite file content on Google Drive with restored plaintext
+      const actualFileId = await GoogleDriveService.updateFileContent(
+        account,
+        latestVersion.providerFileId,
+        fileBuffer,
+        {
+          name: `file_${Date.now()}_${filename.replace(/[^a-zA-Z0-9._-]/g, '_')}`,
+          mimeType,
+        }
+      );
+
+      // Clean local cache
+      const cachedFilePath = path.join(CACHE_FILES_DIR, fileId);
+      const cachedPreviewPath = path.join(CACHE_PREVIEWS_DIR, `${fileId}.webp`);
+      try { if (fs.existsSync(cachedFilePath)) fs.unlinkSync(cachedFilePath); } catch {}
+      try { if (fs.existsSync(cachedPreviewPath)) fs.unlinkSync(cachedPreviewPath); } catch {}
+
+      // Update file record back to normal library
+      await File.updateOne(
+        { _id: file._id, 'versions.versionNumber': latestVersion.versionNumber },
+        {
+          $set: {
+            isVault: false,
+            encryptedMeta: null,
+            filename,
+            mimeType,
+            sizeBytes: fileBuffer.length,
+            contentHash,
+            'versions.$.isEncrypted': false,
+            'versions.$.iv': null,
+            'versions.$.sizeBytes': fileBuffer.length,
+            'versions.$.contentHash': contentHash,
+            'versions.$.providerFileId': actualFileId || latestVersion.providerFileId,
+          },
+        }
+      );
+
+      await CacheService.invalidateUser(userId.toString());
+      res.json({ success: true, message: 'File restored to regular drive with plaintext media' });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }

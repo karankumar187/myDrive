@@ -325,7 +325,7 @@ export class GoogleDriveService {
    * Sanitizes, renames and obscures a file on Google Drive when moved to the Zero-Knowledge Vault.
    * Strips original name, sets mimeType to application/octet-stream, and clears description.
    */
-  static async sanitizeVaultFileOnDrive(account: IStorageAccountDocument, providerFileId: string): Promise<string> {
+  static async sanitizeVaultFileOnDrive(account: IStorageAccountDocument, providerFileId: string): Promise<{ actualFileId: string; opaqueName: string }> {
     try {
       const oauth2Client = this.getOAuth2Client(account);
       const drive = google.drive({ version: 'v3', auth: oauth2Client });
@@ -342,10 +342,10 @@ export class GoogleDriveService {
         },
       });
 
-      return opaqueName;
+      return { actualFileId, opaqueName };
     } catch (err) {
       console.warn('Could not sanitize file metadata in Google Drive:', err);
-      return providerFileId;
+      return { actualFileId: providerFileId, opaqueName: providerFileId };
     }
   }
 
@@ -361,7 +361,7 @@ export class GoogleDriveService {
       name?: string;
       mimeType?: string;
     }
-  ): Promise<void> {
+  ): Promise<string> {
     const oauth2Client = this.getOAuth2Client(account);
     const drive = google.drive({ version: 'v3', auth: oauth2Client });
     const actualFileId = await this.resolveDriveFileId(account, providerFileId);
@@ -384,5 +384,7 @@ export class GoogleDriveService {
         body,
       },
     });
+
+    return actualFileId;
   }
 }
