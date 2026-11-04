@@ -35,6 +35,7 @@ import { uploadService } from './services/UploadService.js';
 import { VaultPinModal } from './components/VaultPinModal.js';
 import { PrivateVaultView } from './components/PrivateVaultView.js';
 import { VaultCryptoService } from './services/vault-crypto.js';
+import { mediaCache } from './services/media-cache.js';
 import { LockScreen } from './components/LockScreen.js';
 import { SecuritySettings } from './components/SecuritySettings.js';
 import { LockSecurityService } from './services/lock-security.js';
@@ -567,12 +568,13 @@ export const App: React.FC = () => {
       if (vaultKey) {
         encryptedMetaMap = {};
         for (const f of filesToMove) {
+          const thumb = f.metadata?.thumbnail || mediaCache.getThumbnail(f._id);
           const metaPayload = {
             originalFilename: f.filename,
             originalMimeType: f.mimeType,
             originalSize: f.sizeBytes,
             takenAt: f.metadata?.takenAt || f.createdAt,
-            thumbnail: f.metadata?.thumbnail,
+            thumbnail: thumb,
           };
           const encStr = await VaultCryptoService.encryptMetadata(metaPayload, vaultKey);
           encryptedMetaMap[f._id] = encStr;

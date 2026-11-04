@@ -21,11 +21,13 @@ import {
   Music,
   X,
   MoreVertical,
+  Sparkles,
 } from 'lucide-react';
 import { api } from '../services/api.js';
 import { VaultCryptoService } from '../services/vault-crypto.js';
 import { FileItem } from '../types.js';
 import { FullScreenViewer } from './FullScreenViewer.js';
+import { mediaCache, generateThumbnailFromVideoFile } from '../services/media-cache.js';
 
 interface PrivateVaultViewProps {
   vaultKey: CryptoKey;
@@ -39,6 +41,28 @@ interface DecryptedVaultFile extends FileItem {
   decryptedThumbnail?: string;
   decryptedTakenAt?: string;
   isDecrypting?: boolean;
+}
+
+async function generateThumbnailFromImageBlob(blob: Blob): Promise<string> {
+  const bitmap = await createImageBitmap(blob);
+  const maxDim = 1024;
+  let { width, height } = bitmap;
+  if (width > maxDim || height > maxDim) {
+    if (width > height) {
+      height = Math.round((height * maxDim) / width);
+      width = maxDim;
+    } else {
+      width = Math.round((width * maxDim) / height);
+      height = maxDim;
+    }
+  }
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Canvas context not available');
+  ctx.drawImage(bitmap, 0, 0, width, height);
+  return canvas.toDataURL('image/webp', 0.82);
 }
 
 export const PrivateVaultView: React.FC<PrivateVaultViewProps> = ({
@@ -56,8 +80,66 @@ export const PrivateVaultView: React.FC<PrivateVaultViewProps> = ({
   >([]);
   const [actionMenuFileId, setActionMenuFileId] = useState<string | null>(null);
   const [downloadingFileId, setDownloadingFileId] = useState<string | null>(null);
+  const [isGeneratingThumbnails, setIsGeneratingThumbnails] = useState(false);
+  const [generatorProgress, setGeneratorProgress] = useState<{ current: number; total: number; currentName?: string } | null>(null);
+  const cancelGeneratorRef = useRef(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const generateSingleThumbnail = useCallback(
+    async (f: DecryptedVaultFile): Promise<string | null> => {
+      const isImage = f.decryptedMimeType.startsWith('image/');
+      const isVideo = f.decryptedMimeType.startsWith('video/');
+      if (!isImage && !isVideo) return null;
+
+      try {
+        const streamUrl = api.getStreamUrl(f._id);
+        const res = await fetch(streamUrl, {
+          headers: {
+            Authorization: `Bearer ${localStorage.getItem('drive_token') || ''}`,
+          },
+        });
+        if (!res.ok) return null;
+        const rawData = await res.arrayBuffer();
+
+        let plainBuffer = rawData;
+        const latestVer = f.versions?.[f.versions.length - 1];
+        if (latestVer?.isEncrypted && latestVer.iv) {
+          plainBuffer = await VaultCryptoService.decryptBuffer(rawData, latestVer.iv, vaultKey);
+        }
+
+        let thumbUrl: string | null = null;
+        if (isImage) {
+          const blob = new Blob([plainBuffer], { type: f.decryptedMimeType });
+          thumbUrl = await generateThumbnailFromImageBlob(blob);
+        } else if (isVideo) {
+          const fileObj = new File([plainBuffer], f.decryptedFilename, { type: f.decryptedMimeType });
+          thumbUrl = await generateThumbnailFromVideoFile(fileObj);
+        }
+
+        if (thumbUrl) {
+          const metaPayload = {
+            originalFilename: f.decryptedFilename || f.filename,
+            originalMimeType: f.decryptedMimeType || f.mimeType,
+            originalSize: f.decryptedSize || f.sizeBytes,
+            takenAt: f.decryptedTakenAt || f.metadata?.takenAt || f.createdAt,
+            thumbnail: thumbUrl,
+          };
+          const encStr = await VaultCryptoService.encryptMetadata(metaPayload, vaultKey);
+          await api.moveToVault([f._id], { [f._id]: encStr });
+          mediaCache.saveThumbnail(f._id, thumbUrl);
+          setFiles((prev) =>
+            prev.map((item) => (item._id === f._id ? { ...item, decryptedThumbnail: thumbUrl! } : item))
+          );
+          return thumbUrl;
+        }
+      } catch (err) {
+        console.warn(`Failed to generate thumbnail for vault item ${f._id}:`, err);
+      }
+      return null;
+    },
+    [vaultKey]
+  );
 
   // Load and decrypt vault files list
   const loadVaultFiles = useCallback(async () => {
@@ -141,12 +223,53 @@ export const PrivateVaultView: React.FC<PrivateVaultViewProps> = ({
       );
 
       setFiles(decryptedList);
+
+      // Background auto-generator for any vault media missing thumbnails
+      const missingThumbs = decryptedList.filter(
+        (f) => !f.decryptedThumbnail && (f.decryptedMimeType.startsWith('image/') || f.decryptedMimeType.startsWith('video/'))
+      );
+      if (missingThumbs.length > 0) {
+        (async () => {
+          for (const f of missingThumbs) {
+            await generateSingleThumbnail(f);
+          }
+        })().catch(() => {});
+      }
     } catch (err: any) {
       console.error('Failed to load vault files:', err);
     } finally {
       setLoading(false);
     }
-  }, [vaultKey]);
+  }, [vaultKey, generateSingleThumbnail]);
+
+  const handleGenerateThumbnails = useCallback(async (forceAll: boolean = false) => {
+    if (isGeneratingThumbnails) return;
+    const mediaFiles = files.filter((f) => {
+      const isMedia = f.decryptedMimeType.startsWith('image/') || f.decryptedMimeType.startsWith('video/');
+      if (!isMedia) return false;
+      if (forceAll) return true;
+      return !f.decryptedThumbnail;
+    });
+
+    if (mediaFiles.length === 0) {
+      alert('All media files in Secret Vault already have 1024px encrypted thumbnails!');
+      return;
+    }
+
+    cancelGeneratorRef.current = false;
+    setIsGeneratingThumbnails(true);
+    setGeneratorProgress({ current: 0, total: mediaFiles.length, currentName: mediaFiles[0].decryptedFilename });
+
+    for (let i = 0; i < mediaFiles.length; i++) {
+      if (cancelGeneratorRef.current) break;
+      const f = mediaFiles[i];
+      setGeneratorProgress({ current: i + 1, total: mediaFiles.length, currentName: f.decryptedFilename });
+      await generateSingleThumbnail(f);
+    }
+
+    setIsGeneratingThumbnails(false);
+    setGeneratorProgress(null);
+  }, [files, isGeneratingThumbnails, generateSingleThumbnail]);
 
   useEffect(() => {
     loadVaultFiles();
@@ -477,6 +600,20 @@ export const PrivateVaultView: React.FC<PrivateVaultViewProps> = ({
         {/* Action Buttons */}
         <div className="flex items-center space-x-2 shrink-0">
           <button
+            onClick={() => handleGenerateThumbnails(false)}
+            disabled={isGeneratingThumbnails}
+            className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 hover:border-zinc-700 text-zinc-300 hover:text-white font-medium text-xs transition active:scale-95 disabled:opacity-50"
+            title="Scan and generate 1024px encrypted thumbnails for all vault media"
+          >
+            {isGeneratingThumbnails ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin text-purple-400" />
+            ) : (
+              <Sparkles className="w-3.5 h-3.5 text-purple-400" />
+            )}
+            <span>{isGeneratingThumbnails ? 'Generating…' : 'Thumbnails'}</span>
+          </button>
+
+          <button
             onClick={() => fileInputRef.current?.click()}
             className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-zinc-100 hover:bg-white text-zinc-950 font-semibold text-xs transition active:scale-95 shadow-sm"
           >
@@ -494,6 +631,35 @@ export const PrivateVaultView: React.FC<PrivateVaultViewProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Thumbnail Generator Progress Banner */}
+      {generatorProgress && (
+        <div className="mb-5 rounded-2xl bg-[#101013] border border-purple-900/60 p-3.5 space-y-2.5 shadow-lg">
+          <div className="flex items-center justify-between text-xs">
+            <span className="font-semibold text-purple-200 flex items-center gap-2">
+              <Sparkles className="w-3.5 h-3.5 text-purple-400 animate-pulse" />
+              Generating 1024px Encrypted Previews ({generatorProgress.current} of {generatorProgress.total})
+            </span>
+            <button
+              onClick={() => {
+                cancelGeneratorRef.current = true;
+              }}
+              className="text-[10px] text-zinc-400 hover:text-white px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 transition"
+            >
+              Cancel
+            </button>
+          </div>
+          <p className="text-[11px] text-zinc-400 truncate font-mono">
+            {generatorProgress.currentName}
+          </p>
+          <div className="w-full h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+            <div
+              className="h-full bg-gradient-to-r from-purple-500 via-indigo-500 to-purple-400 transition-all duration-300"
+              style={{ width: `${Math.round((generatorProgress.current / generatorProgress.total) * 100)}%` }}
+            />
+          </div>
+        </div>
+      )}
 
       {/* Upload Tasks Progress Banner */}
       {uploadingFiles.length > 0 && (
