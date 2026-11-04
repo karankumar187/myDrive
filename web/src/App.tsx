@@ -218,46 +218,9 @@ export const App: React.FC = () => {
     }
   };
 
-  // Move files to Zero-Knowledge Secret Vault (no PIN required when moving in; PIN only asked on opening)
-  const handleMoveFilesToVault = async (filesToMove: FileItem[]) => {
-    if (!filesToMove || filesToMove.length === 0) return;
-
-    try {
-      const stopProgress = startGlobalLoading('sync');
-      let encryptedMetaMap: Record<string, string> | undefined = undefined;
-
-      // If vault happens to be already unlocked in this session, encrypt metadata now
-      if (vaultKey) {
-        encryptedMetaMap = {};
-        for (const f of filesToMove) {
-          const metaPayload = {
-            originalFilename: f.filename,
-            originalMimeType: f.mimeType,
-            originalSize: f.sizeBytes,
-            takenAt: f.metadata?.takenAt || f.createdAt,
-            thumbnail: f.metadata?.thumbnail,
-          };
-          const encStr = await VaultCryptoService.encryptMetadata(metaPayload, vaultKey);
-          encryptedMetaMap[f._id] = encStr;
-        }
-      }
-
-      const fileIds = filesToMove.map((f) => f._id);
-      await api.moveToVault(fileIds, encryptedMetaMap);
-      stopProgress();
-
-      // Optimistically remove moved files from active state
-      const movedIdSet = new Set(fileIds);
-      setFiles((prev) => prev.filter((f) => !movedIdSet.has(f._id)));
-      setRecentFiles((prev) => prev.filter((f) => !movedIdSet.has(f._id)));
-      setMedia((prev) => prev.filter((f) => !movedIdSet.has(f._id)));
-
-      // Reload fresh data in background
-      loadDashboardData();
-    } catch (err: any) {
-      alert(`Failed to move files to Secret Vault: ${err.message}`);
-    }
-  };
+  const handleOpenVaultModal = useCallback(() => {
+    setIsVaultModalOpen(true);
+  }, []);
 
   // Lock screen state
   const [isLocked, setIsLocked] = useState(() => LockSecurityService.isPinSet());
@@ -557,7 +520,7 @@ export const App: React.FC = () => {
   }, [currentUser]);
 
   // Load full dashboard data (storage summary, devices, gallery, trash)
-  const loadDashboardData = async () => {
+  const loadDashboardData = useCallback(async () => {
     if (!currentUser) return;
     try {
       setIsRefreshing(true);
@@ -590,7 +553,48 @@ export const App: React.FC = () => {
     } finally {
       setIsRefreshing(false);
     }
-  };
+  }, [currentUser, loadFolderData]);
+
+  // Move files to Zero-Knowledge Secret Vault (no PIN required when moving in; PIN only asked on opening)
+  const handleMoveFilesToVault = useCallback(async (filesToMove: FileItem[]) => {
+    if (!filesToMove || filesToMove.length === 0) return;
+
+    try {
+      const stopProgress = startGlobalLoading('sync');
+      let encryptedMetaMap: Record<string, string> | undefined = undefined;
+
+      // If vault happens to be already unlocked in this session, encrypt metadata now
+      if (vaultKey) {
+        encryptedMetaMap = {};
+        for (const f of filesToMove) {
+          const metaPayload = {
+            originalFilename: f.filename,
+            originalMimeType: f.mimeType,
+            originalSize: f.sizeBytes,
+            takenAt: f.metadata?.takenAt || f.createdAt,
+            thumbnail: f.metadata?.thumbnail,
+          };
+          const encStr = await VaultCryptoService.encryptMetadata(metaPayload, vaultKey);
+          encryptedMetaMap[f._id] = encStr;
+        }
+      }
+
+      const fileIds = filesToMove.map((f) => f._id);
+      await api.moveToVault(fileIds, encryptedMetaMap);
+      stopProgress();
+
+      // Optimistically remove moved files from active state
+      const movedIdSet = new Set(fileIds);
+      setFiles((prev) => prev.filter((f) => !movedIdSet.has(f._id)));
+      setRecentFiles((prev) => prev.filter((f) => !movedIdSet.has(f._id)));
+      setMedia((prev) => prev.filter((f) => !movedIdSet.has(f._id)));
+
+      // Reload fresh data in background
+      loadDashboardData();
+    } catch (err: any) {
+      alert(`Failed to move files to Secret Vault: ${err.message}`);
+    }
+  }, [vaultKey, loadDashboardData]);
 
   // When background upload succeeds, refresh the current active folder
   useEffect(() => {
@@ -938,7 +942,7 @@ export const App: React.FC = () => {
             onSelectFolder={(id) => setCurrentFolderId(id)}
             onRefresh={loadDashboardData}
             vaultKey={vaultKey}
-            onOpenVault={() => setIsVaultModalOpen(true)}
+            onOpenVault={handleOpenVaultModal}
             onMoveToVault={handleMoveFilesToVault}
           />
         )}
@@ -948,7 +952,7 @@ export const App: React.FC = () => {
             media={media}
             devices={devices}
             vaultKey={vaultKey}
-            onOpenVault={() => setIsVaultModalOpen(true)}
+            onOpenVault={handleOpenVaultModal}
             onMoveToVault={handleMoveFilesToVault}
             onRefresh={loadDashboardData}
             initialCursor={galleryCursor}

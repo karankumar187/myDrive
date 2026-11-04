@@ -42,3 +42,9 @@ mobile-android/local.properties
 backend/uploads/*
 !backend/uploads/.gitkeep
 
+
+# wrangler files
+.wrangler
+.dev.vars*
+!.dev.vars.example
+!.env.example

@@ -92,7 +92,7 @@ const getLastCursor = (list: FileItem[]): string | null => {
     .replace(/=+$/, '');
 };
 
-export const GalleryTimelineView: React.FC<Props> = ({
+export const GalleryTimelineView: React.FC<Props> = React.memo(({
   media,
   devices: externalDevices,
   vaultKey,
@@ -293,8 +293,12 @@ export const GalleryTimelineView: React.FC<Props> = ({
     }
   }, [externalDevices]);
 
-  // Filtered media based on filterType, selectedDeviceFilters, and searchQuery
+  // Filtered media based on filterType, selectedDeviceFilters, and searchQuery (instant short-circuit when no filters active)
   const filteredMedia = useMemo(() => {
+    if (filterType === 'all' && selectedDeviceFilters.size === 0 && !searchQuery.trim()) {
+      return localMediaList;
+    }
+
     return localMediaList.filter((item) => {
       const isVideo = isVideoFile(item.mimeType) || isVideoFile(item.filename);
       const isPhoto = item.mimeType.startsWith('image/') || /\.(jpg|jpeg|png|webp|gif|heic|svg|bmp)$/i.test(item.filename);
@@ -321,15 +325,17 @@ export const GalleryTimelineView: React.FC<Props> = ({
     });
   }, [localMediaList, filterType, selectedDeviceFilters, searchQuery]);
 
-  // Group media by Month & Year using pre-indexed array for 0ms computation
+  // Group media by Month & Year — ultra-fast O(N) integer lookup avoiding C++ Intl.DateTimeFormat overhead
   const groupedMedia = useMemo(() => {
-    return filteredMedia.reduce((acc, item) => {
+    const acc: Record<string, FileItem[]> = {};
+    for (let i = 0; i < filteredMedia.length; i++) {
+      const item = filteredMedia[i];
       const date = new Date(item.metadata?.takenAt || item.createdAt);
-      const monthYear = `${MONTH_NAMES[date.getMonth()]} ${date.getFullYear()}`;
+      const monthYear = isNaN(date.getTime()) ? 'Unknown' : `${MONTH_NAMES[date.getMonth()]} ${date.getFullYear()}`;
       if (!acc[monthYear]) acc[monthYear] = [];
       acc[monthYear].push(item);
-      return acc;
-    }, {} as Record<string, FileItem[]>);
+    }
+    return acc;
   }, [filteredMedia]);
 
   // Precomputed ID -> Index map for instantaneous O(1) tile opening
@@ -1235,7 +1241,11 @@ export const GalleryTimelineView: React.FC<Props> = ({
         </div>
       ) : (
         Object.entries(groupedMedia).map(([groupTitle, items]) => (
-          <div key={groupTitle} className="space-y-3">
+          <div
+            key={groupTitle}
+            className="space-y-3"
+            style={{ contentVisibility: 'auto', containIntrinsicSize: '0 500px' }}
+          >
             {/* Date Group Header — Solid background avoids mobile GPU compositor stalls */}
             <div className="sticky top-14 sm:top-16 bg-[#08080a] py-2 z-20 flex items-center justify-between border-b border-zinc-800/80 w-full min-w-0 max-w-full">
               <div className="flex items-center space-x-2">
@@ -1732,7 +1742,8 @@ export const GalleryTimelineView: React.FC<Props> = ({
       )}
     </div>
   );
-};
+});
+GalleryTimelineView.displayName = 'GalleryTimelineView';
 
 // ----------------------------------------------------
 // Grid Tile Component — Blazing fast 120fps virtualized rendering with content-visibility
