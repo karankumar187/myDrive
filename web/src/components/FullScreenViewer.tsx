@@ -32,6 +32,7 @@ import {
   Loader2,
   X,
   Check,
+  Lock,
 } from 'lucide-react';
 
 export interface FullScreenViewerProps {
@@ -45,6 +46,7 @@ export interface FullScreenViewerProps {
   onOpenDetails?: () => void;
   onOpenRename?: () => void;
   onOpenMove?: () => void;
+  onMoveToVault?: () => void;
   onOpenForceDownload?: () => void;
   onLoadMore?: () => void;
 }
@@ -63,6 +65,7 @@ export const FullScreenViewer: React.FC<FullScreenViewerProps> = ({
   onOpenDetails,
   onOpenRename,
   onOpenMove,
+  onMoveToVault,
   onOpenForceDownload,
   onLoadMore,
 }) => {
@@ -474,6 +477,18 @@ export const FullScreenViewer: React.FC<FullScreenViewerProps> = ({
                   >
                     <FolderInput className="w-4 h-4 text-emerald-400" />
                     <span>Move to Folder</span>
+                  </button>
+                )}
+                {onMoveToVault && !item.isVault && (
+                  <button
+                    onClick={() => {
+                      setIsOptionsOpen(false);
+                      onMoveToVault();
+                    }}
+                    className="w-full px-4 py-2.5 text-left flex items-center space-x-2 text-amber-300 hover:bg-amber-500/10 hover:text-amber-200"
+                  >
+                    <Lock className="w-4 h-4 text-amber-400" />
+                    <span>Move to Secret Vault</span>
                   </button>
                 )}
                 <button

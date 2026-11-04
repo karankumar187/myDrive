@@ -8,6 +8,8 @@ interface VaultPinModalProps {
   isOpen: boolean;
   onClose: () => void;
   currentUser: User;
+  title?: string;
+  subtitle?: string;
   onUnlocked: (vaultKey: CryptoKey) => void;
   onUserUpdated?: (user: User) => void;
 }
@@ -16,6 +18,8 @@ export const VaultPinModal: React.FC<VaultPinModalProps> = ({
   isOpen,
   onClose,
   currentUser,
+  title,
+  subtitle,
   onUnlocked,
   onUserUpdated,
 }) => {
@@ -195,19 +199,21 @@ export const VaultPinModal: React.FC<VaultPinModalProps> = ({
           </div>
 
           <h2 className="text-lg font-bold text-white tracking-wide">
-            {isSetupMode
-              ? setupStep === 1
-                ? 'Create 4-Digit Vault PIN'
-                : 'Confirm 4-Digit PIN'
-              : 'Unlock Private Vault'}
+            {title ||
+              (isSetupMode
+                ? setupStep === 1
+                  ? 'Create 4-Digit Vault PIN'
+                  : 'Confirm 4-Digit PIN'
+                : 'Unlock Private Vault')}
           </h2>
 
           <p className="text-xs text-zinc-400 mt-1.5 max-w-[260px] leading-relaxed">
-            {isSetupMode
-              ? setupStep === 1
-                ? 'Choose a 4-digit PIN. Your vault is zero-knowledge encrypted and can only be opened with this PIN.'
-                : 'Please re-enter your 4-digit PIN to confirm setup.'
-              : 'Enter your 4-digit secret PIN to decrypt your zero-knowledge private vault.'}
+            {subtitle ||
+              (isSetupMode
+                ? setupStep === 1
+                  ? 'Choose a 4-digit PIN. Your vault is zero-knowledge encrypted and can only be opened with this PIN.'
+                  : 'Please re-enter your 4-digit PIN to confirm setup.'
+                : 'Enter your 4-digit secret PIN to decrypt your zero-knowledge private vault.')}
           </p>
 
           <div className="mt-3 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 text-[10px] font-semibold text-amber-300">

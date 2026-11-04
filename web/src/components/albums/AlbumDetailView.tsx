@@ -45,6 +45,7 @@ interface AlbumDetailViewProps {
   allMedia: FileItem[];
   vaultKey: CryptoKey | null;
   onAlbumUpdated?: () => void;
+  onMoveToVault?: (files: FileItem[]) => void;
 }
 
 export const AlbumDetailView: React.FC<AlbumDetailViewProps> = ({
@@ -53,6 +54,7 @@ export const AlbumDetailView: React.FC<AlbumDetailViewProps> = ({
   allMedia,
   vaultKey,
   onAlbumUpdated,
+  onMoveToVault,
 }) => {
   const [album, setAlbum] = useState<AlbumDetailItem | null>(() => albumDetailCache.get(albumId) || null);
   const [loading, setLoading] = useState<boolean>(() => !albumDetailCache.has(albumId));
@@ -693,6 +695,10 @@ export const AlbumDetailView: React.FC<AlbumDetailViewProps> = ({
           onToggleFavorite={() => handleToggleItemFavorite(album.files[activeLightboxIndex])}
           onDelete={handleDeleteCurrentItem}
           onOpenDetails={() => setIsDetailsOpen(true)}
+          onMoveToVault={() => {
+            onMoveToVault?.([album.files[activeLightboxIndex]]);
+            setActiveLightboxIndex(null);
+          }}
         />
       )}
 

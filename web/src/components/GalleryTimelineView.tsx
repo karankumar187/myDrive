@@ -56,6 +56,7 @@ interface Props {
   vaultKey: CryptoKey | null;
   onOpenVault?: () => void;
   onRefresh?: () => void;
+  onMoveToVault?: (files: FileItem[]) => void;
   initialCursor?: string | null;
   initialHasMore?: boolean;
   gallerySubTab?: 'timeline' | 'albums';
@@ -89,6 +90,7 @@ export const GalleryTimelineView: React.FC<Props> = ({
   vaultKey,
   onOpenVault,
   onRefresh,
+  onMoveToVault,
   initialCursor,
   initialHasMore,
   gallerySubTab: externalSubTab,
@@ -1079,6 +1081,7 @@ export const GalleryTimelineView: React.FC<Props> = ({
         <AlbumsShowcaseView
           allMedia={localMediaList}
           vaultKey={vaultKey}
+          onMoveToVault={onMoveToVault}
           initialSelectedMediaIds={selectedAlbumMediaIds}
           externalSearchQuery={albumSearchQuery}
           externalDestination={albumDestination}
@@ -1168,6 +1171,21 @@ export const GalleryTimelineView: React.FC<Props> = ({
             >
               <FolderInput className="w-3.5 h-3.5" />
               <span className="hidden md:inline">Move</span>
+            </button>
+
+            {/* Move to Secret Vault */}
+            <button
+              disabled={selectedIds.size === 0}
+              onClick={() => {
+                const selectedFiles = filteredMedia.filter((f) => selectedIds.has(f._id));
+                onMoveToVault?.(selectedFiles);
+                deselectAll();
+              }}
+              className="px-2.5 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 disabled:opacity-40 transition flex items-center space-x-1 text-xs active:scale-95"
+              title="Move to Secret Vault"
+            >
+              <Lock className="w-3.5 h-3.5 text-amber-400" />
+              <span className="hidden md:inline font-semibold">Vault</span>
             </button>
 
             {/* Move to Trash */}
@@ -1280,6 +1298,10 @@ export const GalleryTimelineView: React.FC<Props> = ({
             setIsRenameOpen(true);
           }}
           onOpenMove={handleOpenMove}
+          onMoveToVault={() => {
+            onMoveToVault?.([currentMedia]);
+            setSelectedMediaIndex(null);
+          }}
           onOpenForceDownload={() => {
             setForceDownloadTargetIds([currentMedia._id]);
             setIsForceDownloadOpen(true);

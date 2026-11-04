@@ -54,6 +54,7 @@ interface Props {
   onRefresh: () => void;
   vaultKey: CryptoKey | null;
   onOpenVault?: () => void;
+  onMoveToVault?: (files: FileItem[]) => void;
 }
 
 export const FolderExplorerView: React.FC<Props> = ({
@@ -67,6 +68,7 @@ export const FolderExplorerView: React.FC<Props> = ({
   onRefresh,
   vaultKey,
   onOpenVault,
+  onMoveToVault,
 }) => {
   const [newFolderName, setNewFolderName] = useState('');
   const [showFolderModal, setShowFolderModal] = useState(false);
@@ -614,6 +616,13 @@ export const FolderExplorerView: React.FC<Props> = ({
               <span>Move to Folder</span>
             </button>
             <button
+              onClick={() => { setContextMenuFileId(null); onMoveToVault?.([file]); }}
+              className="w-full flex items-center space-x-2.5 px-3.5 py-2 text-xs text-amber-300 hover:bg-amber-500/10 hover:text-amber-200 transition"
+            >
+              <Lock className="w-3.5 h-3.5 text-amber-400" />
+              <span>Move to Secret Vault</span>
+            </button>
+            <button
               onClick={() => { setContextMenuFileId(null); handleToggleFavorite(file); }}
               className="w-full flex items-center space-x-2.5 px-3.5 py-2 text-xs text-zinc-300 hover:bg-[#22222b] hover:text-white transition"
             >
@@ -1024,6 +1033,18 @@ export const FolderExplorerView: React.FC<Props> = ({
           </button>
           <button onClick={() => { setIsBulkMove(true); setMoveFile(null); setMoveTargetFolderId(null); }} disabled={selectedFileIds.size === 0} className="p-2 rounded-lg text-zinc-400 hover:text-cyan-400 hover:bg-cyan-950/30 transition disabled:opacity-30" title="Move to folder">
             <FolderInput className="w-4 h-4" />
+          </button>
+          <button
+            onClick={() => {
+              const selected = localFiles.filter((f) => selectedFileIds.has(f._id));
+              onMoveToVault?.(selected);
+              exitSelectionMode();
+            }}
+            disabled={selectedFileIds.size === 0}
+            className="p-2 rounded-lg text-amber-300 hover:text-amber-200 hover:bg-amber-950/40 transition disabled:opacity-30"
+            title="Move selected to Secret Vault"
+          >
+            <Lock className="w-4 h-4 text-amber-400" />
           </button>
           {devices.length > 0 && (
             <button onClick={handleBulkSendToDevice} disabled={selectedFileIds.size === 0} className="p-2 rounded-lg text-zinc-400 hover:text-green-400 hover:bg-green-950/30 transition disabled:opacity-30" title="Send to device">

@@ -19,7 +19,7 @@ import {
   Lock,
   KeyRound,
 } from 'lucide-react';
-import { api, subscribeToProgress, GlobalProgressState } from './services/api.js';
+import { api, subscribeToProgress, startGlobalLoading, GlobalProgressState } from './services/api.js';
 import { getSocket, refreshSocketAuth } from './services/socket.js';
 import { StorageSummary, FileItem, FolderItem, DeviceItem, User, BreadcrumbItem } from './types.js';
 import { StorageSummaryView } from './components/StorageSummaryView.js';
@@ -137,6 +137,59 @@ export const App: React.FC = () => {
     VaultCryptoService.clearSessionKey();
     if (activeTab === 'vault') {
       setActiveTab('dashboard');
+    }
+  };
+
+  // Move files to Zero-Knowledge Secret Vault workflow
+  const [pendingVaultMoveFiles, setPendingVaultMoveFiles] = useState<FileItem[]>([]);
+  const [vaultModalConfig, setVaultModalConfig] = useState<{ title?: string; subtitle?: string }>({});
+
+  const executeMoveToVault = async (filesToMove: FileItem[], activeKey: CryptoKey) => {
+    try {
+      const stopProgress = startGlobalLoading('sync');
+      const encryptedMetaMap: Record<string, string> = {};
+
+      for (const f of filesToMove) {
+        const metaPayload = {
+          originalFilename: f.filename,
+          originalMimeType: f.mimeType,
+          originalSize: f.sizeBytes,
+          takenAt: f.metadata?.takenAt || f.createdAt,
+          thumbnail: f.metadata?.thumbnail,
+        };
+        const encStr = await VaultCryptoService.encryptMetadata(metaPayload, activeKey);
+        encryptedMetaMap[f._id] = encStr;
+      }
+
+      const fileIds = filesToMove.map((f) => f._id);
+      await api.moveToVault(fileIds, encryptedMetaMap);
+      stopProgress();
+
+      // Optimistically remove moved files from active state
+      const movedIdSet = new Set(fileIds);
+      setFiles((prev) => prev.filter((f) => !movedIdSet.has(f._id)));
+      setRecentFiles((prev) => prev.filter((f) => !movedIdSet.has(f._id)));
+      setMedia((prev) => prev.filter((f) => !movedIdSet.has(f._id)));
+
+      // Reload fresh data in background
+      loadDashboardData();
+    } catch (err: any) {
+      alert(`Failed to move files to Secret Vault: ${err.message}`);
+    }
+  };
+
+  const handleMoveFilesToVault = async (filesToMove: FileItem[]) => {
+    if (!filesToMove || filesToMove.length === 0) return;
+
+    if (vaultKey) {
+      await executeMoveToVault(filesToMove, vaultKey);
+    } else {
+      setPendingVaultMoveFiles(filesToMove);
+      setVaultModalConfig({
+        title: 'Unlock Secret Vault',
+        subtitle: `Enter your 4-digit PIN to encrypt and move ${filesToMove.length} item${filesToMove.length > 1 ? 's' : ''} to Secret Vault.`,
+      });
+      setIsVaultModalOpen(true);
     }
   };
 
@@ -825,6 +878,7 @@ export const App: React.FC = () => {
             onRefresh={loadDashboardData}
             vaultKey={vaultKey}
             onOpenVault={() => setIsVaultModalOpen(true)}
+            onMoveToVault={handleMoveFilesToVault}
           />
         )}
 
@@ -833,6 +887,7 @@ export const App: React.FC = () => {
             media={media}
             vaultKey={vaultKey}
             onOpenVault={() => setIsVaultModalOpen(true)}
+            onMoveToVault={handleMoveFilesToVault}
             onRefresh={loadDashboardData}
             initialCursor={galleryCursor}
             initialHasMore={galleryHasMore}
@@ -901,11 +956,24 @@ export const App: React.FC = () => {
       {currentUser && (
         <VaultPinModal
           isOpen={isVaultModalOpen}
-          onClose={() => setIsVaultModalOpen(false)}
+          onClose={() => {
+            setIsVaultModalOpen(false);
+            setPendingVaultMoveFiles([]);
+            setVaultModalConfig({});
+          }}
           currentUser={currentUser}
-          onUnlocked={(key) => {
+          title={vaultModalConfig.title}
+          subtitle={vaultModalConfig.subtitle}
+          onUnlocked={async (key) => {
             setVaultKey(key);
-            setActiveTab('vault');
+            if (pendingVaultMoveFiles.length > 0) {
+              const toMove = [...pendingVaultMoveFiles];
+              setPendingVaultMoveFiles([]);
+              setVaultModalConfig({});
+              await executeMoveToVault(toMove, key);
+            } else {
+              setActiveTab('vault');
+            }
           }}
           onUserUpdated={(updatedUser) => setCurrentUser(updatedUser)}
         />

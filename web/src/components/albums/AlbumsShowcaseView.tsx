@@ -21,6 +21,7 @@ import { AlbumEditModal } from './AlbumEditModal.js';
 interface AlbumsShowcaseViewProps {
   allMedia: FileItem[];
   vaultKey: CryptoKey | null;
+  onMoveToVault?: (files: FileItem[]) => void;
   initialSelectedMediaIds?: string[];
   externalSearchQuery?: string;
   externalDestination?: string;
@@ -33,6 +34,7 @@ interface AlbumsShowcaseViewProps {
 export const AlbumsShowcaseView: React.FC<AlbumsShowcaseViewProps> = ({
   allMedia,
   vaultKey,
+  onMoveToVault,
   initialSelectedMediaIds = [],
   externalSearchQuery,
   externalDestination,
@@ -206,6 +208,7 @@ export const AlbumsShowcaseView: React.FC<AlbumsShowcaseViewProps> = ({
         allMedia={allMedia}
         vaultKey={vaultKey}
         onAlbumUpdated={loadAlbums}
+        onMoveToVault={onMoveToVault}
       />
     );
   }
