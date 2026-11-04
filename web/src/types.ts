@@ -96,7 +96,7 @@ export interface PairedDeviceRule {
 export interface SyncLogEntry {
   timestamp: string;
   message: string;
-  level?: 'info' | 'processing' | 'uploaded' | 'duplicate' | 'revived' | 'error';
+  level?: 'info' | 'processing' | 'uploaded' | 'duplicate' | 'revived' | 'error' | 'idle';
   filename?: string | null;
   sizeBytes?: number | null;
   details?: string | null;

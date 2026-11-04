@@ -91,15 +91,19 @@ export async function requireDeviceAuth(req: Request, res: Response, next: NextF
       return;
     }
 
-    // Update device last-seen timestamp
+    // Update device last-seen timestamp efficiently without triggering full document validation
+    await Device.updateOne(
+      { _id: device._id },
+      { $set: { lastSeenAt: new Date(), status: 'online' } }
+    );
     device.lastSeenAt = new Date();
     device.status = 'online';
-    await device.save();
 
     req.user = user;
     req.device = device;
     next();
   } catch (error) {
+    console.error('[requireDeviceAuth Error]:', error);
     res.status(500).json({ error: 'Error during device authentication.' });
   }
 }

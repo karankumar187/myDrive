@@ -57,6 +57,7 @@ export const DeviceLogViewerModal: React.FC<Props> = ({
   const getLogSeverity = (entry: SyncLogEntry): 'info' | 'processing' | 'uploaded' | 'duplicate' | 'error' => {
     if (entry.level) {
       if (entry.level === 'revived') return 'uploaded';
+      if (entry.level === 'idle') return 'info';
       return entry.level;
     }
     const lower = (entry.message || '').toLowerCase();

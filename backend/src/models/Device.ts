@@ -129,7 +129,7 @@ const DeviceSchema = new Schema<IDeviceDocument>(
           message: { type: String, required: true },
           level: {
             type: String,
-            enum: ['info', 'processing', 'uploaded', 'duplicate', 'revived', 'error'],
+            enum: ['info', 'processing', 'uploaded', 'duplicate', 'revived', 'error', 'idle'],
             default: 'info',
           },
           filename: { type: String, default: null },
