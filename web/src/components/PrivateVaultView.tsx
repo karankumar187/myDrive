@@ -109,7 +109,7 @@ export const PrivateVaultView: React.FC<PrivateVaultViewProps> = ({
           if (!latestVer?.isEncrypted) {
             (async () => {
               try {
-                const streamUrl = `/api/v1/files/${f._id}/stream`;
+                const streamUrl = api.getStreamUrl(f._id);
                 const fetchRes = await fetch(streamUrl, {
                   headers: {
                     Authorization: `Bearer ${localStorage.getItem('drive_token') || ''}`,
@@ -267,7 +267,7 @@ export const PrivateVaultView: React.FC<PrivateVaultViewProps> = ({
   const handleDownloadDecrypted = async (file: DecryptedVaultFile) => {
     try {
       setDownloadingFileId(file._id);
-      const streamUrl = `/api/v1/files/${file._id}/stream`;
+      const streamUrl = api.getStreamUrl(file._id);
       const res = await fetch(streamUrl, {
         headers: {
           Authorization: `Bearer ${localStorage.getItem('drive_token') || ''}`,
@@ -312,7 +312,7 @@ export const PrivateVaultView: React.FC<PrivateVaultViewProps> = ({
       const version = file.versions?.[file.versions.length - 1];
       if (version?.isEncrypted && version?.iv) {
         // Download ciphertext, decrypt with vaultKey, and upload plaintext back to Google Drive
-        const streamUrl = `/api/v1/files/${file._id}/stream`;
+        const streamUrl = api.getStreamUrl(file._id);
         const res = await fetch(streamUrl, {
           headers: { Authorization: `Bearer ${localStorage.getItem('drive_token') || ''}` },
         });

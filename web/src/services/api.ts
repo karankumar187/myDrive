@@ -229,6 +229,11 @@ export const api = {
     return `${API_BASE}/files/${fileId}/preview${token ? `?token=${encodeURIComponent(token)}` : ''}`;
   },
 
+  getStreamUrl(fileId: string): string {
+    const token = getAuthToken();
+    return `${API_BASE}/files/${fileId}/stream${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+  },
+
   async updateThumbnail(fileId: string, thumbnail: string): Promise<any> {
     try {
       const res = await fetch(`${API_BASE}/files/${fileId}/thumbnail`, {
