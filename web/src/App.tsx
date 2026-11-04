@@ -18,6 +18,7 @@ import {
   FolderPlus,
   Lock,
   KeyRound,
+  Loader2,
 } from 'lucide-react';
 import { api, subscribeToProgress, startGlobalLoading, GlobalProgressState } from './services/api.js';
 import { getSocket, refreshSocketAuth } from './services/socket.js';
@@ -50,7 +51,29 @@ const TABS: Array<{ id: Tab; label: string; icon: React.ComponentType<{ classNam
 
 export const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [activeTab, setActiveTab] = useState<Tab>('dashboard');
+
+  // Restore vault tab if page was refreshed while viewing vault and timeout not expired
+  const [activeTab, setActiveTab] = useState<Tab>(() => {
+    try {
+      const savedTab = sessionStorage.getItem('drive_vault_active_tab');
+      const hasKey = sessionStorage.getItem('drive_vault_jwk');
+      const hiddenAtStr = sessionStorage.getItem('drive_vault_hidden_at');
+      if (hiddenAtStr) {
+        const elapsed = Date.now() - parseInt(hiddenAtStr, 10);
+        if (elapsed >= 30000) {
+          // Stored session has expired (inactive in background for >= 30s)
+          sessionStorage.removeItem('drive_vault_active_tab');
+          sessionStorage.removeItem('drive_vault_jwk');
+          sessionStorage.removeItem('drive_vault_hidden_at');
+          return 'dashboard';
+        }
+      }
+      if (savedTab === 'vault' && hasKey) {
+        return 'vault';
+      }
+    } catch {}
+    return 'dashboard';
+  });
   const [summary, setSummary] = useState<StorageSummary | null>(() => {
     try {
       const saved = localStorage.getItem('drive_cache_summary');
@@ -116,27 +139,120 @@ export const App: React.FC = () => {
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
   const [logModalDevice, setLogModalDevice] = useState<DeviceItem | null>(null);
 
-  // Restore active vault session key on refresh if available
-  useEffect(() => {
-    VaultCryptoService.restoreKeyFromSession().then((key) => {
-      if (key) setVaultKey(key);
-    });
+  const vaultInactiveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleLockVault = useCallback(() => {
+    if (vaultInactiveTimerRef.current) {
+      clearTimeout(vaultInactiveTimerRef.current);
+      vaultInactiveTimerRef.current = null;
+    }
+    setVaultKey(null);
+    VaultCryptoService.clearSessionKey();
+    sessionStorage.removeItem('drive_vault_active_tab');
+    sessionStorage.removeItem('drive_vault_hidden_at');
+    setActiveTab((curr) => (curr === 'vault' ? 'dashboard' : curr));
   }, []);
+
+  // Restore active vault session key on refresh if available and timeout not expired
+  useEffect(() => {
+    const hiddenAtStr = sessionStorage.getItem('drive_vault_hidden_at');
+    if (hiddenAtStr) {
+      const elapsed = Date.now() - parseInt(hiddenAtStr, 10);
+      if (elapsed >= 30000) {
+        handleLockVault();
+        return;
+      }
+    }
+
+    VaultCryptoService.restoreKeyFromSession().then((key) => {
+      if (key) {
+        setVaultKey(key);
+      } else if (activeTab === 'vault') {
+        handleLockVault();
+      }
+    });
+  }, [handleLockVault, activeTab]);
+
+  // Rule: If vault was opened and user moves to another page/tab, automatically lock it immediately!
+  const prevTabRef = useRef<Tab>(activeTab);
+  useEffect(() => {
+    const prev = prevTabRef.current;
+    prevTabRef.current = activeTab;
+
+    if (prev === 'vault' && activeTab !== 'vault') {
+      // User moved away from vault to another page -> lock vault immediately
+      if (vaultInactiveTimerRef.current) {
+        clearTimeout(vaultInactiveTimerRef.current);
+        vaultInactiveTimerRef.current = null;
+      }
+      setVaultKey(null);
+      VaultCryptoService.clearSessionKey();
+      sessionStorage.removeItem('drive_vault_active_tab');
+      sessionStorage.removeItem('drive_vault_hidden_at');
+    } else if (activeTab === 'vault') {
+      sessionStorage.setItem('drive_vault_active_tab', 'vault');
+    }
+  }, [activeTab]);
+
+  // Rule: Lock vault immediately after 30 seconds if page is inactive (tab switch, another app open, running in bg)
+  useEffect(() => {
+    const handleVaultVisibility = () => {
+      const hasVaultSession = vaultKey !== null || !!sessionStorage.getItem('drive_vault_jwk');
+      if (!hasVaultSession) return;
+
+      if (document.hidden) {
+        // Tab switched away or app moved to background -> start 30s timer
+        const now = Date.now();
+        sessionStorage.setItem('drive_vault_hidden_at', String(now));
+
+        if (vaultInactiveTimerRef.current) {
+          clearTimeout(vaultInactiveTimerRef.current);
+        }
+
+        vaultInactiveTimerRef.current = setTimeout(() => {
+          handleLockVault();
+        }, 30000);
+      } else {
+        // Tab became visible / app brought back to foreground
+        if (vaultInactiveTimerRef.current) {
+          clearTimeout(vaultInactiveTimerRef.current);
+          vaultInactiveTimerRef.current = null;
+        }
+
+        const hiddenAtStr = sessionStorage.getItem('drive_vault_hidden_at');
+        sessionStorage.removeItem('drive_vault_hidden_at');
+        if (hiddenAtStr) {
+          const elapsed = Date.now() - parseInt(hiddenAtStr, 10);
+          if (elapsed >= 30000) {
+            // Was inactive in background for >= 30 seconds -> lock immediately
+            handleLockVault();
+          }
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVaultVisibility);
+    window.addEventListener('pagehide', handleVaultVisibility);
+    window.addEventListener('pageshow', handleVaultVisibility);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVaultVisibility);
+      window.removeEventListener('pagehide', handleVaultVisibility);
+      window.removeEventListener('pageshow', handleVaultVisibility);
+      if (vaultInactiveTimerRef.current) {
+        clearTimeout(vaultInactiveTimerRef.current);
+      }
+    };
+  }, [vaultKey, handleLockVault]);
 
   const handleOpenVault = () => {
     setShowProfileMenu(false);
     if (vaultKey) {
+      sessionStorage.setItem('drive_vault_active_tab', 'vault');
+      sessionStorage.removeItem('drive_vault_hidden_at');
       setActiveTab('vault');
     } else {
       setIsVaultModalOpen(true);
-    }
-  };
-
-  const handleLockVault = () => {
-    setVaultKey(null);
-    VaultCryptoService.clearSessionKey();
-    if (activeTab === 'vault') {
-      setActiveTab('dashboard');
     }
   };
 
@@ -231,11 +347,6 @@ export const App: React.FC = () => {
     } else {
       setIsCheckingAuth(false);
     }
-
-    // Restore Vault key from session if previously unlocked
-    VaultCryptoService.restoreKeyFromSession().then((key) => {
-      if (key) setVaultKey(key);
-    });
   }, []);
 
   // Auto-lock when tab loses visibility (respects configured timeout)
@@ -908,11 +1019,18 @@ export const App: React.FC = () => {
           />
         )}
 
-        {activeTab === 'vault' && vaultKey && (
-          <PrivateVaultView
-            vaultKey={vaultKey}
-            onLockVault={handleLockVault}
-          />
+        {activeTab === 'vault' && (
+          vaultKey ? (
+            <PrivateVaultView
+              vaultKey={vaultKey}
+              onLockVault={handleLockVault}
+            />
+          ) : (
+            <div className="flex flex-col items-center justify-center min-h-[50vh] text-center">
+              <Loader2 className="w-7 h-7 animate-spin text-zinc-400 mb-2" />
+              <p className="text-xs text-zinc-400">Opening Private Vault…</p>
+            </div>
+          )
         )}
       </main>
 
@@ -948,6 +1066,8 @@ export const App: React.FC = () => {
           currentUser={currentUser}
           onUnlocked={(key) => {
             setVaultKey(key);
+            sessionStorage.setItem('drive_vault_active_tab', 'vault');
+            sessionStorage.removeItem('drive_vault_hidden_at');
             setActiveTab('vault');
           }}
           onUserUpdated={(updatedUser) => setCurrentUser(updatedUser)}
