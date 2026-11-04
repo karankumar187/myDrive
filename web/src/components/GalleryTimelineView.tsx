@@ -1153,7 +1153,7 @@ export const GalleryTimelineView: React.FC<Props> = ({
               onMoveToVault?.(selectedFiles);
               deselectAll();
             }}
-            className="w-8 h-8 rounded-full bg-amber-500/20 hover:bg-amber-500/35 border border-amber-500/40 text-amber-300 flex items-center justify-center transition active:scale-95 disabled:opacity-30 shrink-0 shadow-sm shadow-amber-500/10"
+            className="w-8 h-8 rounded-full bg-zinc-900/90 hover:bg-zinc-800 border border-zinc-800 text-zinc-300 hover:text-white flex items-center justify-center transition active:scale-95 disabled:opacity-30 shrink-0"
             title="Move to Secret Vault"
           >
             <Lock className="w-4 h-4" />

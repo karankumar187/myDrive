@@ -617,9 +617,9 @@ export const FolderExplorerView: React.FC<Props> = ({
             </button>
             <button
               onClick={() => { setContextMenuFileId(null); onMoveToVault?.([file]); }}
-              className="w-full flex items-center space-x-2.5 px-3.5 py-2 text-xs text-amber-300 hover:bg-amber-500/10 hover:text-amber-200 transition"
+              className="w-full flex items-center space-x-2.5 px-3.5 py-2 text-xs text-zinc-300 hover:bg-zinc-800 hover:text-white transition"
             >
-              <Lock className="w-3.5 h-3.5 text-amber-400" />
+              <Lock className="w-3.5 h-3.5 text-zinc-400" />
               <span>Move to Secret Vault</span>
             </button>
             <button
@@ -1068,7 +1068,7 @@ export const FolderExplorerView: React.FC<Props> = ({
               exitSelectionMode();
             }}
             disabled={selectedFileIds.size === 0}
-            className="w-8 h-8 rounded-full bg-amber-500/20 hover:bg-amber-500/35 border border-amber-500/40 text-amber-300 flex items-center justify-center transition active:scale-95 disabled:opacity-30 shrink-0 shadow-sm shadow-amber-500/10"
+            className="w-8 h-8 rounded-full bg-zinc-900/90 hover:bg-zinc-800 border border-zinc-800 text-zinc-300 hover:text-white flex items-center justify-center transition active:scale-95 disabled:opacity-30 shrink-0"
             title="Move selected to Secret Vault"
           >
             <Lock className="w-4 h-4" />

@@ -753,13 +753,13 @@ export const App: React.FC = () => {
                     {/* Secret Private Vault Option */}
                     <button
                       onClick={handleOpenVault}
-                      className="w-full flex items-center space-x-2 px-3 py-2 text-xs text-zinc-300 hover:bg-amber-500/10 hover:text-amber-300 rounded-xl transition group"
+                      className="w-full flex items-center space-x-2 px-3 py-2 text-xs text-zinc-300 hover:bg-zinc-800 hover:text-white rounded-xl transition group"
                     >
-                      <Lock className="w-3.5 h-3.5 text-amber-400 group-hover:scale-110 transition-transform" />
+                      <Lock className="w-3.5 h-3.5 text-zinc-400 group-hover:text-white group-hover:scale-110 transition-transform" />
                       <span className="font-medium">Private Vault</span>
                       {vaultKey ? (
-                        <span className="ml-auto text-[9px] font-bold text-amber-400 bg-amber-500/15 border border-amber-500/30 px-1.5 py-0.5 rounded-full flex items-center gap-1">
-                          <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+                        <span className="ml-auto text-[9px] font-semibold text-zinc-300 bg-zinc-800 border border-zinc-700 px-1.5 py-0.5 rounded-full flex items-center gap-1">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
                           OPEN
                         </span>
                       ) : (

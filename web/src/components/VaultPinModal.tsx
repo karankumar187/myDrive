@@ -171,11 +171,11 @@ export const VaultPinModal: React.FC<VaultPinModalProps> = ({
 
       {/* Modal Dialog */}
       <div
-        className={`relative w-full max-w-sm rounded-3xl bg-[#121217] border border-amber-500/25 p-7 shadow-2xl z-10 text-white transition-all transform animate-in zoom-in-95 ${
+        className={`relative w-full max-w-sm rounded-3xl bg-[#101013] border border-zinc-800 p-7 shadow-2xl z-10 text-white transition-all transform animate-in zoom-in-95 ${
           shake ? 'animate-shake' : ''
         }`}
         style={{
-          boxShadow: '0 0 50px -10px rgba(245, 158, 11, 0.15), 0 25px 50px -12px rgba(0, 0, 0, 0.85)',
+          boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.85)',
         }}
       >
         {/* Close Button */}
@@ -188,50 +188,50 @@ export const VaultPinModal: React.FC<VaultPinModalProps> = ({
 
         {/* Vault Header Icon */}
         <div className="flex flex-col items-center text-center">
-          <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-amber-600/30 to-yellow-500/10 border border-amber-500/30 flex items-center justify-center mb-4 text-amber-400 shadow-lg shadow-amber-500/10">
+          <div className="w-12 h-12 rounded-2xl bg-zinc-900 border border-zinc-800 flex items-center justify-center mb-3.5 text-zinc-300">
             {isProcessing ? (
-              <Loader2 className="w-7 h-7 animate-spin text-amber-400" />
+              <Loader2 className="w-6 h-6 animate-spin text-zinc-400" />
             ) : isSetupMode ? (
-              <KeyRound className="w-7 h-7 text-amber-400" />
+              <KeyRound className="w-6 h-6 text-zinc-300" />
             ) : (
-              <Lock className="w-7 h-7 text-amber-400" />
+              <Lock className="w-6 h-6 text-zinc-300" />
             )}
           </div>
 
-          <h2 className="text-lg font-bold text-white tracking-wide">
+          <h2 className="text-base font-bold text-white tracking-wide">
             {title ||
               (isSetupMode
                 ? setupStep === 1
-                  ? 'Create 4-Digit Vault PIN'
-                  : 'Confirm 4-Digit PIN'
+                ? 'Create 4-Digit Vault PIN'
+                : 'Confirm 4-Digit PIN'
                 : 'Unlock Private Vault')}
           </h2>
 
-          <p className="text-xs text-zinc-400 mt-1.5 max-w-[260px] leading-relaxed">
+          <p className="text-xs text-zinc-400 mt-1 max-w-[260px] leading-relaxed">
             {subtitle ||
               (isSetupMode
                 ? setupStep === 1
-                  ? 'Choose a 4-digit PIN. Your vault is zero-knowledge encrypted and can only be opened with this PIN.'
+                  ? 'Choose a 4-digit PIN to access your zero-knowledge private vault.'
                   : 'Please re-enter your 4-digit PIN to confirm setup.'
-                : 'Enter your 4-digit secret PIN to decrypt your zero-knowledge private vault.')}
+                : 'Enter your 4-digit secret PIN to unlock the private vault.')}
           </p>
 
-          <div className="mt-3 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 text-[10px] font-semibold text-amber-300">
-            <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
-            <span>Zero-Knowledge • AES-256-GCM</span>
+          <div className="mt-2.5 inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-zinc-800/80 border border-zinc-700/80 text-[10px] font-medium text-zinc-400">
+            <span className="w-1.5 h-1.5 rounded-full bg-zinc-400 animate-pulse" />
+            <span>Zero-Knowledge • AES-256</span>
           </div>
         </div>
 
         {/* 4-Digit Indicator Dots */}
-        <div className="flex justify-center items-center gap-4 my-7">
+        <div className="flex justify-center items-center gap-4 my-6">
           {[0, 1, 2, 3].map((index) => {
             const isFilled = pin.length > index;
             return (
               <div
                 key={index}
-                className={`w-4 h-4 rounded-full transition-all duration-200 transform ${
+                className={`w-3.5 h-3.5 rounded-full transition-all duration-200 transform ${
                   isFilled
-                    ? 'bg-amber-400 scale-125 shadow-[0_0_12px_rgba(251,191,36,0.8)]'
+                    ? 'bg-white scale-125 shadow-[0_0_8px_rgba(255,255,255,0.6)]'
                     : 'bg-zinc-800 border border-zinc-700/80'
                 }`}
               />
@@ -248,13 +248,13 @@ export const VaultPinModal: React.FC<VaultPinModalProps> = ({
         )}
 
         {/* Numeric Keypad */}
-        <div className="grid grid-cols-3 gap-3 max-w-[240px] mx-auto">
+        <div className="grid grid-cols-3 gap-2.5 max-w-[240px] mx-auto">
           {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map((digit) => (
             <button
               key={digit}
               onClick={() => handleDigit(digit)}
               disabled={isProcessing}
-              className="h-14 rounded-2xl bg-zinc-900/80 hover:bg-amber-500/15 border border-zinc-800 hover:border-amber-500/30 text-lg font-semibold text-zinc-100 hover:text-amber-300 active:scale-95 transition-all flex items-center justify-center select-none"
+              className="h-13 rounded-2xl bg-zinc-900/80 hover:bg-zinc-800 border border-zinc-800 hover:border-zinc-700 text-lg font-semibold text-zinc-100 hover:text-white active:scale-95 transition-all flex items-center justify-center select-none"
             >
               {digit}
             </button>
@@ -267,7 +267,7 @@ export const VaultPinModal: React.FC<VaultPinModalProps> = ({
               setError('');
             }}
             disabled={isProcessing || pin.length === 0}
-            className="h-14 rounded-2xl bg-zinc-900/40 hover:bg-zinc-800 text-xs font-semibold text-zinc-400 hover:text-zinc-200 active:scale-95 transition-all flex items-center justify-center select-none disabled:opacity-30 disabled:pointer-events-none"
+            className="h-13 rounded-2xl bg-zinc-900/40 hover:bg-zinc-800/80 border border-transparent hover:border-zinc-800 text-xs font-semibold text-zinc-400 hover:text-zinc-200 active:scale-95 transition-all flex items-center justify-center select-none disabled:opacity-30 disabled:pointer-events-none"
           >
             Clear
           </button>
@@ -276,7 +276,7 @@ export const VaultPinModal: React.FC<VaultPinModalProps> = ({
           <button
             onClick={() => handleDigit('0')}
             disabled={isProcessing}
-            className="h-14 rounded-2xl bg-zinc-900/80 hover:bg-amber-500/15 border border-zinc-800 hover:border-amber-500/30 text-lg font-semibold text-zinc-100 hover:text-amber-300 active:scale-95 transition-all flex items-center justify-center select-none"
+            className="h-13 rounded-2xl bg-zinc-900/80 hover:bg-zinc-800 border border-zinc-800 hover:border-zinc-700 text-lg font-semibold text-zinc-100 hover:text-white active:scale-95 transition-all flex items-center justify-center select-none"
           >
             0
           </button>
@@ -285,7 +285,7 @@ export const VaultPinModal: React.FC<VaultPinModalProps> = ({
           <button
             onClick={handleDelete}
             disabled={isProcessing || pin.length === 0}
-            className="h-14 rounded-2xl bg-zinc-900/40 hover:bg-zinc-800 text-zinc-300 hover:text-white active:scale-95 transition-all flex items-center justify-center select-none disabled:opacity-30 disabled:pointer-events-none"
+            className="h-13 rounded-2xl bg-zinc-900/40 hover:bg-zinc-800/80 border border-transparent hover:border-zinc-800 text-zinc-300 hover:text-white active:scale-95 transition-all flex items-center justify-center select-none disabled:opacity-30 disabled:pointer-events-none"
             aria-label="Backspace"
           >
             <Delete className="w-5 h-5" />

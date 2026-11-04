@@ -485,9 +485,9 @@ export const FullScreenViewer: React.FC<FullScreenViewerProps> = ({
                       setIsOptionsOpen(false);
                       onMoveToVault();
                     }}
-                    className="w-full px-4 py-2.5 text-left flex items-center space-x-2 text-amber-300 hover:bg-amber-500/10 hover:text-amber-200"
+                    className="w-full px-4 py-2.5 text-left flex items-center space-x-2 text-zinc-300 hover:bg-zinc-800 hover:text-white"
                   >
-                    <Lock className="w-4 h-4 text-amber-400" />
+                    <Lock className="w-4 h-4 text-zinc-400" />
                     <span>Move to Secret Vault</span>
                   </button>
                 )}
