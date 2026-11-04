@@ -423,9 +423,11 @@ export class ShortcutController {
         return;
       }
 
-      // Checkpoint date: strictly uses device.lastSyncedPhotoDate checkpoint (defaults to 2000-01-01 if null/reset)
+      // Rewind checkpoint by 2 seconds to guarantee photos taken in the exact same second
+      // (e.g. burst shots or rapid captures) are never skipped by Apple's strict "Creation Date is after" filter.
+      // Any overlapping photo is resolved in ~5ms by SHA-256 deduplication without re-uploading bytes.
       const lastSyncedDate = req.device.lastSyncedPhotoDate
-        ? req.device.lastSyncedPhotoDate.toISOString()
+        ? new Date(Math.max(0, req.device.lastSyncedPhotoDate.getTime() - 2000)).toISOString()
         : '2000-01-01T00:00:00.000Z';
 
       // Record sync start in Device document
