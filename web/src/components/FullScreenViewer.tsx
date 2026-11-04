@@ -72,7 +72,11 @@ export const FullScreenViewer: React.FC<FullScreenViewerProps> = ({
   const item = mediaList[currentIndex];
   if (!item) return null;
 
-  const isVideo = isVideoFile(item.mimeType) || isVideoFile(item.filename);
+  const displayName = (item as any).decryptedFilename || item.filename || '';
+  const displayMime = (item as any).decryptedMimeType || item.mimeType || '';
+  const displaySize = (item as any).decryptedSize || item.sizeBytes || 0;
+  const isVideo = isVideoFile(displayMime) || isVideoFile(displayName);
+  const isVaultItem = (item as any).isVault || !!vaultKey;
   const [showControls, setShowControls] = useState(true);
   const [isOptionsOpen, setIsOptionsOpen] = useState(false);
   const [scale, setScale] = useState(1);
@@ -87,11 +91,12 @@ export const FullScreenViewer: React.FC<FullScreenViewerProps> = ({
 
   // Optimistic UI: Derive current item's thumbnail to display instantaneously during left/right navigation
   const itemThumbnailUrl = useMemo(() => {
-    if (item.metadata?.thumbnail && item.metadata.thumbnail.startsWith('data:image/')) {
-      return item.metadata.thumbnail;
+    const decThumb = (item as any).decryptedThumbnail || item.metadata?.thumbnail;
+    if (decThumb && decThumb.startsWith('data:image/')) {
+      return decThumb;
     }
     return mediaCache.getThumbnail(item._id) || mediaCache.get(item._id) || api.getThumbnailUrl(item._id);
-  }, [item._id, item.metadata?.thumbnail]);
+  }, [item._id, item.metadata?.thumbnail, (item as any).decryptedThumbnail]);
 
   const [globalProgress, setGlobalProgress] = useState<GlobalProgressState>({
     progress: 0,
@@ -158,44 +163,21 @@ export const FullScreenViewer: React.FC<FullScreenViewerProps> = ({
     indicesToPreload.forEach((idx) => {
       const m = mediaList[idx];
       if (!m) return;
-      const isMVideo = isVideoFile(m.mimeType) || isVideoFile(m.filename);
+      const mFilename = (m as any).decryptedFilename || m.filename || '';
+      const mMime = (m as any).decryptedMimeType || m.mimeType || '';
+      const isMVideo = isVideoFile(mMime) || isVideoFile(mFilename);
+      const mIsVault = (m as any).isVault || !!vaultKey;
 
-      // 1. Preload thumbnail immediately for instant placeholder display
-      const thumbUrl =
-        m.metadata?.thumbnail && m.metadata.thumbnail.startsWith('data:image/')
-          ? m.metadata.thumbnail
-          : mediaCache.getThumbnail(m._id) || api.getThumbnailUrl(m._id);
-      if (thumbUrl && !thumbUrl.startsWith('data:')) {
-        const tImg = new Image();
-        tImg.src = thumbUrl;
-      }
+      // 1. If thumbnail / decrypted preview is already in RAM (base64 Data URL), 0ms - no network needed!
+      const decThumb = (m as any).decryptedThumbnail || (m.metadata as any)?.thumbnail;
+      if (decThumb) return;
 
-      // 2. Preload web-optimized preview image if not a video (~250KB WebP)
-      if (!isMVideo) {
+      // 2. Preload web-optimized preview image if not a video (~250KB WebP) for normal gallery images
+      if (!isMVideo && !mIsVault) {
         const previewUrl = getPreviewUrl(m._id);
-        const streamUrl = getStreamUrl(m._id);
         const fImg = new Image();
         fImg.src = previewUrl;
-
-        // 3. Pre-decrypt into memory cache if vault key is active for immediate neighbors
-        const distance = Math.abs(idx - currentIndex);
-        if (vaultKey && distance <= 2 && !mediaCache.has(m._id)) {
-          const version = m.versions?.[m.versions.length - 1];
-          if (version?.isEncrypted && version?.iv) {
-            fetch(streamUrl)
-              .then((res) => {
-                if (res.ok) return res.arrayBuffer();
-                throw new Error('Preload fetch failed');
-              })
-              .then((ciphertext) => VaultCryptoService.decryptBuffer(ciphertext, version.iv!, vaultKey))
-              .then((decrypted) => {
-                const blobUrl = URL.createObjectURL(new Blob([decrypted], { type: m.mimeType }));
-                mediaCache.set(m._id, blobUrl);
-              })
-              .catch(() => {});
-          }
-        }
-      } else {
+      } else if (isMVideo) {
         // Pre-warm video cache on server for immediate neighbor videos (distance <= 2)
         const distance = Math.abs(idx - currentIndex);
         if (distance <= 2) {
@@ -229,14 +211,16 @@ export const FullScreenViewer: React.FC<FullScreenViewerProps> = ({
     const decThumb = (item as any).decryptedThumbnail || (item.metadata as any)?.thumbnail;
     const effectiveMime = (item as any).decryptedMimeType || (item.mimeType && item.mimeType !== 'application/octet-stream' ? item.mimeType : 'image/jpeg');
 
-    // Fast Path 1: If decrypted thumbnail / preview is available in RAM, display it INSTANTLY (0ms)
+    // Fast Path 1: If decrypted thumbnail / WebP preview is available in RAM, display it INSTANTLY (0ms)
+    // Exactly like normal gallery images, we display the web-optimized preview with 0 lag and 0 network buffering!
     if (decThumb && !isVideo) {
       setFullUrl(decThumb);
       setIsImageLoaded(true);
       setLoading(false);
+      return; // Do NOT fetch the 10-50MB uncompressed raw file!
     }
 
-    // Check memory cache second
+    // Check memory cache second (e.g. if already decrypted previously when zooming)
     const mem = mediaCache.get(item._id);
     if (mem && !mem.startsWith('data:image')) {
       setFullUrl(mem);
@@ -245,8 +229,9 @@ export const FullScreenViewer: React.FC<FullScreenViewerProps> = ({
       return;
     }
 
+    // Normal (non-vault) images: fetch web-optimized preview
     if (!isEncrypted || !vaultKey) {
-      if ((item as any).isVault) {
+      if (isVaultItem) {
         if (!decThumb) setFullUrl(streamUrl);
       } else {
         setFullUrl(previewUrl);
@@ -255,7 +240,7 @@ export const FullScreenViewer: React.FC<FullScreenViewerProps> = ({
       return;
     }
 
-    // Decrypt E2EE media if vaultKey provided
+    // Decrypt E2EE media if vaultKey provided (ONLY needed for videos or images that lack a thumbnail preview)
     const decryptMedia = async () => {
       try {
         const res = await fetch(streamUrl);
@@ -263,7 +248,7 @@ export const FullScreenViewer: React.FC<FullScreenViewerProps> = ({
         const ciphertext = await res.arrayBuffer();
         if (!version?.iv) {
           if (active && !decThumb) {
-            setFullUrl((item as any).isVault ? streamUrl : previewUrl);
+            setFullUrl(isVaultItem ? streamUrl : previewUrl);
             setLoading(false);
           }
           return;
@@ -282,7 +267,7 @@ export const FullScreenViewer: React.FC<FullScreenViewerProps> = ({
             setFullUrl(decThumb);
             setIsImageLoaded(true);
             setLoading(false);
-          } else if (!(item as any).isVault) {
+          } else if (!isVaultItem) {
             setFullUrl(previewUrl);
             setLoading(false);
           } else {
@@ -303,10 +288,33 @@ export const FullScreenViewer: React.FC<FullScreenViewerProps> = ({
   useEffect(() => {
     if (scale > 1.2 && !isVideo) {
       const version = item.versions?.[item.versions.length - 1];
-      if (!version?.isEncrypted && !vaultKey) {
+      const isEncrypted = !!version?.isEncrypted;
+
+      if (!isEncrypted && !vaultKey) {
         const streamUrl = getStreamUrl(item._id);
         if (fullUrl && fullUrl !== streamUrl) {
           setFullUrl(streamUrl);
+        }
+      } else if (vaultKey && isEncrypted && version?.iv) {
+        // Only if user explicitly zooms in past 1.2x do we lazy-fetch the full uncompressed stream for vault
+        const mem = mediaCache.get(item._id);
+        if (mem && !mem.startsWith('data:image')) {
+          if (fullUrl !== mem) setFullUrl(mem);
+        } else {
+          const streamUrl = getStreamUrl(item._id);
+          const effectiveMime = (item as any).decryptedMimeType || (item.mimeType && item.mimeType !== 'application/octet-stream' ? item.mimeType : 'image/jpeg');
+          fetch(streamUrl)
+            .then((res) => {
+              if (res.ok) return res.arrayBuffer();
+              throw new Error('Zoom stream fetch failed');
+            })
+            .then((ciphertext) => VaultCryptoService.decryptBuffer(ciphertext, version.iv!, vaultKey))
+            .then((decrypted) => {
+              const blobUrl = URL.createObjectURL(new Blob([decrypted], { type: effectiveMime }));
+              mediaCache.set(item._id, blobUrl);
+              setFullUrl(blobUrl);
+            })
+            .catch(() => {});
         }
       }
     }
@@ -339,24 +347,94 @@ export const FullScreenViewer: React.FC<FullScreenViewerProps> = ({
   };
 
   const [isSharingDownloading, setIsSharingDownloading] = useState(false);
+
+  const handleDownloadMedia = async (e?: React.MouseEvent) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    if (vaultKey) {
+      try {
+        setLoading(true);
+        const cachedBlobUrl = mediaCache.get(item._id);
+        if (cachedBlobUrl && !cachedBlobUrl.startsWith('data:')) {
+          const a = document.createElement('a');
+          a.href = cachedBlobUrl;
+          a.download = displayName || 'download';
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          return;
+        }
+
+        const streamUrl = getStreamUrl(item._id);
+        const res = await fetch(streamUrl);
+        if (!res.ok) throw new Error('Download failed');
+        const ciphertext = await res.arrayBuffer();
+        const version = item.versions?.[item.versions.length - 1];
+        const iv = version?.iv;
+        const fileBuffer = (iv && version?.isEncrypted)
+          ? await VaultCryptoService.decryptBuffer(ciphertext, iv, vaultKey)
+          : ciphertext;
+        const blob = new Blob([fileBuffer], { type: displayMime || 'application/octet-stream' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = displayName || 'download';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      } catch (err: any) {
+        alert(`Failed to decrypt download: ${err.message}`);
+      } finally {
+        setLoading(false);
+      }
+    } else {
+      const a = document.createElement('a');
+      a.href = getStreamUrl(item._id);
+      a.download = displayName || item.filename || 'download';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    }
+  };
+
   const handleShare = async () => {
     const streamUrl = getStreamUrl(item._id);
     try {
       setIsSharingDownloading(true);
       if (typeof navigator !== 'undefined' && navigator.canShare) {
         try {
-          const res = await fetch(streamUrl);
-          if (res.ok) {
-            const blob = await res.blob();
-            const file = new File([blob], item.filename, {
-              type: item.mimeType || blob.type || 'image/jpeg',
-            });
-            if (navigator.canShare({ files: [file] })) {
-              await navigator.share({
-                files: [file],
-                title: item.filename,
+          if (vaultKey && fullUrl) {
+            const res = await fetch(fullUrl);
+            if (res.ok) {
+              const blob = await res.blob();
+              const file = new File([blob], displayName, {
+                type: displayMime || blob.type || 'image/jpeg',
               });
-              return;
+              if (navigator.canShare({ files: [file] })) {
+                await navigator.share({
+                  files: [file],
+                  title: displayName,
+                });
+                return;
+              }
+            }
+          } else {
+            const res = await fetch(streamUrl);
+            if (res.ok) {
+              const blob = await res.blob();
+              const file = new File([blob], displayName, {
+                type: displayMime || blob.type || 'image/jpeg',
+              });
+              if (navigator.canShare({ files: [file] })) {
+                await navigator.share({
+                  files: [file],
+                  title: displayName,
+                });
+                return;
+              }
             }
           }
         } catch (_) {}
@@ -364,7 +442,7 @@ export const FullScreenViewer: React.FC<FullScreenViewerProps> = ({
 
       if (navigator.share) {
         await navigator.share({
-          title: item.filename,
+          title: displayName,
           url: streamUrl,
         });
       } else {
@@ -417,9 +495,9 @@ export const FullScreenViewer: React.FC<FullScreenViewerProps> = ({
             <ChevronLeft className="w-6 h-6" />
           </button>
           <div>
-            <p className="text-sm font-semibold truncate max-w-[200px] sm:max-w-md">{item.filename}</p>
+            <p className="text-sm font-semibold truncate max-w-[200px] sm:max-w-md">{displayName}</p>
             <p className="text-[11px] text-zinc-400">
-              {currentIndex + 1} of {mediaList.length} • {formatBytes(item.sizeBytes)}
+              {currentIndex + 1} of {mediaList.length} • {formatBytes(displaySize)}
             </p>
           </div>
         </div>
@@ -622,7 +700,7 @@ export const FullScreenViewer: React.FC<FullScreenViewerProps> = ({
               <img
                 key={`thumb-${item._id}`}
                 src={itemThumbnailUrl}
-                alt={item.filename}
+                alt={displayName}
                 style={{
                   transform: `scale(${scale}) rotate(${rotation}deg)`,
                   transition: 'transform 0.2s ease-out',
@@ -636,7 +714,7 @@ export const FullScreenViewer: React.FC<FullScreenViewerProps> = ({
               <img
                 key={`full-${item._id}`}
                 src={fullUrl}
-                alt={item.filename}
+                alt={displayName}
                 onLoad={() => {
                   setIsImageLoaded(true);
                   setLoading(false);
@@ -650,7 +728,7 @@ export const FullScreenViewer: React.FC<FullScreenViewerProps> = ({
                     return;
                   }
                   const streamUrl = getStreamUrl(item._id);
-                  if (fullUrl && fullUrl !== streamUrl && !(item as any).isVault) {
+                  if (fullUrl && fullUrl !== streamUrl && !isVaultItem) {
                     setFullUrl(streamUrl);
                   } else {
                     setIsImageLoaded(false);
@@ -682,25 +760,34 @@ export const FullScreenViewer: React.FC<FullScreenViewerProps> = ({
             <div className="flex flex-wrap items-center justify-center gap-2">
               <button
                 onClick={() => {
+                  const decThumb = (item as any).decryptedThumbnail || (item.metadata as any)?.thumbnail;
                   setImgError(false);
                   setIsImageLoaded(false);
                   setLoading(true);
-                  setFullUrl(`${getStreamUrl(item._id)}&retry=${Date.now()}`);
+                  if (decThumb) {
+                    setFullUrl(decThumb);
+                    setIsImageLoaded(true);
+                    setLoading(false);
+                  } else {
+                    setFullUrl(`${getStreamUrl(item._id)}&retry=${Date.now()}`);
+                  }
                 }}
                 className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white text-xs font-semibold rounded-lg transition"
               >
                 Retry
               </button>
-              <a
-                href={getStreamUrl(item._id)}
-                download={item.filename}
+              <button
+                onClick={handleDownloadMedia}
                 className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-semibold rounded-lg flex items-center space-x-1.5 transition"
               >
                 <Download className="w-3.5 h-3.5" />
                 <span>Download</span>
-              </a>
+              </button>
               <button
-                onClick={() => window.open(getStreamUrl(item._id), '_blank')}
+                onClick={() => {
+                  if (fullUrl) window.open(fullUrl, '_blank');
+                  else window.open(getStreamUrl(item._id), '_blank');
+                }}
                 className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-semibold rounded-lg transition"
               >
                 Open in New Tab
@@ -731,16 +818,15 @@ export const FullScreenViewer: React.FC<FullScreenViewerProps> = ({
         )}
 
         {/* Download */}
-        <a
-          href={getStreamUrl(item._id)}
-          download={item.filename}
+        <button
+          onClick={handleDownloadMedia}
           className="flex flex-col items-center space-y-1 text-white hover:text-purple-400 transition group active:scale-90"
         >
           <div className="p-2 rounded-full group-hover:bg-white/10">
             <Download className="w-5 h-5" />
           </div>
           <span className="text-[10px] text-zinc-400 group-hover:text-white">Download</span>
-        </a>
+        </button>
 
         {/* Share */}
         <button
@@ -802,9 +888,13 @@ export const FullScreenViewer: React.FC<FullScreenViewerProps> = ({
 // Photo Details Modal
 // ----------------------------------------------------
 export const PhotoDetailsModal: React.FC<{ item: FileItem; onClose: () => void }> = ({ item, onClose }) => {
-  const dateFormatted = formatDate(item.metadata?.takenAt || item.createdAt);
-  const sizeFormatted = formatBytes(item.sizeBytes);
-  const mimeFormatted = item.mimeType.replace(/^image\//, '').replace(/^video\//, '').toUpperCase();
+  const effFilename = (item as any).decryptedFilename || item.filename;
+  const effMime = (item as any).decryptedMimeType || item.mimeType;
+  const effSize = (item as any).decryptedSize || item.sizeBytes;
+  const effDate = (item as any).decryptedTakenAt || item.metadata?.takenAt || item.createdAt;
+  const dateFormatted = formatDate(effDate);
+  const sizeFormatted = formatBytes(effSize);
+  const mimeFormatted = effMime.replace(/^image\//, '').replace(/^video\//, '').toUpperCase();
   const resolution =
     item.metadata?.width && item.metadata?.height
       ? `${item.metadata.width} × ${item.metadata.height}`
@@ -830,7 +920,7 @@ export const PhotoDetailsModal: React.FC<{ item: FileItem; onClose: () => void }
         <div className="space-y-4 text-xs">
           <div>
             <p className="text-zinc-500 font-semibold text-[11px]">Filename</p>
-            <p className="text-white font-bold text-sm truncate mt-0.5">{item.filename}</p>
+            <p className="text-white font-bold text-sm truncate mt-0.5">{effFilename}</p>
           </div>
 
           <div className="grid grid-cols-2 gap-4">

@@ -2189,7 +2189,7 @@ export class FileController {
         isTrash: false,
         isVault: true,
       })
-        .select('_id filename mimeType sizeBytes createdAt metadata isEncrypted versions encryptedMeta isFavorite')
+        .select('_id filename mimeType sizeBytes createdAt metadata isEncrypted versions encryptedMeta isFavorite isVault')
         .sort({ createdAt: -1 })
         .lean();
 

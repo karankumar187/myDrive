@@ -130,6 +130,7 @@ export const PrivateVaultView: React.FC<PrivateVaultViewProps> = ({
 
           return {
             ...f,
+            isVault: true,
             decryptedFilename: decName,
             decryptedMimeType: decMime,
             decryptedSize: decSize,
@@ -164,6 +165,33 @@ export const PrivateVaultView: React.FC<PrivateVaultViewProps> = ({
       ]);
 
       try {
+        // Step 0: Generate client-side 1024px WebP preview thumbnail for images (0ms instant gallery preview)
+        let thumbnailDataUrl: string | undefined = undefined;
+        if (file.type.startsWith('image/')) {
+          try {
+            const bitmap = await createImageBitmap(file);
+            const maxDim = 1024;
+            let { width, height } = bitmap;
+            if (width > maxDim || height > maxDim) {
+              if (width > height) {
+                height = Math.round((height * maxDim) / width);
+                width = maxDim;
+              } else {
+                width = Math.round((width * maxDim) / height);
+                height = maxDim;
+              }
+            }
+            const canvas = document.createElement('canvas');
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            if (ctx) {
+              ctx.drawImage(bitmap, 0, 0, width, height);
+              thumbnailDataUrl = canvas.toDataURL('image/webp', 0.8);
+            }
+          } catch {}
+        }
+
         // Step 1: Read file and encrypt with AES-256-GCM in browser RAM
         const arrayBuffer = await file.arrayBuffer();
         const { encryptedBlob, ivHex } = await VaultCryptoService.encryptBuffer(arrayBuffer, vaultKey);
@@ -176,12 +204,13 @@ export const PrivateVaultView: React.FC<PrivateVaultViewProps> = ({
         const encryptedBuffer = await encryptedBlob.arrayBuffer();
         const contentHash = await VaultCryptoService.calculateSha256(encryptedBuffer);
 
-        // Step 3: Encrypt metadata (original filename, mime, size, timestamp)
+        // Step 3: Encrypt metadata (original filename, mime, size, timestamp, thumbnail preview)
         const metaPayload = {
           originalFilename: file.name,
           originalMimeType: file.type || 'application/octet-stream',
           originalSize: file.size,
           takenAt: new Date(file.lastModified || Date.now()).toISOString(),
+          thumbnail: thumbnailDataUrl,
         };
         const encryptedMeta = await VaultCryptoService.encryptMetadata(metaPayload, vaultKey);
 
