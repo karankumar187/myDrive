@@ -140,25 +140,28 @@ export const App: React.FC = () => {
     }
   };
 
-  // Move files to Zero-Knowledge Secret Vault workflow
-  const [pendingVaultMoveFiles, setPendingVaultMoveFiles] = useState<FileItem[]>([]);
-  const [vaultModalConfig, setVaultModalConfig] = useState<{ title?: string; subtitle?: string }>({});
+  // Move files to Zero-Knowledge Secret Vault (no PIN required when moving in; PIN only asked on opening)
+  const handleMoveFilesToVault = async (filesToMove: FileItem[]) => {
+    if (!filesToMove || filesToMove.length === 0) return;
 
-  const executeMoveToVault = async (filesToMove: FileItem[], activeKey: CryptoKey) => {
     try {
       const stopProgress = startGlobalLoading('sync');
-      const encryptedMetaMap: Record<string, string> = {};
+      let encryptedMetaMap: Record<string, string> | undefined = undefined;
 
-      for (const f of filesToMove) {
-        const metaPayload = {
-          originalFilename: f.filename,
-          originalMimeType: f.mimeType,
-          originalSize: f.sizeBytes,
-          takenAt: f.metadata?.takenAt || f.createdAt,
-          thumbnail: f.metadata?.thumbnail,
-        };
-        const encStr = await VaultCryptoService.encryptMetadata(metaPayload, activeKey);
-        encryptedMetaMap[f._id] = encStr;
+      // If vault happens to be already unlocked in this session, encrypt metadata now
+      if (vaultKey) {
+        encryptedMetaMap = {};
+        for (const f of filesToMove) {
+          const metaPayload = {
+            originalFilename: f.filename,
+            originalMimeType: f.mimeType,
+            originalSize: f.sizeBytes,
+            takenAt: f.metadata?.takenAt || f.createdAt,
+            thumbnail: f.metadata?.thumbnail,
+          };
+          const encStr = await VaultCryptoService.encryptMetadata(metaPayload, vaultKey);
+          encryptedMetaMap[f._id] = encStr;
+        }
       }
 
       const fileIds = filesToMove.map((f) => f._id);
@@ -175,21 +178,6 @@ export const App: React.FC = () => {
       loadDashboardData();
     } catch (err: any) {
       alert(`Failed to move files to Secret Vault: ${err.message}`);
-    }
-  };
-
-  const handleMoveFilesToVault = async (filesToMove: FileItem[]) => {
-    if (!filesToMove || filesToMove.length === 0) return;
-
-    if (vaultKey) {
-      await executeMoveToVault(filesToMove, vaultKey);
-    } else {
-      setPendingVaultMoveFiles(filesToMove);
-      setVaultModalConfig({
-        title: 'Unlock Secret Vault',
-        subtitle: `Enter your 4-digit PIN to encrypt and move ${filesToMove.length} item${filesToMove.length > 1 ? 's' : ''} to Secret Vault.`,
-      });
-      setIsVaultModalOpen(true);
     }
   };
 
@@ -956,24 +944,11 @@ export const App: React.FC = () => {
       {currentUser && (
         <VaultPinModal
           isOpen={isVaultModalOpen}
-          onClose={() => {
-            setIsVaultModalOpen(false);
-            setPendingVaultMoveFiles([]);
-            setVaultModalConfig({});
-          }}
+          onClose={() => setIsVaultModalOpen(false)}
           currentUser={currentUser}
-          title={vaultModalConfig.title}
-          subtitle={vaultModalConfig.subtitle}
-          onUnlocked={async (key) => {
+          onUnlocked={(key) => {
             setVaultKey(key);
-            if (pendingVaultMoveFiles.length > 0) {
-              const toMove = [...pendingVaultMoveFiles];
-              setPendingVaultMoveFiles([]);
-              setVaultModalConfig({});
-              await executeMoveToVault(toMove, key);
-            } else {
-              setActiveTab('vault');
-            }
+            setActiveTab('vault');
           }}
           onUserUpdated={(updatedUser) => setCurrentUser(updatedUser)}
         />

@@ -88,6 +88,20 @@ export const PrivateVaultView: React.FC<PrivateVaultViewProps> = ({
             } catch (err) {
               console.warn('Failed to decrypt metadata for file', f._id, err);
             }
+          } else {
+            // File was moved into the vault without PIN — encrypt its metadata now in the background!
+            try {
+              const metaPayload = {
+                originalFilename: f.filename,
+                originalMimeType: f.mimeType,
+                originalSize: f.sizeBytes,
+                takenAt: f.metadata?.takenAt || f.createdAt,
+                thumbnail: f.metadata?.thumbnail,
+              };
+              VaultCryptoService.encryptMetadata(metaPayload, vaultKey).then((encStr) => {
+                api.moveToVault([f._id], { [f._id]: encStr }).catch(() => {});
+              });
+            } catch {}
           }
 
           return {
@@ -241,11 +255,13 @@ export const PrivateVaultView: React.FC<PrivateVaultViewProps> = ({
 
       const version = file.versions?.[file.versions.length - 1];
       const iv = version?.iv;
-      if (!iv) throw new Error('Missing encryption IV for file');
 
-      // Decrypt in browser RAM
-      const decryptedBuffer = await VaultCryptoService.decryptBuffer(ciphertext, iv, vaultKey);
-      const blob = new Blob([decryptedBuffer], { type: file.decryptedMimeType || 'application/octet-stream' });
+      // Decrypt if encrypted with IV, otherwise use raw bytes directly
+      const fileBuffer = (iv && version?.isEncrypted)
+        ? await VaultCryptoService.decryptBuffer(ciphertext, iv, vaultKey)
+        : ciphertext;
+
+      const blob = new Blob([fileBuffer], { type: file.decryptedMimeType || 'application/octet-stream' });
       const url = URL.createObjectURL(blob);
 
       const a = document.createElement('a');
