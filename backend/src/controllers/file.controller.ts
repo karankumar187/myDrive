@@ -8,6 +8,7 @@ import { Tombstone } from '../models/Tombstone.js';
 import { StorageAccount } from '../models/StorageAccount.js';
 import { Device } from '../models/Device.js';
 import { DeviceFileState } from '../models/DeviceFileState.js';
+import { Album } from '../models/Album.js';
 import { StorageEngineService } from '../services/storage-engine.service.js';
 import { GoogleDriveService } from '../services/gdrive.service.js';
 import { getSocketIoInstance } from '../server.js';
@@ -2171,6 +2172,12 @@ export class FileController {
       await File.updateMany(
         { _id: { $in: validIds }, userId },
         { $set: { isVault: true, folderId: null } }
+      );
+
+      // Remove moved files from all albums so private vault files never remain in albums
+      await Album.updateMany(
+        { userId, fileIds: { $in: validIds } },
+        { $pull: { fileIds: { $in: validIds } } }
       );
 
       await CacheService.invalidateUser(userId.toString());

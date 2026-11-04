@@ -42,6 +42,7 @@ export class AlbumController {
         _id: { $in: allCoverIds },
         userId,
         isTrash: false,
+        isVault: { $ne: true },
       })
         .select('_id filename mimeType metadata sizeBytes publicId isFavorite createdAt')
         .lean();
@@ -69,6 +70,7 @@ export class AlbumController {
         const sampleFiles = await File.find({
           _id: { $in: allSampleIds },
           isTrash: false,
+          isVault: { $ne: true },
         })
           .select('_id sourceDeviceIds')
           .lean();
@@ -170,11 +172,12 @@ export class AlbumController {
         return;
       }
 
-      // Fetch all files contained in album that are not trashed
+      // Fetch all files contained in album that are not trashed and not in secret vault
       const files = await File.find({
         _id: { $in: album.fileIds || [] },
         userId,
         isTrash: false,
+        isVault: { $ne: true },
       })
         .select('_id filename mimeType sizeBytes metadata isFavorite currentVersion publicId isMediaApi sourceDeviceIds createdAt')
         .sort({ 'metadata.takenAt': 1, createdAt: 1 })
@@ -185,7 +188,7 @@ export class AlbumController {
       if (album.coverFileId) {
         cover = files.find((f) => String(f._id) === String(album.coverFileId)) || null;
         if (!cover) {
-          cover = await File.findOne({ _id: album.coverFileId, userId, isTrash: false }).lean();
+          cover = await File.findOne({ _id: album.coverFileId, userId, isTrash: false, isVault: { $ne: true } }).lean();
         }
       }
       if (!cover && files.length > 0) {
@@ -471,10 +474,11 @@ export class AlbumController {
         return;
       }
 
-      // Fetch recent 200 media files with timestamps
+      // Fetch recent 200 media files with timestamps (excluding secret vault files)
       const files = await File.find({
         userId,
         isTrash: false,
+        isVault: { $ne: true },
         mimeType: { $regex: '^(image/|video/)' },
       })
         .select('_id filename mimeType metadata sizeBytes createdAt')
