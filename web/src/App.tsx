@@ -568,7 +568,8 @@ export const App: React.FC = () => {
       if (vaultKey) {
         encryptedMetaMap = {};
         for (const f of filesToMove) {
-          const thumb = f.metadata?.thumbnail || mediaCache.getThumbnail(f._id);
+          const rawThumb = f.metadata?.thumbnail || mediaCache.getThumbnail(f._id);
+          const thumb = (rawThumb && (rawThumb.startsWith('data:image/') || rawThumb.startsWith('blob:'))) ? rawThumb : null;
           const metaPayload = {
             originalFilename: f.filename,
             originalMimeType: f.mimeType,

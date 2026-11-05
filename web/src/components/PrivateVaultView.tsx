@@ -43,9 +43,33 @@ interface DecryptedVaultFile extends FileItem {
 }
 
 async function generateThumbnailFromImageBlob(blob: Blob): Promise<string> {
-  const bitmap = await createImageBitmap(blob);
+  let imgBitmap: ImageBitmap | HTMLImageElement;
+  let width = 0;
+  let height = 0;
+
+  try {
+    imgBitmap = await createImageBitmap(blob);
+    width = imgBitmap.width;
+    height = imgBitmap.height;
+  } catch (_e) {
+    imgBitmap = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const img = new Image();
+      const url = URL.createObjectURL(blob);
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        resolve(img);
+      };
+      img.onerror = (err) => {
+        URL.revokeObjectURL(url);
+        reject(err);
+      };
+      img.src = url;
+    });
+    width = imgBitmap.naturalWidth;
+    height = imgBitmap.naturalHeight;
+  }
+
   const maxDim = 1024;
-  let { width, height } = bitmap;
   if (width > maxDim || height > maxDim) {
     if (width > height) {
       height = Math.round((height * maxDim) / width);
@@ -55,13 +79,19 @@ async function generateThumbnailFromImageBlob(blob: Blob): Promise<string> {
       height = maxDim;
     }
   }
+
   const canvas = document.createElement('canvas');
-  canvas.width = width;
-  canvas.height = height;
+  canvas.width = Math.max(1, width);
+  canvas.height = Math.max(1, height);
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('Canvas context not available');
-  ctx.drawImage(bitmap, 0, 0, width, height);
-  return canvas.toDataURL('image/webp', 0.82);
+  ctx.drawImage(imgBitmap, 0, 0, width, height);
+
+  try {
+    const dataUrl = canvas.toDataURL('image/webp', 0.82);
+    if (dataUrl.startsWith('data:image/webp')) return dataUrl;
+  } catch {}
+  return canvas.toDataURL('image/jpeg', 0.82);
 }
 
 export const PrivateVaultView: React.FC<PrivateVaultViewProps> = ({
@@ -82,57 +112,101 @@ export const PrivateVaultView: React.FC<PrivateVaultViewProps> = ({
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const generateSingleThumbnail = useCallback(
-    async (f: DecryptedVaultFile): Promise<string | null> => {
-      const isImage = f.decryptedMimeType.startsWith('image/');
-      const isVideo = f.decryptedMimeType.startsWith('video/');
-      if (!isImage && !isVideo) return null;
+  const processVaultItem = useCallback(
+    async (f: DecryptedVaultFile) => {
+      const isImage = (f.decryptedMimeType || f.mimeType || '').startsWith('image/');
+      const isVideo = (f.decryptedMimeType || f.mimeType || '').startsWith('video/');
+
+      const latestVer = f.versions?.[f.versions.length - 1];
+      const needsReencrypt = !latestVer?.isEncrypted;
+      const needsThumb = !f.decryptedThumbnail && (isImage || isVideo);
+      const needsMetaSave = !f.encryptedMeta;
+
+      if (!needsReencrypt && !needsThumb && !needsMetaSave) return;
 
       try {
-        const streamUrl = api.getStreamUrl(f._id);
-        const res = await fetch(streamUrl, {
-          headers: {
-            Authorization: `Bearer ${localStorage.getItem('drive_token') || ''}`,
-          },
-        });
-        if (!res.ok) return null;
-        const rawData = await res.arrayBuffer();
+        let plainBuffer: ArrayBuffer | null = null;
+        let generatedThumbUrl: string | null = null;
 
-        let plainBuffer = rawData;
-        const latestVer = f.versions?.[f.versions.length - 1];
-        if (latestVer?.isEncrypted && latestVer.iv) {
-          plainBuffer = await VaultCryptoService.decryptBuffer(rawData, latestVer.iv, vaultKey);
+        // 1. If we need to re-encrypt bytes OR generate a missing thumbnail, fetch file content
+        if (needsReencrypt || needsThumb) {
+          const streamUrl = api.getStreamUrl(f._id);
+          const res = await fetch(streamUrl, {
+            headers: {
+              Authorization: `Bearer ${localStorage.getItem('drive_token') || ''}`,
+            },
+          });
+          if (!res.ok) {
+            console.warn(`[Vault] Could not fetch stream for item ${f._id}: HTTP ${res.status}`);
+            return;
+          }
+          const rawData = await res.arrayBuffer();
+
+          if (latestVer?.isEncrypted && latestVer.iv) {
+            // Already encrypted with AES-256-GCM — decrypt in client RAM
+            plainBuffer = await VaultCryptoService.decryptBuffer(rawData, latestVer.iv, vaultKey);
+          } else {
+            // Plaintext from Google Drive
+            plainBuffer = rawData;
+          }
+
+          // 2. Generate 1024px WebP thumbnail from decrypted plaintext buffer
+          if (needsThumb && plainBuffer) {
+            try {
+              if (isImage) {
+                const mime = (f.decryptedMimeType && !f.decryptedMimeType.includes('octet-stream'))
+                  ? f.decryptedMimeType
+                  : (f.mimeType && !f.mimeType.includes('octet-stream') ? f.mimeType : 'image/jpeg');
+                const blob = new Blob([plainBuffer], { type: mime });
+                generatedThumbUrl = await generateThumbnailFromImageBlob(blob);
+              } else if (isVideo) {
+                const mime = (f.decryptedMimeType && !f.decryptedMimeType.includes('octet-stream'))
+                  ? f.decryptedMimeType
+                  : (f.mimeType && !f.mimeType.includes('octet-stream') ? f.mimeType : 'video/mp4');
+                const fileObj = new File([plainBuffer], f.decryptedFilename || f.filename, { type: mime });
+                generatedThumbUrl = await generateThumbnailFromVideoFile(fileObj);
+              }
+            } catch (thumbErr) {
+              console.warn(`[Vault] Failed generating thumbnail for ${f._id}:`, thumbErr);
+            }
+          }
+
+          // 3. Re-encrypt physical file on Google Drive if it was still plaintext
+          if (needsReencrypt && plainBuffer) {
+            const { encryptedBlob, ivHex } = await VaultCryptoService.encryptBuffer(plainBuffer, vaultKey);
+            const encBuf = await encryptedBlob.arrayBuffer();
+            const hash = await VaultCryptoService.calculateSha256(encBuf);
+            await api.reencryptVaultFile(f._id, encryptedBlob, ivHex, hash);
+            console.log(`[Zero-Knowledge] File ${f._id} re-encrypted on Google Drive successfully.`);
+            if (latestVer) {
+              latestVer.isEncrypted = true;
+              latestVer.iv = ivHex;
+            }
+          }
         }
 
-        let thumbUrl: string | null = null;
-        if (isImage) {
-          const blob = new Blob([plainBuffer], { type: f.decryptedMimeType });
-          thumbUrl = await generateThumbnailFromImageBlob(blob);
-        } else if (isVideo) {
-          const fileObj = new File([plainBuffer], f.decryptedFilename, { type: f.decryptedMimeType });
-          thumbUrl = await generateThumbnailFromVideoFile(fileObj);
-        }
+        // 4. Save encrypted metadata if needed (or if thumbnail was generated/present)
+        const finalThumb = generatedThumbUrl || f.decryptedThumbnail || (f.metadata?.thumbnail?.startsWith('data:') ? f.metadata.thumbnail : null);
+        const metaPayload = {
+          originalFilename: f.decryptedFilename || f.filename,
+          originalMimeType: (f.decryptedMimeType && !f.decryptedMimeType.includes('octet-stream')) ? f.decryptedMimeType : f.mimeType,
+          originalSize: f.decryptedSize || f.sizeBytes,
+          takenAt: f.decryptedTakenAt || f.metadata?.takenAt || f.createdAt,
+          thumbnail: finalThumb || null,
+        };
 
-        if (thumbUrl) {
-          const metaPayload = {
-            originalFilename: f.decryptedFilename || f.filename,
-            originalMimeType: f.decryptedMimeType || f.mimeType,
-            originalSize: f.decryptedSize || f.sizeBytes,
-            takenAt: f.decryptedTakenAt || f.metadata?.takenAt || f.createdAt,
-            thumbnail: thumbUrl,
-          };
-          const encStr = await VaultCryptoService.encryptMetadata(metaPayload, vaultKey);
-          await api.moveToVault([f._id], { [f._id]: encStr });
-          mediaCache.saveThumbnail(f._id, thumbUrl);
+        const encStr = await VaultCryptoService.encryptMetadata(metaPayload, vaultKey);
+        await api.moveToVault([f._id], { [f._id]: encStr });
+
+        if (finalThumb) {
+          mediaCache.saveThumbnail(f._id, finalThumb);
           setFiles((prev) =>
-            prev.map((item) => (item._id === f._id ? { ...item, decryptedThumbnail: thumbUrl! } : item))
+            prev.map((item) => (item._id === f._id ? { ...item, decryptedThumbnail: finalThumb, encryptedMeta: encStr } : item))
           );
-          return thumbUrl;
         }
       } catch (err) {
-        console.warn(`Failed to generate thumbnail for vault item ${f._id}:`, err);
+        console.warn(`[Vault] Background processing error for ${f._id}:`, err);
       }
-      return null;
     },
     [vaultKey]
   );
@@ -150,8 +224,8 @@ export const PrivateVaultView: React.FC<PrivateVaultViewProps> = ({
           let decName = f.filename;
           let decMime = f.mimeType;
           let decSize = f.sizeBytes;
-          let decThumb = f.metadata?.thumbnail;
-          let decTakenAt = f.metadata?.takenAt;
+          let decThumb: string | undefined = undefined;
+          let decTakenAt = f.metadata?.takenAt || f.createdAt;
 
           if (f.encryptedMeta) {
             try {
@@ -160,50 +234,24 @@ export const PrivateVaultView: React.FC<PrivateVaultViewProps> = ({
                 if (meta.originalFilename) decName = meta.originalFilename;
                 if (meta.originalMimeType) decMime = meta.originalMimeType;
                 if (meta.originalSize) decSize = meta.originalSize;
-                if (meta.thumbnail) decThumb = meta.thumbnail;
                 if (meta.takenAt) decTakenAt = meta.takenAt;
+                // Only accept real data or blob URLs (reject stale API URLs)
+                if (meta.thumbnail && (meta.thumbnail.startsWith('data:image/') || meta.thumbnail.startsWith('blob:'))) {
+                  decThumb = meta.thumbnail;
+                }
               }
             } catch (err) {
               console.warn('Failed to decrypt metadata for file', f._id, err);
             }
-          } else {
-            // File was moved into the vault without PIN — encrypt its metadata now in the background!
-            try {
-              const metaPayload = {
-                originalFilename: f.filename,
-                originalMimeType: f.mimeType,
-                originalSize: f.sizeBytes,
-                takenAt: f.metadata?.takenAt || f.createdAt,
-                thumbnail: f.metadata?.thumbnail,
-              };
-              VaultCryptoService.encryptMetadata(metaPayload, vaultKey).then((encStr) => {
-                api.moveToVault([f._id], { [f._id]: encStr }).catch(() => {});
-              });
-            } catch {}
           }
 
-          // Background Zero-Knowledge byte re-encryption for moved files (converts plaintext Google Drive file to AES-256-GCM ciphertext)
-          const latestVer = f.versions?.[f.versions.length - 1];
-          if (!latestVer?.isEncrypted) {
-            (async () => {
-              try {
-                const streamUrl = api.getStreamUrl(f._id);
-                const fetchRes = await fetch(streamUrl, {
-                  headers: {
-                    Authorization: `Bearer ${localStorage.getItem('drive_token') || ''}`,
-                  },
-                });
-                if (!fetchRes.ok) return;
-                const rawBuffer = await fetchRes.arrayBuffer();
-                const { encryptedBlob, ivHex } = await VaultCryptoService.encryptBuffer(rawBuffer, vaultKey);
-                const encBuf = await encryptedBlob.arrayBuffer();
-                const hash = await VaultCryptoService.calculateSha256(encBuf);
-                await api.reencryptVaultFile(f._id, encryptedBlob, ivHex, hash);
-                console.log(`[Zero-Knowledge] File ${f._id} re-encrypted on Google Drive successfully.`);
-              } catch (reErr) {
-                console.warn(`[Zero-Knowledge] Background re-encryption error for ${f._id}:`, reErr);
-              }
-            })();
+          // If decThumb was not in encryptedMeta, check if unencrypted metadata.thumbnail is available (e.g. moved without PIN)
+          if (!decThumb && f.metadata?.thumbnail && (f.metadata.thumbnail.startsWith('data:image/') || f.metadata.thumbnail.startsWith('blob:'))) {
+            decThumb = f.metadata.thumbnail;
+          }
+
+          if (decThumb) {
+            mediaCache.saveThumbnail(f._id, decThumb);
           }
 
           return {
@@ -220,14 +268,20 @@ export const PrivateVaultView: React.FC<PrivateVaultViewProps> = ({
 
       setFiles(decryptedList);
 
-      // Background auto-generator for any vault media missing thumbnails
-      const missingThumbs = decryptedList.filter(
-        (f) => !f.decryptedThumbnail && (f.decryptedMimeType.startsWith('image/') || f.decryptedMimeType.startsWith('video/'))
-      );
-      if (missingThumbs.length > 0) {
+      // Background worker: sequentially process any items needing thumbnail generation, byte re-encryption, or metadata encryption
+      const itemsToProcess = decryptedList.filter((f) => {
+        const latestVer = f.versions?.[f.versions.length - 1];
+        const isMedia = (f.decryptedMimeType || f.mimeType || '').startsWith('image/') || (f.decryptedMimeType || f.mimeType || '').startsWith('video/');
+        const needsThumb = !f.decryptedThumbnail && isMedia;
+        const needsReencrypt = !latestVer?.isEncrypted;
+        const needsMetaSave = !f.encryptedMeta;
+        return needsThumb || needsReencrypt || needsMetaSave;
+      });
+
+      if (itemsToProcess.length > 0) {
         (async () => {
-          for (const f of missingThumbs) {
-            await generateSingleThumbnail(f);
+          for (const item of itemsToProcess) {
+            await processVaultItem(item);
           }
         })().catch(() => {});
       }
@@ -236,7 +290,7 @@ export const PrivateVaultView: React.FC<PrivateVaultViewProps> = ({
     } finally {
       setLoading(false);
     }
-  }, [vaultKey, generateSingleThumbnail]);
+  }, [vaultKey, processVaultItem]);
 
   useEffect(() => {
     loadVaultFiles();

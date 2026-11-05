@@ -2276,6 +2276,9 @@ export class FileController {
 
       // 2. Obscure & scrub files on Google Drive (rename to vault_<random>.enc, strip mimeType to application/octet-stream)
       for (const f of filesToMove) {
+        // Skip files that are already inside the vault and sanitized
+        if (f.isVault && f.filename.startsWith('vault_')) continue;
+
         const latestVersion = f.versions?.[f.versions.length - 1];
         if (latestVersion && latestVersion.storageAccountId) {
           try {
@@ -2296,7 +2299,8 @@ export class FileController {
       }
 
       // 3. Save encrypted metadata if provided (and mask plaintext root filename in MongoDB)
-      if (encryptedMetaMap && typeof encryptedMetaMap === 'object') {
+      const hasEncryptedMeta = encryptedMetaMap && typeof encryptedMetaMap === 'object' && Object.keys(encryptedMetaMap).length > 0;
+      if (hasEncryptedMeta) {
         for (const idStr of Object.keys(encryptedMetaMap)) {
           if (Types.ObjectId.isValid(idStr)) {
             const opaqueFilename = `vault_${Date.now()}_${Math.random().toString(36).substring(2, 8)}.enc`;
@@ -2307,6 +2311,8 @@ export class FileController {
                   encryptedMeta: encryptedMetaMap[idStr],
                   filename: opaqueFilename,
                   mimeType: 'application/octet-stream',
+                  'metadata.thumbnail': null,
+                  'metadata.exif': {},
                 },
               }
             );
@@ -2314,17 +2320,21 @@ export class FileController {
         }
       }
 
-      // 4. Update file records in DB: mark isVault: true, clear folderId, scrub unencrypted thumbnails/exif
+      // 4. Update file records in DB: mark isVault: true, clear folderId
+      // Only scrub unencrypted thumbnail/exif if encryptedMeta was provided.
+      // If moving without PIN, preserve metadata.thumbnail so client can encrypt it upon vault unlock.
+      const updateFields: any = {
+        isVault: true,
+        folderId: null,
+      };
+      if (hasEncryptedMeta) {
+        updateFields['metadata.thumbnail'] = null;
+        updateFields['metadata.exif'] = {};
+      }
+
       await File.updateMany(
         { _id: { $in: validIds }, userId },
-        {
-          $set: {
-            isVault: true,
-            folderId: null,
-            'metadata.thumbnail': null,
-            'metadata.exif': {},
-          },
-        }
+        { $set: updateFields }
       );
 
       // 5. Remove moved files from all albums so private vault files never remain in albums
